@@ -18,6 +18,7 @@ nu-ansi-term       = "0.50"
 [dev-dependencies]
 rstest     = "0.26"
 assert_cmd = "2"
+predicates = "3"
 
 [profile.release]
 opt-level     = 3

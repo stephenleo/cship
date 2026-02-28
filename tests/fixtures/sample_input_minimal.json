@@ -1,0 +1,22 @@
+{
+  "cwd": "/home/user/projects/myapp",
+  "session_id": "minimal-session-id",
+  "transcript_path": "/home/user/.claude/projects/myapp/transcript.jsonl",
+  "version": "2.0.31",
+  "exceeds_200k_tokens": false,
+  "model": {
+    "id": "claude-sonnet-4-6",
+    "display_name": "Sonnet"
+  },
+  "workspace": {
+    "current_dir": "/home/user/projects/myapp",
+    "project_dir": "/home/user/projects/myapp"
+  },
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0.53,
+    "total_duration_ms": 343171
+  }
+}
