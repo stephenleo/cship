@@ -1,2 +1,7 @@
 PRD/
 _bmad*
+.claude/
+
+# Added by cargo
+
+/target
