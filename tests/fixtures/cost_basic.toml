@@ -1,0 +1,4 @@
+[cship]
+lines = ["$cship.cost"]
+
+[cship.cost]

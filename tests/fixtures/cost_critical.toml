@@ -1,0 +1,8 @@
+[cship]
+lines = ["$cship.cost"]
+
+[cship.cost]
+warn_threshold = 5.0
+warn_style = "yellow"
+critical_threshold = 10.0
+critical_style = "bold red"

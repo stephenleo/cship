@@ -44,6 +44,34 @@ pub fn apply_style(content: &str, style_str: Option<&str>) -> String {
     style.paint(content).to_string()
 }
 
+/// Apply style with optional numeric threshold switching.
+/// If `value` >= `critical_threshold` (both Some), applies `critical_style`.
+/// If `value` >= `warn_threshold` (both Some), applies `warn_style`.
+/// Otherwise applies base `style`. Falls back gracefully if thresholds are None.
+///
+/// [Source: architecture.md#Epic 1 Retrospective Addenda — ansi.rs Threshold Extension]
+pub fn apply_style_with_threshold(
+    content: &str,
+    value: Option<f64>,
+    style: Option<&str>,
+    warn_threshold: Option<f64>,
+    warn_style: Option<&str>,
+    critical_threshold: Option<f64>,
+    critical_style: Option<&str>,
+) -> String {
+    if let (Some(val), Some(thresh), Some(crit_style)) = (value, critical_threshold, critical_style)
+        && val >= thresh
+    {
+        return apply_style(content, Some(crit_style));
+    }
+    if let (Some(val), Some(thresh), Some(w_style)) = (value, warn_threshold, warn_style)
+        && val >= thresh
+    {
+        return apply_style(content, Some(w_style));
+    }
+    apply_style(content, style)
+}
+
 fn parse_color(name: &str) -> Option<Color> {
     match name {
         "black" => Some(Color::Black),
@@ -101,5 +129,61 @@ mod tests {
     fn test_bg_prefix_applies_background_color() {
         let result = apply_style("text", Some("bg:blue"));
         assert!(result.contains('\x1b'), "expected ANSI in: {result:?}");
+    }
+
+    #[test]
+    fn test_threshold_below_warn_uses_base_style() {
+        // value 3.0 below warn 5.0 → base style (no ANSI when style is None)
+        let result = apply_style_with_threshold(
+            "$3.00",
+            Some(3.0),
+            None,
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("red"),
+        );
+        assert_eq!(result, "$3.00");
+    }
+
+    #[test]
+    fn test_threshold_above_warn_uses_warn_style() {
+        let result = apply_style_with_threshold(
+            "$6.00",
+            Some(6.0),
+            None,
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("red"),
+        );
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes for warn: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_threshold_above_critical_uses_critical_style() {
+        let result = apply_style_with_threshold(
+            "$12.00",
+            Some(12.0),
+            None,
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("bold red"),
+        );
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes for critical: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_threshold_no_thresholds_uses_base() {
+        let result =
+            apply_style_with_threshold("text", Some(100.0), Some("green"), None, None, None, None);
+        assert!(result.contains('\x1b'), "expected base style ANSI");
     }
 }

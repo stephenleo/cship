@@ -1,0 +1,17 @@
+{
+  "cwd": "/home/user/projects/myapp",
+  "session_id": "test-session-id",
+  "transcript_path": "/home/user/.claude/projects/myapp/transcript.jsonl",
+  "version": "1.0.80",
+  "exceeds_200k_tokens": false,
+  "model": { "id": "claude-opus-4-6", "display_name": "Opus" },
+  "workspace": { "current_dir": "/home/user/projects/myapp", "project_dir": "/home/user/projects/myapp" },
+  "output_style": { "name": "default" },
+  "cost": {
+    "total_cost_usd": 6.0,
+    "total_duration_ms": 60000,
+    "total_api_duration_ms": 20000,
+    "total_lines_added": 200,
+    "total_lines_removed": 50
+  }
+}

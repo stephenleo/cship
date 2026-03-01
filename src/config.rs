@@ -8,6 +8,13 @@ pub struct CshipConfig {
     pub lines: Option<Vec<String>>,
     /// Configuration for the `[cship.model]` section.
     pub model: Option<ModelConfig>,
+    pub cost: Option<CostConfig>,
+    pub context_bar: Option<ContextBarConfig>,
+    pub context_window: Option<ContextWindowConfig>,
+    pub vim: Option<VimConfig>,
+    pub agent: Option<AgentConfig>,
+    pub session: Option<SessionConfig>,
+    pub workspace: Option<WorkspaceConfig>,
 }
 
 /// Per-module config fields shared by all native CShip modules.
@@ -21,6 +28,104 @@ pub struct ModelConfig {
     pub label: Option<bool>,
     pub warn_threshold: Option<f64>,
     pub critical_threshold: Option<f64>,
+}
+
+/// Configuration for `[cship.cost]` — convenience alias for total cost display.
+#[derive(Debug, Deserialize, Default)]
+pub struct CostConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    /// Reserved — not yet rendered; included for config schema consistency with other modules.
+    pub label: Option<String>,
+    pub warn_threshold: Option<f64>,
+    pub warn_style: Option<String>,
+    pub critical_threshold: Option<f64>,
+    pub critical_style: Option<String>,
+    // Sub-field per-display configs (map to [cship.cost.total_cost_usd] etc.)
+    pub total_cost_usd: Option<CostSubfieldConfig>,
+    pub total_duration_ms: Option<CostSubfieldConfig>,
+    pub total_api_duration_ms: Option<CostSubfieldConfig>,
+    pub total_lines_added: Option<CostSubfieldConfig>,
+    pub total_lines_removed: Option<CostSubfieldConfig>,
+}
+
+/// Configuration for individual `[cship.cost.*]` sub-field modules.
+#[derive(Debug, Deserialize, Default)]
+pub struct CostSubfieldConfig {
+    pub style: Option<String>,
+    /// Reserved — not yet rendered; included for config schema consistency.
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    /// Reserved — not yet rendered; included for config schema consistency.
+    pub label: Option<String>,
+}
+
+/// Configuration for `[cship.context_bar]` — visual progress bar with thresholds.
+/// Implemented in Story 2.2. Defined here so all Epic 2 config is available.
+#[derive(Debug, Deserialize, Default)]
+pub struct ContextBarConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub label: Option<String>,
+    pub warn_threshold: Option<f64>,
+    pub warn_style: Option<String>,
+    pub critical_threshold: Option<f64>,
+    pub critical_style: Option<String>,
+    pub width: Option<u32>,
+}
+
+/// Configuration for `[cship.context_window]` sub-field modules.
+/// Implemented in Story 2.2. Defined here so all Epic 2 config is available.
+#[derive(Debug, Deserialize, Default)]
+pub struct ContextWindowConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub label: Option<String>,
+}
+
+/// Configuration for `[cship.vim]` — vim mode display.
+/// Implemented in Story 2.3. Defined here so all Epic 2 config is available.
+#[derive(Debug, Deserialize, Default)]
+pub struct VimConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub label: Option<String>,
+    pub normal_style: Option<String>,
+    pub insert_style: Option<String>,
+}
+
+/// Configuration for `[cship.agent]` — agent name display.
+/// Implemented in Story 2.3. Defined here so all Epic 2 config is available.
+#[derive(Debug, Deserialize, Default)]
+pub struct AgentConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub label: Option<String>,
+}
+
+/// Configuration for session identity modules (cwd, session_id, transcript_path, etc.).
+/// Implemented in Story 2.4. Defined here so all Epic 2 config is available.
+#[derive(Debug, Deserialize, Default)]
+pub struct SessionConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub label: Option<String>,
+}
+
+/// Configuration for workspace modules (workspace.current_dir, workspace.project_dir).
+/// Implemented in Story 2.4. Defined here so all Epic 2 config is available.
+#[derive(Debug, Deserialize, Default)]
+pub struct WorkspaceConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub label: Option<String>,
 }
 
 /// Private wrapper so `toml::from_str` can extract `[cship]` sections

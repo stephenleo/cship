@@ -1,0 +1,2 @@
+[cship]
+lines = ["$cship.cost.total_cost_usd $cship.cost.total_duration_ms $cship.cost.total_api_duration_ms $cship.cost.total_lines_added $cship.cost.total_lines_removed"]

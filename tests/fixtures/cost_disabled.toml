@@ -1,0 +1,5 @@
+[cship]
+lines = ["$cship.cost"]
+
+[cship.cost]
+disabled = true

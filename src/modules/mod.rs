@@ -1,3 +1,4 @@
+pub mod cost;
 pub mod model;
 
 /// Static dispatch registry — the ONLY file modified when adding a new native module.
@@ -9,6 +10,13 @@ pub fn render_module(
 ) -> Option<String> {
     match name {
         "cship.model" => model::render(ctx, cfg),
+        // Cost module — main alias and sub-fields
+        "cship.cost" => cost::render(ctx, cfg),
+        "cship.cost.total_cost_usd" => cost::render_total_cost_usd(ctx, cfg),
+        "cship.cost.total_duration_ms" => cost::render_total_duration_ms(ctx, cfg),
+        "cship.cost.total_api_duration_ms" => cost::render_total_api_duration_ms(ctx, cfg),
+        "cship.cost.total_lines_added" => cost::render_total_lines_added(ctx, cfg),
+        "cship.cost.total_lines_removed" => cost::render_total_lines_removed(ctx, cfg),
         other => {
             tracing::warn!("cship: unknown native module '{other}' — skipping");
             None

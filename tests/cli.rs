@@ -69,7 +69,7 @@ fn test_config_flag_with_valid_toml_exits_zero() {
         .assert()
         .success()
         // sample_starship.toml has lines = ["$cship.model $git_branch", "$cship.cost"]
-        // model renders "Opus"; git_branch and cost are None → final output contains "Opus"
+        // model renders "Opus"; git_branch is passthrough (None); cost renders "$0.01"
         .stdout(predicate::str::contains("Opus"));
 }
 
@@ -218,4 +218,75 @@ fn test_no_lines_config_produces_empty_stdout() {
         .assert()
         .success()
         .stdout("");
+}
+
+// ── Story 2.1: Cost module integration tests ──────────────────────────────
+
+#[test]
+fn test_cost_renders_dollar_formatted_value() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: cost.total_cost_usd = 0.01234 → "$0.01"
+    cship()
+        .args(["--config", "tests/fixtures/cost_basic.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("$0.01"));
+}
+
+#[test]
+fn test_cost_warn_threshold_applies_ansi_style() {
+    let json = std::fs::read_to_string("tests/fixtures/cost_warn_value.json").unwrap();
+    // cost_warn_value.json: total_cost_usd = 6.0 > warn_threshold 5.0 → ANSI codes
+    cship()
+        .args(["--config", "tests/fixtures/cost_warn.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b["));
+}
+
+#[test]
+fn test_cost_critical_threshold_applies_critical_style() {
+    let json = std::fs::read_to_string("tests/fixtures/cost_high.json").unwrap();
+    // cost_high.json: total_cost_usd = 12.0 > critical_threshold 10.0 → ANSI codes
+    cship()
+        .args(["--config", "tests/fixtures/cost_critical.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b["));
+}
+
+#[test]
+fn test_cost_disabled_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    cship()
+        .args(["--config", "tests/fixtures/cost_disabled.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_cost_subfields_render_numeric_values() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: total_cost_usd=0.01234, total_duration_ms=45000,
+    // total_api_duration_ms=2300, total_lines_added=156, total_lines_removed=23
+    let output = cship()
+        .args(["--config", "tests/fixtures/cost_subfields.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0.0123"),
+        "expected '0.0123' in: {stdout:?}"
+    );
+    assert!(stdout.contains("45000"), "expected '45000' in: {stdout:?}");
+    assert!(stdout.contains("2300"), "expected '2300' in: {stdout:?}");
+    assert!(stdout.contains("156"), "expected '156' in: {stdout:?}");
+    assert!(stdout.contains("23"), "expected '23' in: {stdout:?}");
 }
