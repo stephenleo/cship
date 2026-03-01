@@ -1,0 +1,5 @@
+[cship]
+lines = ["$cship.model"]
+
+[cship.model]
+disabled = true

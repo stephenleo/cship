@@ -1,0 +1,6 @@
+[cship]
+lines = ["$cship.model"]
+
+[cship.model]
+style = "bold green"
+symbol = "★ "

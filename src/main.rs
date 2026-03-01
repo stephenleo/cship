@@ -32,7 +32,7 @@ fn main() {
         .as_ref()
         .and_then(|w| w.current_dir.as_deref());
 
-    let _cfg = match cship::config::discover_and_load(workspace_dir, cli.config.as_deref()) {
+    let cfg = match cship::config::discover_and_load(workspace_dir, cli.config.as_deref()) {
         Ok(cfg) => cfg,
         Err(e) => {
             tracing::error!("cship: failed to load config: {e}");
@@ -40,6 +40,13 @@ fn main() {
         }
     };
 
-    // Rendering pipeline added in Story 1.4.
-    // No stdout output in this story — main.rs is the sole stdout owner (Story 1.4).
+    // Render and emit — main.rs is the SOLE owner of stdout.
+    // println! is the ONLY stdout write in the entire codebase.
+    let lines = cfg.lines.as_deref().unwrap_or(&[]);
+    if !lines.is_empty() {
+        let output = cship::renderer::render(lines, &ctx, &cfg);
+        if !output.is_empty() {
+            println!("{output}");
+        }
+    }
 }

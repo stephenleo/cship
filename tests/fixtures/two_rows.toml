@@ -1,0 +1,4 @@
+[cship]
+lines = ["$cship.model", "$cship.model"]
+
+[cship.model]
