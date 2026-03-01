@@ -1,0 +1,20 @@
+# Sample CShip configuration for tests
+# Other starship sections are intentionally present to verify they are silently ignored
+
+[directory]
+style = "bold blue"
+truncation_length = 5
+
+[git_branch]
+style = "bold purple"
+
+[cship]
+lines = ["$cship.model $git_branch", "$cship.cost"]
+
+[cship.model]
+style = "bold green"
+symbol = ""
+disabled = false
+label = false
+warn_threshold = 80.0
+critical_threshold = 95.0
