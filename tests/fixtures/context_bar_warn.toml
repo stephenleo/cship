@@ -1,0 +1,8 @@
+[cship]
+lines = ["$cship.context_bar"]
+
+[cship.context_bar]
+warn_threshold = 70.0
+warn_style = "yellow"
+critical_threshold = 85.0
+critical_style = "bold red"

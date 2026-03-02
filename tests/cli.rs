@@ -290,3 +290,178 @@ fn test_cost_subfields_render_numeric_values() {
     assert!(stdout.contains("156"), "expected '156' in: {stdout:?}");
     assert!(stdout.contains("23"), "expected '23' in: {stdout:?}");
 }
+
+// ── Story 2.2: Context window modules integration tests ───────────────────
+
+#[test]
+fn test_context_bar_renders_block_chars_and_percentage() {
+    let json = std::fs::read_to_string("tests/fixtures/context_high.json").unwrap();
+    // context_high.json: used_percentage = 90.0 → "█████████░90%"
+    let output = cship()
+        .args(["--config", "tests/fixtures/context_bar_basic.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains('█'),
+        "expected filled bar chars: {stdout:?}"
+    );
+    assert!(stdout.contains("90%"), "expected '90%': {stdout:?}");
+}
+
+#[test]
+fn test_context_bar_warn_threshold_applies_ansi_style() {
+    let json = std::fs::read_to_string("tests/fixtures/context_warn.json").unwrap();
+    // context_warn.json: used_percentage = 75.0 > warn_threshold 70.0 → ANSI codes
+    cship()
+        .args(["--config", "tests/fixtures/context_bar_warn.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b["));
+}
+
+#[test]
+fn test_context_bar_critical_threshold_applies_critical_style() {
+    let json = std::fs::read_to_string("tests/fixtures/context_high.json").unwrap();
+    // context_high.json: used_percentage = 90.0 > critical_threshold 85.0 → ANSI codes
+    cship()
+        .args(["--config", "tests/fixtures/context_bar_warn.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b["));
+}
+
+#[test]
+fn test_context_bar_disabled_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    cship()
+        .args(["--config", "tests/fixtures/context_bar_disabled.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_context_bar_custom_width_5() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: used_percentage = 8.0; width 5 → 0 filled, 5 empty
+    let output = cship()
+        .args(["--config", "tests/fixtures/context_bar_width.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let total_bar: usize = stdout.chars().filter(|&c| c == '█' || c == '░').count();
+    assert_eq!(total_bar, 5, "expected bar width 5 in: {stdout:?}");
+    // sample_input_full.json: used_percentage = 8.0; floor(8% of 5) = 0 filled, 5 empty
+    let filled: usize = stdout.chars().filter(|&c| c == '█').count();
+    let empty: usize = stdout.chars().filter(|&c| c == '░').count();
+    assert_eq!(
+        filled, 0,
+        "expected 0 filled for 8% with width 5: {stdout:?}"
+    );
+    assert_eq!(empty, 5, "expected 5 empty for 8% with width 5: {stdout:?}");
+}
+
+#[test]
+fn test_context_window_subfields_render_correctly() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: used_percentage=8, remaining_percentage=92, context_window_size=200000
+    let output = cship()
+        .args(["--config", "tests/fixtures/context_window_basic.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Output format: "8 92 200000\n" — verify each value appears as a space-delimited token
+    let tokens: Vec<&str> = stdout.trim().split_whitespace().collect();
+    assert_eq!(
+        tokens.len(),
+        3,
+        "expected 3 space-separated tokens: {stdout:?}"
+    );
+    assert_eq!(tokens[0], "8", "expected used_pct '8': {stdout:?}");
+    assert_eq!(tokens[1], "92", "expected remaining_pct '92': {stdout:?}");
+    assert_eq!(
+        tokens[2], "200000",
+        "expected window size '200000': {stdout:?}"
+    );
+}
+
+#[test]
+fn test_context_window_exceeds_200k_false_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: exceeds_200k_tokens = false → empty output
+    cship()
+        .args(["--config", "tests/fixtures/context_window_exceeds.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_context_window_exceeds_200k_true_renders_marker() {
+    let json = std::fs::read_to_string("tests/fixtures/context_high.json").unwrap();
+    // context_high.json: exceeds_200k_tokens = true → ">200k"
+    cship()
+        .args(["--config", "tests/fixtures/context_window_exceeds.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(">200k"));
+}
+
+#[test]
+fn test_context_window_current_usage_tokens() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: current_usage.input_tokens=8500, output_tokens=1200
+    let output = cship()
+        .args([
+            "--config",
+            "tests/fixtures/context_window_current_usage.toml",
+        ])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("8500"),
+        "expected input_tokens in: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("1200"),
+        "expected output_tokens in: {stdout:?}"
+    );
+}
+
+#[test]
+fn test_context_window_total_tokens_render_correctly() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: total_input_tokens=15234, total_output_tokens=4521
+    let output = cship()
+        .args(["--config", "tests/fixtures/context_window_totals.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let tokens: Vec<&str> = stdout.trim().split_whitespace().collect();
+    assert_eq!(tokens.len(), 2, "expected 2 tokens: {stdout:?}");
+    assert_eq!(
+        tokens[0], "15234",
+        "expected total_input_tokens: {stdout:?}"
+    );
+    assert_eq!(
+        tokens[1], "4521",
+        "expected total_output_tokens: {stdout:?}"
+    );
+}

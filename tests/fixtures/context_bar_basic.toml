@@ -1,0 +1,4 @@
+[cship]
+lines = ["$cship.context_bar"]
+
+[cship.context_bar]

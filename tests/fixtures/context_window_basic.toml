@@ -1,0 +1,2 @@
+[cship]
+lines = ["$cship.context_window.used_percentage $cship.context_window.remaining_percentage $cship.context_window.size"]

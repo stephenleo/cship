@@ -1,3 +1,5 @@
+pub mod context_bar;
+pub mod context_window;
 pub mod cost;
 pub mod model;
 
@@ -17,6 +19,33 @@ pub fn render_module(
         "cship.cost.total_api_duration_ms" => cost::render_total_api_duration_ms(ctx, cfg),
         "cship.cost.total_lines_added" => cost::render_total_lines_added(ctx, cfg),
         "cship.cost.total_lines_removed" => cost::render_total_lines_removed(ctx, cfg),
+        // Context bar — progress bar with threshold styling
+        "cship.context_bar" => context_bar::render(ctx, cfg),
+        // Context window sub-fields
+        "cship.context_window.used_percentage" => context_window::render_used_percentage(ctx, cfg),
+        "cship.context_window.remaining_percentage" => {
+            context_window::render_remaining_percentage(ctx, cfg)
+        }
+        "cship.context_window.size" => context_window::render_size(ctx, cfg),
+        "cship.context_window.total_input_tokens" => {
+            context_window::render_total_input_tokens(ctx, cfg)
+        }
+        "cship.context_window.total_output_tokens" => {
+            context_window::render_total_output_tokens(ctx, cfg)
+        }
+        "cship.context_window.exceeds_200k" => context_window::render_exceeds_200k(ctx, cfg),
+        "cship.context_window.current_usage.input_tokens" => {
+            context_window::render_current_usage_input_tokens(ctx, cfg)
+        }
+        "cship.context_window.current_usage.output_tokens" => {
+            context_window::render_current_usage_output_tokens(ctx, cfg)
+        }
+        "cship.context_window.current_usage.cache_creation_input_tokens" => {
+            context_window::render_current_usage_cache_creation_input_tokens(ctx, cfg)
+        }
+        "cship.context_window.current_usage.cache_read_input_tokens" => {
+            context_window::render_current_usage_cache_read_input_tokens(ctx, cfg)
+        }
         other => {
             tracing::warn!("cship: unknown native module '{other}' — skipping");
             None

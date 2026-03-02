@@ -1,0 +1,2 @@
+[cship]
+lines = ["$cship.context_window.exceeds_200k"]
