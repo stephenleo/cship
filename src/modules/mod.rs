@@ -1,7 +1,9 @@
+pub mod agent;
 pub mod context_bar;
 pub mod context_window;
 pub mod cost;
 pub mod model;
+pub mod vim;
 
 /// Static dispatch registry — the ONLY file modified when adding a new native module.
 /// [Source: architecture.md#Module System Architecture]
@@ -12,6 +14,8 @@ pub fn render_module(
 ) -> Option<String> {
     match name {
         "cship.model" => model::render(ctx, cfg),
+        "cship.model.display_name" => model::render_display_name(ctx, cfg),
+        "cship.model.id" => model::render_id(ctx, cfg),
         // Cost module — main alias and sub-fields
         "cship.cost" => cost::render(ctx, cfg),
         "cship.cost.total_cost_usd" => cost::render_total_cost_usd(ctx, cfg),
@@ -46,6 +50,12 @@ pub fn render_module(
         "cship.context_window.current_usage.cache_read_input_tokens" => {
             context_window::render_current_usage_cache_read_input_tokens(ctx, cfg)
         }
+        // Vim module — mode display
+        "cship.vim" => vim::render(ctx, cfg),
+        "cship.vim.mode" => vim::render_mode(ctx, cfg),
+        // Agent module — agent name display
+        "cship.agent" => agent::render(ctx, cfg),
+        "cship.agent.name" => agent::render_name(ctx, cfg),
         other => {
             tracing::warn!("cship: unknown native module '{other}' — skipping");
             None

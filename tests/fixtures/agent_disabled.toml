@@ -1,0 +1,5 @@
+[cship]
+lines = ["$cship.agent"]
+
+[cship.agent]
+disabled = true

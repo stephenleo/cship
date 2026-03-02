@@ -29,6 +29,36 @@ pub fn render(ctx: &crate::context::Context, cfg: &crate::config::CshipConfig) -
     Some(crate::ansi::apply_style(&content, style))
 }
 
+/// Renders `$cship.model.display_name` — explicit sub-field alias for `render`.
+pub fn render_display_name(
+    ctx: &crate::context::Context,
+    cfg: &crate::config::CshipConfig,
+) -> Option<String> {
+    render(ctx, cfg)
+}
+
+/// Renders `$cship.model.id` — raw model ID string (e.g., "claude-opus-4-6").
+pub fn render_id(
+    ctx: &crate::context::Context,
+    cfg: &crate::config::CshipConfig,
+) -> Option<String> {
+    let model_cfg = cfg.model.as_ref();
+    if model_cfg.and_then(|m| m.disabled).unwrap_or(false) {
+        return None;
+    }
+    let id = match ctx.model.as_ref().and_then(|m| m.id.as_deref()) {
+        Some(id) => id,
+        None => {
+            tracing::warn!("cship.model: model.id is absent — skipping");
+            return None;
+        }
+    };
+    let symbol = model_cfg.and_then(|m| m.symbol.as_deref()).unwrap_or("");
+    let content = format!("{symbol}{id}");
+    let style = model_cfg.and_then(|m| m.style.as_deref());
+    Some(crate::ansi::apply_style(&content, style))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +154,45 @@ mod tests {
         let ctx = ctx_with_model("Sonnet");
         let result = render(&ctx, &CshipConfig::default()).unwrap();
         assert_eq!(result, "Sonnet");
+    }
+
+    #[test]
+    fn test_render_id_returns_model_id() {
+        let ctx = Context {
+            model: Some(Model {
+                id: Some("claude-opus-4-6".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            render_id(&ctx, &CshipConfig::default()),
+            Some("claude-opus-4-6".to_string())
+        );
+    }
+
+    #[test]
+    fn test_render_id_absent_returns_none() {
+        let ctx = Context::default();
+        assert_eq!(render_id(&ctx, &CshipConfig::default()), None);
+    }
+
+    #[test]
+    fn test_render_id_disabled_returns_none() {
+        let ctx = Context {
+            model: Some(Model {
+                id: Some("claude-opus-4-6".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                disabled: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(render_id(&ctx, &cfg), None);
     }
 }

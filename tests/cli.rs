@@ -465,3 +465,112 @@ fn test_context_window_total_tokens_render_correctly() {
         "expected total_output_tokens: {stdout:?}"
     );
 }
+
+// ── Story 2.3: Vim and Agent modules integration tests ────────────────────
+
+#[test]
+fn test_vim_renders_mode_string() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: vim.mode = "NORMAL"
+    cship()
+        .args(["--config", "tests/fixtures/vim_basic.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NORMAL"));
+}
+
+#[test]
+fn test_vim_applies_symbol_and_style() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // vim_styled.toml: symbol = "✏ ", style = "bold yellow" → ANSI codes present
+    cship()
+        .args(["--config", "tests/fixtures/vim_styled.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b["))
+        .stdout(predicate::str::contains("✏ "));
+}
+
+#[test]
+fn test_vim_disabled_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    cship()
+        .args(["--config", "tests/fixtures/vim_disabled.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_vim_absent_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
+    // sample_input_minimal.json has no vim field → empty render
+    cship()
+        .args(["--config", "tests/fixtures/vim_basic.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_vim_mode_subfield_renders_identically() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // vim_mode_subfield.toml: lines = ["$cship.vim.mode"] → same as $cship.vim
+    cship()
+        .args(["--config", "tests/fixtures/vim_mode_subfield.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NORMAL"));
+}
+
+#[test]
+fn test_agent_renders_name_string() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: agent.name = "security-reviewer"
+    cship()
+        .args(["--config", "tests/fixtures/agent_basic.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("security-reviewer"));
+}
+
+#[test]
+fn test_agent_name_subfield_renders_identically() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // agent_name_subfield.toml: lines = ["$cship.agent.name"] → same as $cship.agent
+    cship()
+        .args(["--config", "tests/fixtures/agent_name_subfield.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("security-reviewer"));
+}
+
+#[test]
+fn test_agent_disabled_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    cship()
+        .args(["--config", "tests/fixtures/agent_disabled.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_agent_absent_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
+    // sample_input_minimal.json has no agent field → empty render
+    cship()
+        .args(["--config", "tests/fixtures/agent_basic.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
