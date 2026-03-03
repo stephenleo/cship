@@ -574,3 +574,115 @@ fn test_agent_absent_produces_no_output() {
         .success()
         .stdout("");
 }
+
+// ── Story 2.4: Session identity and workspace modules integration tests ───
+
+#[test]
+fn test_session_cwd_renders_path() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: cwd = "/home/user/projects/myapp"
+    cship()
+        .args(["--config", "tests/fixtures/session_cwd.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("/home/user/projects/myapp"));
+}
+
+#[test]
+fn test_session_id_renders_string() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: session_id = "test-session-id"
+    cship()
+        .args(["--config", "tests/fixtures/session_id.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("test-session-id"));
+}
+
+#[test]
+fn test_session_transcript_path_renders_string() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: transcript_path = "/home/user/.claude/projects/myapp/transcript.jsonl"
+    cship()
+        .args(["--config", "tests/fixtures/session_transcript_path.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "/home/user/.claude/projects/myapp/transcript.jsonl",
+        ));
+}
+
+#[test]
+fn test_session_version_renders_string() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: version = "1.0.80"
+    cship()
+        .args(["--config", "tests/fixtures/session_version.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1.0.80"));
+}
+
+#[test]
+fn test_session_output_style_renders_name() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: output_style.name = "default"
+    cship()
+        .args(["--config", "tests/fixtures/session_output_style.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("default"));
+}
+
+#[test]
+fn test_workspace_current_dir_renders_path() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: workspace.current_dir = "/home/user/projects/myapp"
+    cship()
+        .args(["--config", "tests/fixtures/workspace_current_dir.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("/home/user/projects/myapp"));
+}
+
+#[test]
+fn test_workspace_project_dir_renders_path() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: workspace.project_dir = "/home/user/projects/myapp"
+    cship()
+        .args(["--config", "tests/fixtures/workspace_project_dir.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("/home/user/projects/myapp"));
+}
+
+#[test]
+fn test_workspace_absent_produces_no_output() {
+    // Inline JSON without workspace field → empty render (AC13)
+    let json = r#"{"session_id":"test","cwd":"/tmp","transcript_path":"/t","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"test","display_name":"Test"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0}}"#;
+    cship()
+        .args(["--config", "tests/fixtures/workspace_current_dir.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_session_cwd_absent_produces_no_output() {
+    // Inline JSON without cwd field → empty render
+    let json = r#"{"session_id":"test","transcript_path":"/t","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"test","display_name":"Test"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0}}"#;
+    cship()
+        .args(["--config", "tests/fixtures/session_cwd.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}

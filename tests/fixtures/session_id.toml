@@ -1,0 +1,2 @@
+[cship]
+lines = ["$cship.session_id"]

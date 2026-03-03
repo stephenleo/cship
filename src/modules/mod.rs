@@ -3,7 +3,9 @@ pub mod context_bar;
 pub mod context_window;
 pub mod cost;
 pub mod model;
+pub mod session;
 pub mod vim;
+pub mod workspace;
 
 /// Static dispatch registry — the ONLY file modified when adding a new native module.
 /// [Source: architecture.md#Module System Architecture]
@@ -56,6 +58,15 @@ pub fn render_module(
         // Agent module — agent name display
         "cship.agent" => agent::render(ctx, cfg),
         "cship.agent.name" => agent::render_name(ctx, cfg),
+        // Session identity modules
+        "cship.cwd" => session::render_cwd(ctx, cfg),
+        "cship.session_id" => session::render_session_id(ctx, cfg),
+        "cship.transcript_path" => session::render_transcript_path(ctx, cfg),
+        "cship.version" => session::render_version(ctx, cfg),
+        "cship.output_style" => session::render_output_style(ctx, cfg),
+        // Workspace modules
+        "cship.workspace.current_dir" => workspace::render_current_dir(ctx, cfg),
+        "cship.workspace.project_dir" => workspace::render_project_dir(ctx, cfg),
         other => {
             tracing::warn!("cship: unknown native module '{other}' — skipping");
             None
