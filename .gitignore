@@ -6,3 +6,5 @@ _bmad*
 
 /target
 starship.toml
+
+.vscode/
