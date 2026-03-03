@@ -1,0 +1,7 @@
+[cship]
+lines = ["$cship.context_bar"]
+
+[cship.context_bar]
+format = "[$value $symbol]($style)"
+symbol = "🧠"
+style = "bold cyan"

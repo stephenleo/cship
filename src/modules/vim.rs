@@ -28,12 +28,19 @@ pub fn render_mode(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         }
     };
 
-    // Apply symbol + style
     let vim_cfg = cfg.vim.as_ref();
-    let symbol = vim_cfg.and_then(|v| v.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{mode}");
+    let raw_value: &str = mode;
+    let symbol = vim_cfg.and_then(|v| v.symbol.as_deref());
     let style = vim_cfg.and_then(|v| v.style.as_deref());
 
+    // Format string takes priority if configured (AC1–4)
+    if let Some(fmt) = vim_cfg.and_then(|v| v.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(raw_value), symbol, style);
+    }
+
+    // Default behavior — unchanged (AC5)
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{raw_value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 

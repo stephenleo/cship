@@ -24,9 +24,13 @@ pub fn render_cwd(
         }
     };
     let sess_cfg = cfg.session.as_ref();
-    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{value}");
+    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref());
     let style = sess_cfg.and_then(|s| s.style.as_deref());
+    if let Some(fmt) = sess_cfg.and_then(|s| s.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(value), symbol, style);
+    }
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 
@@ -51,9 +55,13 @@ pub fn render_session_id(
         }
     };
     let sess_cfg = cfg.session.as_ref();
-    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{value}");
+    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref());
     let style = sess_cfg.and_then(|s| s.style.as_deref());
+    if let Some(fmt) = sess_cfg.and_then(|s| s.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(value), symbol, style);
+    }
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 
@@ -78,9 +86,13 @@ pub fn render_transcript_path(
         }
     };
     let sess_cfg = cfg.session.as_ref();
-    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{value}");
+    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref());
     let style = sess_cfg.and_then(|s| s.style.as_deref());
+    if let Some(fmt) = sess_cfg.and_then(|s| s.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(value), symbol, style);
+    }
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 
@@ -105,9 +117,13 @@ pub fn render_version(
         }
     };
     let sess_cfg = cfg.session.as_ref();
-    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{value}");
+    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref());
     let style = sess_cfg.and_then(|s| s.style.as_deref());
+    if let Some(fmt) = sess_cfg.and_then(|s| s.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(value), symbol, style);
+    }
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 
@@ -132,9 +148,13 @@ pub fn render_output_style(
         }
     };
     let sess_cfg = cfg.session.as_ref();
-    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{value}");
+    let symbol = sess_cfg.and_then(|s| s.symbol.as_deref());
     let style = sess_cfg.and_then(|s| s.style.as_deref());
+    if let Some(fmt) = sess_cfg.and_then(|s| s.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(value), symbol, style);
+    }
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 

@@ -28,12 +28,19 @@ pub fn render_name(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         }
     };
 
-    // Apply symbol + style
     let agent_cfg = cfg.agent.as_ref();
-    let symbol = agent_cfg.and_then(|a| a.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{name}");
+    let raw_value: &str = name;
+    let symbol = agent_cfg.and_then(|a| a.symbol.as_deref());
     let style = agent_cfg.and_then(|a| a.style.as_deref());
 
+    // Format string takes priority if configured (AC1–4)
+    if let Some(fmt) = agent_cfg.and_then(|a| a.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(raw_value), symbol, style);
+    }
+
+    // Default behavior — unchanged (AC5)
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{raw_value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 

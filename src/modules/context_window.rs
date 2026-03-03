@@ -33,7 +33,14 @@ pub fn render_used_percentage(ctx: &Context, cfg: &CshipConfig) -> Option<String
             return None;
         }
     };
-    Some(apply_cw_style(&format!("{:.0}", val), cfg))
+    let val_str = format!("{:.0}", val);
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.remaining_percentage` — integer percentage, no `%` sign.
@@ -52,7 +59,14 @@ pub fn render_remaining_percentage(ctx: &Context, cfg: &CshipConfig) -> Option<S
             return None;
         }
     };
-    Some(apply_cw_style(&format!("{:.0}", val), cfg))
+    let val_str = format!("{:.0}", val);
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.size` — reads `context_window_size` field (not `size`).
@@ -71,7 +85,14 @@ pub fn render_size(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
             return None;
         }
     };
-    Some(apply_cw_style(&val.to_string(), cfg))
+    let val_str = val.to_string();
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.total_input_tokens`.
@@ -90,7 +111,14 @@ pub fn render_total_input_tokens(ctx: &Context, cfg: &CshipConfig) -> Option<Str
             return None;
         }
     };
-    Some(apply_cw_style(&val.to_string(), cfg))
+    let val_str = val.to_string();
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.total_output_tokens`.
@@ -109,7 +137,14 @@ pub fn render_total_output_tokens(ctx: &Context, cfg: &CshipConfig) -> Option<St
             return None;
         }
     };
-    Some(apply_cw_style(&val.to_string(), cfg))
+    let val_str = val.to_string();
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.exceeds_200k`.
@@ -125,12 +160,15 @@ pub fn render_exceeds_200k(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     if !exceeds {
         return None; // false is normal — no warn
     }
-    let symbol = cfg
-        .context_window
-        .as_ref()
+    let cw_cfg = cfg.context_window.as_ref();
+    let symbol_str = cw_cfg
         .and_then(|c| c.symbol.as_deref())
         .unwrap_or(DEFAULT_EXCEEDS_SYMBOL);
-    Some(apply_cw_style(symbol, cfg))
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(symbol_str), Some(symbol_str), style);
+    }
+    Some(apply_cw_style(symbol_str, cfg))
 }
 
 /// Renders `$cship.context_window.current_usage.input_tokens`.
@@ -152,7 +190,14 @@ pub fn render_current_usage_input_tokens(ctx: &Context, cfg: &CshipConfig) -> Op
             return None;
         }
     };
-    Some(apply_cw_style(&val.to_string(), cfg))
+    let val_str = val.to_string();
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.current_usage.output_tokens`.
@@ -174,7 +219,14 @@ pub fn render_current_usage_output_tokens(ctx: &Context, cfg: &CshipConfig) -> O
             return None;
         }
     };
-    Some(apply_cw_style(&val.to_string(), cfg))
+    let val_str = val.to_string();
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.current_usage.cache_creation_input_tokens`.
@@ -199,7 +251,14 @@ pub fn render_current_usage_cache_creation_input_tokens(
             return None;
         }
     };
-    Some(apply_cw_style(&val.to_string(), cfg))
+    let val_str = val.to_string();
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 /// Renders `$cship.context_window.current_usage.cache_read_input_tokens`.
@@ -224,7 +283,14 @@ pub fn render_current_usage_cache_read_input_tokens(
             return None;
         }
     };
-    Some(apply_cw_style(&val.to_string(), cfg))
+    let val_str = val.to_string();
+    let cw_cfg = cfg.context_window.as_ref();
+    if let Some(fmt) = cw_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = cw_cfg.and_then(|c| c.symbol.as_deref());
+        let style = cw_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_cw_style(&val_str, cfg))
 }
 
 #[cfg(test)]

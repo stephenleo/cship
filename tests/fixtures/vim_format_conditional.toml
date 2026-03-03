@@ -1,0 +1,5 @@
+[cship]
+lines = ["$cship.vim"]
+
+[cship.vim]
+format = "($value)"

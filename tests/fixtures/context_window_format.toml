@@ -1,0 +1,6 @@
+[cship]
+lines = ["$cship.context_window.used_percentage"]
+
+[cship.context_window]
+format = "[ ctx: $value% ]($style)"
+style = "bold green"

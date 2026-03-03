@@ -1,0 +1,2 @@
+[cship]
+lines = ["in: $cship.context_window.total_input_tokens"]

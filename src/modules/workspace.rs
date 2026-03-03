@@ -28,9 +28,13 @@ pub fn render_current_dir(
         }
     };
     let ws_cfg = cfg.workspace.as_ref();
-    let symbol = ws_cfg.and_then(|w| w.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{value}");
+    let symbol = ws_cfg.and_then(|w| w.symbol.as_deref());
     let style = ws_cfg.and_then(|w| w.style.as_deref());
+    if let Some(fmt) = ws_cfg.and_then(|w| w.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(value), symbol, style);
+    }
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 
@@ -59,9 +63,13 @@ pub fn render_project_dir(
         }
     };
     let ws_cfg = cfg.workspace.as_ref();
-    let symbol = ws_cfg.and_then(|w| w.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{value}");
+    let symbol = ws_cfg.and_then(|w| w.symbol.as_deref());
     let style = ws_cfg.and_then(|w| w.style.as_deref());
+    if let Some(fmt) = ws_cfg.and_then(|w| w.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(value), symbol, style);
+    }
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{value}");
     Some(crate::ansi::apply_style(&content, style))
 }
 

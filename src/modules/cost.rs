@@ -27,10 +27,18 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         }
     };
 
-    let symbol = cost_cfg.and_then(|c| c.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}${:.2}", val);
-
+    let symbol = cost_cfg.and_then(|c| c.symbol.as_deref());
     let style = cost_cfg.and_then(|c| c.style.as_deref());
+    let formatted = format!("${:.2}", val);
+
+    // Format string takes priority if configured (AC1–4)
+    if let Some(fmt) = cost_cfg.and_then(|c| c.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(&formatted), symbol, style);
+    }
+
+    // Default behavior — unchanged (AC5): threshold-style logic
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{formatted}");
     let warn_threshold = cost_cfg.and_then(|c| c.warn_threshold);
     let warn_style = cost_cfg.and_then(|c| c.warn_style.as_deref());
     let critical_threshold = cost_cfg.and_then(|c| c.critical_threshold);
@@ -61,8 +69,13 @@ pub fn render_total_cost_usd(ctx: &Context, cfg: &CshipConfig) -> Option<String>
             return None;
         }
     };
-    let content = format!("{:.4}", val);
-    Some(apply_subfield_style(&content, sub_cfg))
+    let val_str = format!("{:.4}", val);
+    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
+        let style = sub_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_subfield_style(&val_str, sub_cfg))
 }
 
 /// Renders `$cship.cost.total_duration_ms` — total wall time in milliseconds.
@@ -79,7 +92,13 @@ pub fn render_total_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<Stri
             return None;
         }
     };
-    Some(apply_subfield_style(&val.to_string(), sub_cfg))
+    let val_str = val.to_string();
+    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
+        let style = sub_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_subfield_style(&val_str, sub_cfg))
 }
 
 /// Renders `$cship.cost.total_api_duration_ms` — API-only duration in milliseconds.
@@ -96,7 +115,13 @@ pub fn render_total_api_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<
             return None;
         }
     };
-    Some(apply_subfield_style(&val.to_string(), sub_cfg))
+    let val_str = val.to_string();
+    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
+        let style = sub_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_subfield_style(&val_str, sub_cfg))
 }
 
 /// Renders `$cship.cost.total_lines_added` — cumulative lines added this session.
@@ -113,7 +138,13 @@ pub fn render_total_lines_added(ctx: &Context, cfg: &CshipConfig) -> Option<Stri
             return None;
         }
     };
-    Some(apply_subfield_style(&val.to_string(), sub_cfg))
+    let val_str = val.to_string();
+    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
+        let style = sub_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_subfield_style(&val_str, sub_cfg))
 }
 
 /// Renders `$cship.cost.total_lines_removed` — cumulative lines removed this session.
@@ -130,7 +161,13 @@ pub fn render_total_lines_removed(ctx: &Context, cfg: &CshipConfig) -> Option<St
             return None;
         }
     };
-    Some(apply_subfield_style(&val.to_string(), sub_cfg))
+    let val_str = val.to_string();
+    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
+        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
+        let style = sub_cfg.and_then(|c| c.style.as_deref());
+        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, style);
+    }
+    Some(apply_subfield_style(&val_str, sub_cfg))
 }
 
 fn is_subfield_disabled(

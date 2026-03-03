@@ -28,6 +28,7 @@ pub struct ModelConfig {
     pub label: Option<bool>,
     pub warn_threshold: Option<f64>,
     pub critical_threshold: Option<f64>,
+    pub format: Option<String>,
 }
 
 /// Configuration for `[cship.cost]` — convenience alias for total cost display.
@@ -42,6 +43,7 @@ pub struct CostConfig {
     pub warn_style: Option<String>,
     pub critical_threshold: Option<f64>,
     pub critical_style: Option<String>,
+    pub format: Option<String>,
     // Sub-field per-display configs (map to [cship.cost.total_cost_usd] etc.)
     pub total_cost_usd: Option<CostSubfieldConfig>,
     pub total_duration_ms: Option<CostSubfieldConfig>,
@@ -59,6 +61,7 @@ pub struct CostSubfieldConfig {
     pub disabled: Option<bool>,
     /// Reserved — not yet rendered; included for config schema consistency.
     pub label: Option<String>,
+    pub format: Option<String>,
 }
 
 /// Configuration for `[cship.context_bar]` — visual progress bar with thresholds.
@@ -74,6 +77,7 @@ pub struct ContextBarConfig {
     pub critical_threshold: Option<f64>,
     pub critical_style: Option<String>,
     pub width: Option<u32>,
+    pub format: Option<String>,
 }
 
 /// Configuration for `[cship.context_window]` sub-field modules.
@@ -84,6 +88,7 @@ pub struct ContextWindowConfig {
     pub symbol: Option<String>,
     pub disabled: Option<bool>,
     pub label: Option<String>,
+    pub format: Option<String>,
 }
 
 /// Configuration for `[cship.vim]` — vim mode display.
@@ -96,6 +101,7 @@ pub struct VimConfig {
     pub label: Option<String>,
     pub normal_style: Option<String>,
     pub insert_style: Option<String>,
+    pub format: Option<String>,
 }
 
 /// Configuration for `[cship.agent]` — agent name display.
@@ -106,6 +112,7 @@ pub struct AgentConfig {
     pub symbol: Option<String>,
     pub disabled: Option<bool>,
     pub label: Option<String>,
+    pub format: Option<String>,
 }
 
 /// Configuration for session identity modules (cwd, session_id, transcript_path, etc.).
@@ -116,6 +123,7 @@ pub struct SessionConfig {
     pub symbol: Option<String>,
     pub disabled: Option<bool>,
     pub label: Option<String>,
+    pub format: Option<String>,
 }
 
 /// Configuration for workspace modules (workspace.current_dir, workspace.project_dir).
@@ -126,6 +134,7 @@ pub struct WorkspaceConfig {
     pub symbol: Option<String>,
     pub disabled: Option<bool>,
     pub label: Option<String>,
+    pub format: Option<String>,
 }
 
 /// Private wrapper so `toml::from_str` can extract `[cship]` sections

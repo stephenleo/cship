@@ -686,3 +686,72 @@ fn test_session_cwd_absent_produces_no_output() {
         .success()
         .stdout("");
 }
+
+// ── Story 2.5: Per-module format strings integration tests ────────────────
+
+// AC1 — format style span with context_window.used_percentage
+#[test]
+fn test_context_window_format_style_span() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: context_window.used_percentage = 8.0
+    // context_window_format.toml: format = "[ ctx: $value% ]($style)", style = "bold green"
+    cship()
+        .args(["--config", "tests/fixtures/context_window_format.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ctx: 8%"));
+}
+
+// AC2 — format with symbol in context_bar
+#[test]
+fn test_context_bar_format_with_symbol() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // context_bar_format.toml: format = "[$value $symbol]($style)", symbol = "🧠"
+    cship()
+        .args(["--config", "tests/fixtures/context_bar_format.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("🧠"));
+}
+
+// AC3 — conditional group with absent vim field → empty output
+#[test]
+fn test_vim_format_conditional_absent_produces_no_output() {
+    // Inline JSON with no "vim" field
+    let json = r#"{"model":{"id":"claude-opus-4-6","display_name":"Opus"}}"#;
+    cship()
+        .args(["--config", "tests/fixtures/vim_format_conditional.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+// AC4 — conditional group with present vim field → renders value without parens
+#[test]
+fn test_vim_format_conditional_present_renders_value() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: vim.mode = "NORMAL"
+    cship()
+        .args(["--config", "tests/fixtures/vim_format_conditional.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NORMAL"));
+}
+
+// AC6 — literal text in lines[] preserved alongside module token
+#[test]
+fn test_literal_text_in_lines_preserved() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // literal_text.toml: lines = ["in: $cship.context_window.total_input_tokens"]
+    // sample_input_full.json: total_input_tokens = 15234
+    cship()
+        .args(["--config", "tests/fixtures/literal_text.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("in: 15234"));
+}

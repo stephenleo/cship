@@ -36,16 +36,24 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let empty = width - filled;
 
     let bar: String = "█".repeat(filled) + &"░".repeat(empty);
-    let content = format!("{bar}{:.0}%", used_pct);
+    let bar_content = format!("{bar}{:.0}%", used_pct);
 
+    let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
     let style = bar_cfg.and_then(|c| c.style.as_deref());
+
+    // Format string takes priority if configured (AC1–4)
+    if let Some(fmt) = bar_cfg.and_then(|c| c.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(&bar_content), symbol, style);
+    }
+
+    // Default behavior — unchanged (AC5): threshold-style logic
     let warn_threshold = bar_cfg.and_then(|c| c.warn_threshold);
     let warn_style = bar_cfg.and_then(|c| c.warn_style.as_deref());
     let critical_threshold = bar_cfg.and_then(|c| c.critical_threshold);
     let critical_style = bar_cfg.and_then(|c| c.critical_style.as_deref());
 
     Some(crate::ansi::apply_style_with_threshold(
-        &content,
+        &bar_content,
         Some(used_pct),
         style,
         warn_threshold,

@@ -21,11 +21,17 @@ pub fn render(ctx: &crate::context::Context, cfg: &crate::config::CshipConfig) -
         }
     };
 
-    let symbol = model_cfg.and_then(|m| m.symbol.as_deref()).unwrap_or("");
-
-    let content = format!("{symbol}{display_name}");
+    let symbol = model_cfg.and_then(|m| m.symbol.as_deref());
     let style = model_cfg.and_then(|m| m.style.as_deref());
 
+    // Format string takes priority if configured (AC1–4)
+    if let Some(fmt) = model_cfg.and_then(|m| m.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(display_name), symbol, style);
+    }
+
+    // Default behavior — unchanged (AC5)
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{display_name}");
     Some(crate::ansi::apply_style(&content, style))
 }
 
@@ -53,9 +59,17 @@ pub fn render_id(
             return None;
         }
     };
-    let symbol = model_cfg.and_then(|m| m.symbol.as_deref()).unwrap_or("");
-    let content = format!("{symbol}{id}");
+    let symbol = model_cfg.and_then(|m| m.symbol.as_deref());
     let style = model_cfg.and_then(|m| m.style.as_deref());
+
+    // Format string takes priority if configured (AC1–4)
+    if let Some(fmt) = model_cfg.and_then(|m| m.format.as_deref()) {
+        return crate::format::apply_module_format(fmt, Some(id), symbol, style);
+    }
+
+    // Default behavior — unchanged (AC5)
+    let symbol_str = symbol.unwrap_or("");
+    let content = format!("{symbol_str}{id}");
     Some(crate::ansi::apply_style(&content, style))
 }
 
