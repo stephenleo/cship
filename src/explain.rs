@@ -13,15 +13,28 @@ pub fn run(config_override: &Option<PathBuf>) -> String {
         .workspace
         .as_ref()
         .and_then(|w| w.current_dir.as_deref());
-    let result = crate::config::load_with_source(config_override, workspace_dir);
+    let result = crate::config::load_with_source(config_override.as_deref(), workspace_dir);
     let cfg = result.config;
     let source = result.source;
+
+    // Pre-compute module column width from actual names so long names never overflow.
+    let mod_w = crate::modules::ALL_NATIVE_MODULES
+        .iter()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(40)
+        + 1;
+    const VAL_W: usize = 25;
+    const CFG_W: usize = 22; // "[cship.context_window]" = 22 chars
 
     let mut lines = Vec::new();
     lines.push(format!("cship explain — using config: {source}"));
     lines.push(String::new());
-    lines.push(format!("{:<44} {:<30} {}", "Module", "Value", "Config"));
-    lines.push("─".repeat(85));
+    lines.push(format!(
+        "{:<mod_w$} {:<VAL_W$} {}",
+        "Module", "Value", "Config"
+    ));
+    lines.push("─".repeat(mod_w + 1 + VAL_W + 1 + CFG_W));
 
     for &module_name in crate::modules::ALL_NATIVE_MODULES {
         let value = crate::modules::render_module(module_name, &ctx, &cfg);
@@ -31,7 +44,7 @@ pub fn run(config_override: &Option<PathBuf>) -> String {
         };
         let config_col = config_section_for(module_name, &cfg);
         lines.push(format!(
-            "{:<44} {:<30} {}",
+            "{:<mod_w$} {:<VAL_W$} {}",
             module_name, display_value, config_col
         ));
     }
@@ -168,7 +181,7 @@ mod tests {
     #[test]
     fn test_load_with_source_respects_workspace_dir() {
         // Verify that load_with_source accepts workspace_dir parameter (H1 fix)
-        let result = crate::config::load_with_source(&None, Some("/nonexistent/dir"));
+        let result = crate::config::load_with_source(None, Some("/nonexistent/dir"));
         // Should fall through to global or default without panicking
         assert!(
             matches!(
