@@ -33,7 +33,7 @@ fn main() {
 
     match cli.command {
         Some(Commands::Explain) => {
-            let output = cship::explain::run(&cli.config);
+            let output = cship::explain::run(cli.config.as_deref());
             if !output.is_empty() {
                 println!("{output}");
             }

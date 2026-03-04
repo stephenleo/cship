@@ -1,19 +1,17 @@
 //! `cship explain` subcommand — shows each native module's rendered value and config source.
 
-use std::path::PathBuf;
-
 const SAMPLE_CONTEXT: &str = include_str!("sample_context.json");
 const SAMPLE_CONTEXT_PATH: &str = ".config/cship/sample-context.json";
 
 /// Run the explain subcommand and return the formatted output as a String.
 /// `main.rs` is the sole stdout writer — this function only builds the string.
-pub fn run(config_override: &Option<PathBuf>) -> String {
+pub fn run(config_override: Option<&std::path::Path>) -> String {
     let ctx = load_context();
     let workspace_dir = ctx
         .workspace
         .as_ref()
         .and_then(|w| w.current_dir.as_deref());
-    let result = crate::config::load_with_source(config_override.as_deref(), workspace_dir);
+    let result = crate::config::load_with_source(config_override, workspace_dir);
     let cfg = result.config;
     let source = result.source;
 
@@ -24,7 +22,7 @@ pub fn run(config_override: &Option<PathBuf>) -> String {
         .max()
         .unwrap_or(40)
         + 1;
-    const VAL_W: usize = 25;
+    const VAL_W: usize = 30;
     const CFG_W: usize = 22; // "[cship.context_window]" = 22 chars
 
     let mut lines = Vec::new();
@@ -43,6 +41,14 @@ pub fn run(config_override: &Option<PathBuf>) -> String {
             None => "(empty)".to_string(),
         };
         let config_col = config_section_for(module_name, &cfg);
+        // Truncate display_value to VAL_W chars so long path values don't push Config column right.
+        // Use char-aware counting to avoid splitting multi-byte characters (e.g. ░, █).
+        let display_value = if display_value.chars().count() > VAL_W {
+            let truncated: String = display_value.chars().take(VAL_W - 1).collect();
+            format!("{truncated}…")
+        } else {
+            display_value
+        };
         lines.push(format!(
             "{:<mod_w$} {:<VAL_W$} {}",
             module_name, display_value, config_col
@@ -110,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_run_returns_header_with_using_config() {
-        let output = run(&None);
+        let output = run(None);
         assert!(
             output.contains("using config:"),
             "expected 'using config:' in output: {output}"
@@ -119,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_run_contains_all_module_names() {
-        let output = run(&None);
+        let output = run(None);
         assert!(
             output.contains("cship.model"),
             "expected 'cship.model' in output"
@@ -174,7 +180,7 @@ mod tests {
     #[test]
     fn test_run_with_config_override_does_not_panic() {
         let bad_path = Some(std::path::PathBuf::from("/nonexistent/path.toml"));
-        let output = run(&bad_path);
+        let output = run(bad_path.as_deref());
         assert!(output.contains("using config:"));
     }
 

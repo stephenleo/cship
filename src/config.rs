@@ -172,10 +172,7 @@ pub fn load_with_source(
     // Step 1: --config flag override
     if let Some(path) = override_path {
         let config = load_from_path(path).unwrap_or_else(|e| {
-            tracing::warn!(
-                "cship explain: failed to load config from {}: {e}",
-                path.display()
-            );
+            tracing::warn!("cship: failed to load config from {}: {e}", path.display());
             CshipConfig::default()
         });
         return ConfigLoadResult {
@@ -191,7 +188,7 @@ pub fn load_with_source(
             let candidate = current.join("starship.toml");
             if candidate.exists() {
                 let config = load_from_path(&candidate).unwrap_or_else(|e| {
-                    tracing::warn!("cship explain: failed to load project-local config: {e}");
+                    tracing::warn!("cship: failed to load project-local config: {e}");
                     CshipConfig::default()
                 });
                 return ConfigLoadResult {
@@ -213,7 +210,7 @@ pub fn load_with_source(
             .join("starship.toml");
         if global.exists() {
             let config = load_from_path(&global).unwrap_or_else(|e| {
-                tracing::warn!("cship explain: failed to load global config: {e}");
+                tracing::warn!("cship: failed to load global config: {e}");
                 CshipConfig::default()
             });
             return ConfigLoadResult {
