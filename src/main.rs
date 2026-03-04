@@ -40,7 +40,7 @@ fn main() {
         }
         Some(Commands::Uninstall) => {
             // Story 3.2+ — stub only
-            eprintln!("cship uninstall: not yet implemented");
+            tracing::warn!("cship uninstall: not yet implemented");
         }
         None => {
             let ctx = match cship::context::from_stdin() {

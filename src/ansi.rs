@@ -72,6 +72,28 @@ pub fn apply_style_with_threshold(
     apply_style(content, style)
 }
 
+/// Strip ANSI escape sequences from a string, returning plain text.
+/// Used by `cship explain` to display module values in a readable table.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c2 in chars.by_ref() {
+                    if c2.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn parse_color(name: &str) -> Option<Color> {
     match name {
         "black" => Some(Color::Black),

@@ -26,7 +26,7 @@ pub fn run(config_override: &Option<PathBuf>) -> String {
     for &module_name in crate::modules::ALL_NATIVE_MODULES {
         let value = crate::modules::render_module(module_name, &ctx, &cfg);
         let display_value = match &value {
-            Some(s) => strip_ansi(s),
+            Some(s) => crate::ansi::strip_ansi(s),
             None => "(empty)".to_string(),
         };
         let config_col = config_section_for(module_name, &cfg);
@@ -67,26 +67,6 @@ fn load_context() -> crate::context::Context {
     // 3. Use embedded template (always succeeds — compile-time guarantee)
     serde_json::from_str(SAMPLE_CONTEXT)
         .expect("embedded sample_context.json must be valid — this is a compile-time guarantee")
-}
-
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for c2 in chars.by_ref() {
-                    if c2.is_ascii_alphabetic() {
-                        break;
-                    }
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 fn config_section_for(module_name: &str, cfg: &crate::config::CshipConfig) -> &'static str {
@@ -148,12 +128,12 @@ mod tests {
     #[test]
     fn test_strip_ansi_removes_escape_codes() {
         let styled = "\x1b[1;32mSonnet\x1b[0m";
-        assert_eq!(strip_ansi(styled), "Sonnet");
+        assert_eq!(crate::ansi::strip_ansi(styled), "Sonnet");
     }
 
     #[test]
     fn test_strip_ansi_leaves_plain_text_unchanged() {
-        assert_eq!(strip_ansi("plain text"), "plain text");
+        assert_eq!(crate::ansi::strip_ansi("plain text"), "plain text");
     }
 
     #[test]
@@ -206,7 +186,7 @@ mod tests {
         let cfg = CshipConfig::default();
         let value = crate::modules::render_module("cship.model", &ctx, &cfg);
         assert!(value.is_some());
-        let stripped = strip_ansi(&value.unwrap());
+        let stripped = crate::ansi::strip_ansi(&value.unwrap());
         assert!(
             stripped.contains("Sonnet"),
             "expected Sonnet in: {stripped}"
@@ -224,7 +204,7 @@ mod tests {
         };
         let cfg = CshipConfig::default();
         let value = crate::modules::render_module("cship.model", &model_ctx, &cfg);
-        let stripped = strip_ansi(&value.unwrap_or_default());
+        let stripped = crate::ansi::strip_ansi(&value.unwrap_or_default());
         assert!(stripped.contains("TestModel"));
     }
 }
