@@ -7,6 +7,42 @@ pub mod session;
 pub mod vim;
 pub mod workspace;
 
+/// All native cship module names — used by `cship explain` to enumerate modules.
+/// Names MUST exactly match the `render_module()` match arms below.
+pub const ALL_NATIVE_MODULES: &[&str] = &[
+    "cship.model",
+    "cship.model.display_name",
+    "cship.model.id",
+    "cship.cost",
+    "cship.cost.total_cost_usd",
+    "cship.cost.total_duration_ms",
+    "cship.cost.total_api_duration_ms",
+    "cship.cost.total_lines_added",
+    "cship.cost.total_lines_removed",
+    "cship.context_bar",
+    "cship.context_window.used_percentage",
+    "cship.context_window.remaining_percentage",
+    "cship.context_window.size",
+    "cship.context_window.total_input_tokens",
+    "cship.context_window.total_output_tokens",
+    "cship.context_window.exceeds_200k",
+    "cship.context_window.current_usage.input_tokens",
+    "cship.context_window.current_usage.output_tokens",
+    "cship.context_window.current_usage.cache_creation_input_tokens",
+    "cship.context_window.current_usage.cache_read_input_tokens",
+    "cship.vim",
+    "cship.vim.mode",
+    "cship.agent",
+    "cship.agent.name",
+    "cship.cwd",
+    "cship.session_id",
+    "cship.transcript_path",
+    "cship.version",
+    "cship.output_style",
+    "cship.workspace.current_dir",
+    "cship.workspace.project_dir",
+];
+
 /// Static dispatch registry — the ONLY file modified when adding a new native module.
 /// [Source: architecture.md#Module System Architecture]
 pub fn render_module(

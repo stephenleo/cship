@@ -1,0 +1,44 @@
+{
+  "cwd": "/home/user/projects/myproject",
+  "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "transcript_path": "/home/user/.claude/projects/myproject/transcript.jsonl",
+  "version": "1.0.80",
+  "exceeds_200k_tokens": false,
+  "model": {
+    "id": "claude-sonnet-4-6",
+    "display_name": "Sonnet"
+  },
+  "workspace": {
+    "current_dir": "/home/user/projects/myproject",
+    "project_dir": "/home/user/projects/myproject"
+  },
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0.0042,
+    "total_duration_ms": 18500,
+    "total_api_duration_ms": 3200,
+    "total_lines_added": 47,
+    "total_lines_removed": 12
+  },
+  "context_window": {
+    "total_input_tokens": 10482,
+    "total_output_tokens": 1876,
+    "context_window_size": 200000,
+    "used_percentage": 6.0,
+    "remaining_percentage": 94.0,
+    "current_usage": {
+      "input_tokens": 3200,
+      "output_tokens": 480,
+      "cache_creation_input_tokens": 6800,
+      "cache_read_input_tokens": 482
+    }
+  },
+  "vim": {
+    "mode": "NORMAL"
+  },
+  "agent": {
+    "name": "code"
+  }
+}

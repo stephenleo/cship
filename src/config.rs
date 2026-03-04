@@ -137,6 +137,100 @@ pub struct WorkspaceConfig {
     pub format: Option<String>,
 }
 
+/// Result of a config load operation — includes the loaded config and its source.
+pub struct ConfigLoadResult {
+    pub config: CshipConfig,
+    pub source: ConfigSource,
+}
+
+/// Describes where the config was loaded from.
+pub enum ConfigSource {
+    ProjectLocal(std::path::PathBuf),
+    Global(std::path::PathBuf),
+    Override(std::path::PathBuf),
+    Default,
+}
+
+impl std::fmt::Display for ConfigSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigSource::ProjectLocal(p) | ConfigSource::Global(p) | ConfigSource::Override(p) => {
+                write!(f, "{}", p.display())
+            }
+            ConfigSource::Default => write!(f, "(default — no starship.toml found)"),
+        }
+    }
+}
+
+/// Same as `discover_and_load` but also returns the source path.
+/// Used by `explain.rs` to show the user which config was loaded.
+/// Follows the same 4-step discovery chain as `discover_and_load` (AC1).
+pub fn load_with_source(
+    override_path: &Option<std::path::PathBuf>,
+    workspace_dir: Option<&str>,
+) -> ConfigLoadResult {
+    // Step 1: --config flag override
+    if let Some(path) = override_path {
+        let config = load_from_path(path).unwrap_or_else(|e| {
+            tracing::warn!(
+                "cship explain: failed to load config from {}: {e}",
+                path.display()
+            );
+            CshipConfig::default()
+        });
+        return ConfigLoadResult {
+            config,
+            source: ConfigSource::Override(path.clone()),
+        };
+    }
+
+    // Step 2: Walk up from workspace_dir (same as discover_and_load)
+    if let Some(dir) = workspace_dir {
+        let mut current = std::path::Path::new(dir);
+        loop {
+            let candidate = current.join("starship.toml");
+            if candidate.exists() {
+                let config = load_from_path(&candidate).unwrap_or_else(|e| {
+                    tracing::warn!("cship explain: failed to load project-local config: {e}");
+                    CshipConfig::default()
+                });
+                return ConfigLoadResult {
+                    config,
+                    source: ConfigSource::ProjectLocal(candidate),
+                };
+            }
+            match current.parent() {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+    }
+
+    // Step 3: Global fallback ~/.config/starship.toml
+    if let Ok(home) = std::env::var("HOME") {
+        let global = std::path::Path::new(&home)
+            .join(".config")
+            .join("starship.toml");
+        if global.exists() {
+            let config = load_from_path(&global).unwrap_or_else(|e| {
+                tracing::warn!("cship explain: failed to load global config: {e}");
+                CshipConfig::default()
+            });
+            return ConfigLoadResult {
+                config,
+                source: ConfigSource::Global(global),
+            };
+        }
+    }
+
+    // Step 4: No config found — use defaults
+    tracing::debug!("cship explain: no starship.toml found; using default CshipConfig");
+    ConfigLoadResult {
+        config: CshipConfig::default(),
+        source: ConfigSource::Default,
+    }
+}
+
 /// Private wrapper so `toml::from_str` can extract `[cship]` sections
 /// from a full `starship.toml` that contains many other sections.
 /// Serde silently ignores all non-`cship` top-level keys.

@@ -687,6 +687,78 @@ fn test_session_cwd_absent_produces_no_output() {
         .stdout("");
 }
 
+// ── Story 3.1: cship explain integration tests ────────────────────────────
+
+#[test]
+fn test_explain_with_stdin_json_shows_module_names() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    let output = cship()
+        .args(["explain"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cship.model"),
+        "expected 'cship.model' in explain output: {stdout}"
+    );
+}
+
+#[test]
+fn test_explain_with_stdin_json_shows_config_line() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    let output = cship()
+        .args(["explain"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("using config:"),
+        "expected 'using config:' in explain output: {stdout}"
+    );
+}
+
+#[test]
+fn test_explain_with_config_flag() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    let output = cship()
+        .args(["explain", "--config", "tests/fixtures/minimal.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cship.model"),
+        "expected module names in explain output: {stdout}"
+    );
+}
+
+#[test]
+fn test_explain_no_stdin_uses_embedded_fallback() {
+    // Invoke without piped stdin — process spawned without write_stdin uses TTY detection
+    // which triggers the embedded fallback path in load_context()
+    let output = cargo_bin_cmd!("cship").args(["explain"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cship.model"),
+        "expected module names from embedded fallback: {stdout}"
+    );
+    assert!(
+        stdout.contains("using config:"),
+        "expected config line from embedded fallback: {stdout}"
+    );
+    // Verify embedded sample_context.json values are actually rendered (model = "Sonnet")
+    assert!(
+        stdout.contains("Sonnet"),
+        "expected 'Sonnet' from embedded sample context: {stdout}"
+    );
+}
+
 // ── Story 2.5: Per-module format strings integration tests ────────────────
 
 // AC1 — format style span with context_window.used_percentage
