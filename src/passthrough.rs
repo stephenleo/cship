@@ -1,21 +1,42 @@
 //! Starship passthrough module renderer.
 //!
 //! Invokes `starship module <name>` as a subprocess and returns captured stdout.
-//! Story 4.1: subprocess only, no cache. Story 4.2 adds `cache.rs` with 5s TTL.
+//! Story 4.1: subprocess only, no cache.
+//! Story 4.2: adds 5s file cache (`cache.rs`) and CSHIP_* environment variable injection.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// Render a Starship passthrough module by invoking `starship module <name>`.
 ///
+/// - Returns cached stdout immediately if cache hit (< 5s old) — no subprocess spawned.
 /// - Returns `None` silently if `starship` binary is not found (FR30 minimal install path).
 /// - Returns `None` with `tracing::warn!` if the subprocess exits non-zero.
 /// - Returns `None` if stdout is empty (Starship convention: module has nothing to show).
-/// - Changes working directory to `workspace.current_dir` before invocation (AC2).
+/// - Changes working directory to `workspace.current_dir` (fallback: `ctx.cwd`) before invocation.
+/// - Injects all 9 CSHIP_* environment variables into the subprocess environment.
 pub fn render_passthrough(name: &str, ctx: &crate::context::Context) -> Option<String> {
+    // Derive transcript_path once — used for both cache read and write
+    let transcript_path = ctx.transcript_path.as_deref().map(Path::new);
+
+    // Cache hit check (before any subprocess)
+    if let Some(tp) = transcript_path
+        && let Some(cached) = crate::cache::read_passthrough(name, tp)
+    {
+        return Some(cached);
+    }
+
+    // CWD resolution: workspace.current_dir → ctx.cwd → None (inherit, warn)
     let cwd = ctx
         .workspace
         .as_ref()
-        .and_then(|w| w.current_dir.as_deref());
+        .and_then(|w| w.current_dir.as_deref())
+        .or(ctx.cwd.as_deref());
+    if cwd.is_none() {
+        tracing::warn!(
+            "passthrough: no CWD available for `{name}` — subprocess inherits cship's cwd"
+        );
+    }
 
     let mut cmd = Command::new("starship");
     cmd.args(["module", name]);
@@ -25,6 +46,62 @@ pub fn render_passthrough(name: &str, ctx: &crate::context::Context) -> Option<S
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
+
+    // CSHIP_* environment variable injection (all 9 — empty string for None fields)
+    cmd.env(
+        "CSHIP_MODEL",
+        ctx.model
+            .as_ref()
+            .and_then(|m| m.display_name.as_deref())
+            .unwrap_or(""),
+    );
+    cmd.env(
+        "CSHIP_MODEL_ID",
+        ctx.model
+            .as_ref()
+            .and_then(|m| m.id.as_deref())
+            .unwrap_or(""),
+    );
+    cmd.env(
+        "CSHIP_COST_USD",
+        ctx.cost
+            .as_ref()
+            .and_then(|c| c.total_cost_usd)
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+    );
+    cmd.env(
+        "CSHIP_CONTEXT_PCT",
+        ctx.context_window
+            .as_ref()
+            .and_then(|cw| cw.used_percentage)
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+    );
+    cmd.env(
+        "CSHIP_CONTEXT_REMAINING_PCT",
+        ctx.context_window
+            .as_ref()
+            .and_then(|cw| cw.remaining_percentage)
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+    );
+    cmd.env(
+        "CSHIP_VIM_MODE",
+        ctx.vim
+            .as_ref()
+            .and_then(|v| v.mode.as_deref())
+            .unwrap_or(""),
+    );
+    cmd.env(
+        "CSHIP_AGENT_NAME",
+        ctx.agent
+            .as_ref()
+            .and_then(|a| a.name.as_deref())
+            .unwrap_or(""),
+    );
+    cmd.env("CSHIP_SESSION_ID", ctx.session_id.as_deref().unwrap_or(""));
+    cmd.env("CSHIP_CWD", cwd.unwrap_or(""));
 
     let output = match cmd.output() {
         Ok(o) => o,
@@ -39,16 +116,27 @@ pub fn render_passthrough(name: &str, ctx: &crate::context::Context) -> Option<S
     let stdout = String::from_utf8_lossy(&output.stdout);
     let trimmed = stdout.trim_end_matches(&['\r', '\n'][..]);
     if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+        return None;
     }
+
+    let result = trimmed.to_string();
+
+    // Write to cache for future hits
+    if let Some(tp) = transcript_path {
+        crate::cache::write_passthrough(name, tp, &result);
+    }
+
+    Some(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::context::Context;
+
+    // Serializes all tests that mutate the process-global PATH environment variable.
+    // Required because unit tests run in parallel threads within the same process.
+    static PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_render_passthrough_returns_none_for_nonexistent_module() {
@@ -72,10 +160,12 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
 
+        let _guard = PATH_MUTEX.lock().unwrap();
         let original = std::env::var("PATH").unwrap_or_default();
         unsafe { std::env::set_var("PATH", dir.to_str().unwrap()) };
         let result = render_passthrough("directory", &Context::default());
         unsafe { std::env::set_var("PATH", &original) };
+        drop(_guard);
         let _ = fs::remove_dir_all(&dir);
 
         assert!(result.is_none());
@@ -84,12 +174,47 @@ mod tests {
     #[test]
     fn test_render_passthrough_returns_none_silently_when_starship_missing() {
         // Override PATH so starship binary cannot be found, exercising the Err(_) → None path (AC5).
-        // SAFETY: No other unit tests in this module depend on PATH; integration tests run in a
-        // separate process. set_var is unsafe in edition 2024 due to process-global mutation.
+        // SAFETY: PATH_MUTEX serializes all PATH-mutating tests within this module.
+        // Integration tests run in a separate process and are unaffected.
+        let _guard = PATH_MUTEX.lock().unwrap();
         let original = std::env::var("PATH").unwrap_or_default();
         unsafe { std::env::set_var("PATH", "/nonexistent_cship_test_dir") };
         let result = render_passthrough("directory", &Context::default());
         unsafe { std::env::set_var("PATH", &original) };
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_render_passthrough_injects_cship_model_env_var() {
+        use std::fs;
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("cship_test_cship_env");
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("starship");
+        // Script: print CSHIP_MODEL env var, exit 0
+        fs::write(&script, "#!/bin/sh\nprintf '%s' \"$CSHIP_MODEL\"\n").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let _guard = PATH_MUTEX.lock().unwrap();
+        let original = std::env::var("PATH").unwrap_or_default();
+        unsafe { std::env::set_var("PATH", dir.to_str().unwrap()) };
+
+        let ctx = Context {
+            model: Some(crate::context::Model {
+                display_name: Some("TestModelXYZ".to_string()),
+                id: None,
+            }),
+            ..Context::default()
+        };
+        let result = render_passthrough("test_module", &ctx);
+
+        unsafe { std::env::set_var("PATH", &original) };
+        drop(_guard);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(result, Some("TestModelXYZ".to_string()));
     }
 }

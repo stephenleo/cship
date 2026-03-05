@@ -19,6 +19,8 @@ nu-ansi-term       = "0.50"
 rstest     = "0.26"
 assert_cmd = "2"
 predicates = "3"
+tempfile   = "3"
+filetime   = "0.2"
 
 [profile.release]
 opt-level     = 3

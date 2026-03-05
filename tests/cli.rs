@@ -833,6 +833,82 @@ fn test_native_renders_alongside_passthrough_not_installed() {
         .stdout(predicate::str::contains("Opus"));
 }
 
+// ── Story 4.2: Cache and CSHIP_* env var integration tests ────────────────
+
+#[test]
+fn test_passthrough_env_vars_injected_via_cship_model() {
+    // Create a fake starship script that echoes $CSHIP_MODEL to stdout.
+    // Uses .env("PATH", ...) on the cship subprocess rather than mutating
+    // the test process's global PATH — safe for parallel test execution.
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join("cship_inttest_cship_env");
+    fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("starship");
+    fs::write(&script, "#!/bin/sh\nprintf '%s' \"$CSHIP_MODEL\"\n").unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let json = r#"{"session_id":"test","cwd":"/tmp","transcript_path":"/tmp/cship_inttest_tp.jsonl","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"claude-opus-4-6","display_name":"IntTestModel"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0}}"#;
+
+    let result = cship()
+        .args(["--config", "tests/fixtures/passthrough_only.toml"])
+        .env("PATH", dir.to_str().unwrap())
+        .write_stdin(json)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&dir);
+    // Clean up cache file and directory written during this test
+    let _ = fs::remove_file("/tmp/cship/cship_inttest_tp-starship-git_branch");
+    let _ = fs::remove_dir("/tmp/cship");
+
+    assert!(result.status.success());
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        stdout.contains("IntTestModel"),
+        "expected CSHIP_MODEL value 'IntTestModel' in passthrough output: {stdout:?}"
+    );
+}
+
+#[test]
+fn test_cache_hit_does_not_spawn_subprocess() {
+    // Pre-write a cache file at the expected path, then verify cship returns it
+    // without needing starship installed. Uses .env("PATH", ...) on the cship
+    // subprocess to block starship lookup — safe for parallel test execution.
+    use std::fs;
+
+    // Cache path: {dirname(transcript_path)}/cship/{stem}-starship-{module}
+    // transcript_path = "/tmp/cship_cache_inttest.jsonl"
+    // → /tmp/cship/cship_cache_inttest-starship-git_branch
+    let cache_dir = std::path::Path::new("/tmp/cship");
+    fs::create_dir_all(cache_dir).unwrap();
+    let cache_file = cache_dir.join("cship_cache_inttest-starship-git_branch");
+    fs::write(&cache_file, "cached-branch-value").unwrap();
+
+    let json = r#"{"session_id":"test","cwd":"/tmp","transcript_path":"/tmp/cship_cache_inttest.jsonl","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"claude-opus-4-6","display_name":"Opus"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0}}"#;
+
+    let result = cship()
+        .args(["--config", "tests/fixtures/passthrough_only.toml"])
+        // Block starship subprocess to prove the cached value is used instead
+        .env("PATH", "/nonexistent_cship_test_dir_42")
+        .write_stdin(json)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&cache_file);
+    let _ = fs::remove_dir(cache_dir);
+
+    assert!(result.status.success());
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        stdout.contains("cached-branch-value"),
+        "expected cached value in output (no subprocess needed): {stdout:?}"
+    );
+}
+
 // ── Story 2.5: Per-module format strings integration tests ────────────────
 
 // AC1 — format style span with context_window.used_percentage
