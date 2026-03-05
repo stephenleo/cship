@@ -180,8 +180,11 @@ fn test_two_row_layout_produces_newline_separated_output() {
 
 #[test]
 fn test_passthrough_tokens_skipped_silently() {
-    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
-    // passthrough_only.toml: lines = ["$git_branch"] → Story 1.4 returns None → empty stdout
+    // Use inline JSON with a guaranteed-nonexistent workspace path so that
+    // starship subprocess spawn fails silently (no WARN) regardless of whether
+    // starship is installed on the test machine.
+    let json = r#"{"session_id":"test","cwd":"/tmp","transcript_path":"/tmp/t.jsonl","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"test","display_name":"Test"},"workspace":{"current_dir":"/nonexistent_cship_test_path_12345","project_dir":"/tmp"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0}}"#;
+    // passthrough_only.toml: lines = ["$git_branch"] → None → empty stdout
     cship()
         .args(["--config", "tests/fixtures/passthrough_only.toml"])
         .env("RUST_LOG", "debug")
@@ -189,7 +192,6 @@ fn test_passthrough_tokens_skipped_silently() {
         .assert()
         .success()
         .stdout("")
-        // Passthrough logs at debug level — no error or warn level output
         .stderr(predicate::str::contains("error").not())
         .stderr(predicate::str::contains("WARN").not());
 }
@@ -785,6 +787,50 @@ fn test_explain_shows_warning_for_disabled_module() {
         stdout.contains("[cship.model]"),
         "expected specific section '[cship.model]' in remediation hint: {stdout}"
     );
+}
+
+// ── Story 4.1: Starship passthrough integration tests ─────────────────────
+
+fn starship_available() -> bool {
+    std::process::Command::new("starship")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn test_passthrough_directory_renders_when_starship_installed() {
+    if !starship_available() {
+        return; // skip silently in environments without starship
+    }
+    // Use a real workspace.current_dir (/tmp) so starship can spawn correctly (AC2).
+    let json = r#"{"session_id":"test","cwd":"/tmp","transcript_path":"/tmp/t.jsonl","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"claude-opus-4-6","display_name":"Opus"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0}}"#;
+    let output = cship()
+        .args(["--config", "tests/fixtures/passthrough_directory.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "expected non-empty output from $directory passthrough: {stdout:?}"
+    );
+}
+
+#[test]
+fn test_native_renders_alongside_passthrough_not_installed() {
+    // sample_starship.toml: lines = ["$cship.model $git_branch", "$cship.cost"]
+    // Native $cship.model renders "Opus" regardless of whether starship is present.
+    // Passthrough $git_branch renders via starship (or None silently). No panic, exit 0.
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    cship()
+        .args(["--config", "tests/fixtures/sample_starship.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Opus"));
 }
 
 // ── Story 2.5: Per-module format strings integration tests ────────────────

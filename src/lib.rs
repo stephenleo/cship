@@ -4,4 +4,5 @@ pub mod context;
 pub mod explain;
 pub mod format;
 pub mod modules;
+pub mod passthrough;
 pub mod renderer;

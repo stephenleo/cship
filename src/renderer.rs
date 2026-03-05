@@ -56,9 +56,9 @@ fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
                 }
             }
             Token::Passthrough(name) => {
-                tracing::debug!(
-                    "cship: passthrough module '{name}' not yet implemented — skipping"
-                );
+                if let Some(rendered) = crate::passthrough::render_passthrough(&name, ctx) {
+                    parts.push(rendered);
+                }
             }
             Token::Literal(text) => {
                 parts.push(text);
