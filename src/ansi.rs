@@ -72,6 +72,34 @@ pub fn apply_style_with_threshold(
     apply_style(content, style)
 }
 
+/// Resolve the effective style string based on numeric thresholds — without painting content.
+/// Returns `critical_style` if `value` >= `critical_threshold` (both Some).
+/// Returns `warn_style` if `value` >= `warn_threshold` (both Some).
+/// Otherwise returns base `style`.
+/// Used by modules that apply format strings but still need threshold-escalated style.
+///
+/// [Source: epics.md#Story 2.6]
+pub fn resolve_threshold_style<'a>(
+    value: Option<f64>,
+    style: Option<&'a str>,
+    warn_threshold: Option<f64>,
+    warn_style: Option<&'a str>,
+    critical_threshold: Option<f64>,
+    critical_style: Option<&'a str>,
+) -> Option<&'a str> {
+    if let (Some(val), Some(thresh), Some(crit)) = (value, critical_threshold, critical_style)
+        && val >= thresh
+    {
+        return Some(crit);
+    }
+    if let (Some(val), Some(thresh), Some(warn)) = (value, warn_threshold, warn_style)
+        && val >= thresh
+    {
+        return Some(warn);
+    }
+    style
+}
+
 /// Strip ANSI escape sequences from a string, returning plain text.
 /// Used by `cship explain` to display module values in a readable table.
 pub fn strip_ansi(s: &str) -> String {
@@ -207,5 +235,84 @@ mod tests {
         let result =
             apply_style_with_threshold("text", Some(100.0), Some("green"), None, None, None, None);
         assert!(result.contains('\x1b'), "expected base style ANSI");
+    }
+
+    #[test]
+    fn test_resolve_threshold_below_warn_returns_base() {
+        let result = resolve_threshold_style(
+            Some(3.0),
+            Some("green"),
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("red"),
+        );
+        assert_eq!(result, Some("green"));
+    }
+
+    #[test]
+    fn test_resolve_threshold_above_warn_returns_warn() {
+        let result = resolve_threshold_style(
+            Some(6.0),
+            Some("green"),
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("red"),
+        );
+        assert_eq!(result, Some("yellow"));
+    }
+
+    #[test]
+    fn test_resolve_threshold_above_critical_returns_critical() {
+        let result = resolve_threshold_style(
+            Some(12.0),
+            Some("green"),
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("red"),
+        );
+        assert_eq!(result, Some("red"));
+    }
+
+    #[test]
+    fn test_resolve_threshold_value_none_returns_base() {
+        let result = resolve_threshold_style(
+            None,
+            Some("green"),
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("red"),
+        );
+        assert_eq!(result, Some("green"));
+    }
+
+    #[test]
+    fn test_resolve_threshold_no_thresholds_returns_base() {
+        let result = resolve_threshold_style(Some(100.0), Some("green"), None, None, None, None);
+        assert_eq!(result, Some("green"));
+    }
+
+    #[test]
+    fn test_resolve_threshold_warn_style_none_falls_through_to_base() {
+        // warn_threshold set but warn_style is None → cannot escalate, returns base
+        let result = resolve_threshold_style(Some(6.0), Some("green"), Some(5.0), None, None, None);
+        assert_eq!(result, Some("green"));
+    }
+
+    #[test]
+    fn test_resolve_threshold_at_exact_boundary_triggers() {
+        // value == warn_threshold → >= fires, returns warn_style
+        let result = resolve_threshold_style(
+            Some(5.0),
+            Some("green"),
+            Some(5.0),
+            Some("yellow"),
+            Some(10.0),
+            Some("red"),
+        );
+        assert_eq!(result, Some("yellow"));
     }
 }

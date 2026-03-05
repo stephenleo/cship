@@ -41,16 +41,31 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
     let style = bar_cfg.and_then(|c| c.style.as_deref());
 
-    // Format string takes priority if configured (AC1–4)
-    if let Some(fmt) = bar_cfg.and_then(|c| c.format.as_deref()) {
-        return crate::format::apply_module_format(fmt, Some(&bar_content), symbol, style);
-    }
-
-    // Default behavior — unchanged (AC5): threshold-style logic
+    // Extract threshold variables FIRST (before format check)
     let warn_threshold = bar_cfg.and_then(|c| c.warn_threshold);
     let warn_style = bar_cfg.and_then(|c| c.warn_style.as_deref());
     let critical_threshold = bar_cfg.and_then(|c| c.critical_threshold);
     let critical_style = bar_cfg.and_then(|c| c.critical_style.as_deref());
+
+    // Format string takes priority if configured (AC2)
+    if let Some(fmt) = bar_cfg.and_then(|c| c.format.as_deref()) {
+        let effective_style = crate::ansi::resolve_threshold_style(
+            Some(used_pct),
+            style,
+            warn_threshold,
+            warn_style,
+            critical_threshold,
+            critical_style,
+        );
+        return crate::format::apply_module_format(
+            fmt,
+            Some(&bar_content),
+            symbol,
+            effective_style,
+        );
+    }
+
+    // Default behavior — unchanged (AC5): threshold-style logic
 
     Some(crate::ansi::apply_style_with_threshold(
         &bar_content,
@@ -223,5 +238,105 @@ mod tests {
             "expected no filled chars at 0%: {result:?}"
         );
         assert!(result.contains("0%"));
+    }
+
+    #[test]
+    fn test_context_bar_format_below_threshold_uses_base_style() {
+        // AC2: format + value below all thresholds → base style (None) used
+        let ctx = ctx_with_pct(50.0); // below warn_threshold of 70.0
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(70.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(85.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            !result.contains('\x1b'),
+            "expected NO ANSI codes below threshold with no base style: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_context_bar_format_with_warn_threshold_uses_warn_style() {
+        // AC2: format + warn_threshold → warn_style flows into format renderer
+        let ctx = ctx_with_pct(75.0); // above warn_threshold of 70.0
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(70.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(85.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes for warn style: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_context_bar_format_with_critical_threshold_uses_critical_style() {
+        // AC2: format + critical_threshold → critical_style flows into format renderer
+        let ctx = ctx_with_pct(90.0); // above critical_threshold of 85.0
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(70.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(85.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes for critical style: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_context_bar_format_warn_and_critical_produce_different_styles() {
+        // M1 fix: verify warn and critical styles are distinguishable
+        let warn_cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(70.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(100.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let crit_cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(70.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(70.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ctx = ctx_with_pct(75.0);
+        let warn_result = render(&ctx, &warn_cfg).unwrap();
+        let crit_result = render(&ctx, &crit_cfg).unwrap();
+        assert_ne!(
+            warn_result, crit_result,
+            "warn and critical styles must produce different output"
+        );
     }
 }
