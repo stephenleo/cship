@@ -26,8 +26,6 @@ pub struct ModelConfig {
     pub disabled: Option<bool>,
     /// When `true`, prepends the module name as a label.
     pub label: Option<bool>,
-    pub warn_threshold: Option<f64>,
-    pub critical_threshold: Option<f64>,
     pub format: Option<String>,
 }
 
@@ -285,8 +283,6 @@ mod tests {
         let model = cfg.model.as_ref().unwrap();
         assert!(model.style.is_some(), "model.style should be present");
         assert_eq!(model.disabled, Some(false));
-        assert_eq!(model.warn_threshold, Some(80.0));
-        assert_eq!(model.critical_threshold, Some(95.0));
     }
 
     #[test]

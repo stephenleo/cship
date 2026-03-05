@@ -31,18 +31,28 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let style = cost_cfg.and_then(|c| c.style.as_deref());
     let formatted = format!("${:.2}", val);
 
-    // Format string takes priority if configured (AC1–4)
+    // Extract threshold variables FIRST (before format check)
+    let warn_threshold = cost_cfg.and_then(|c| c.warn_threshold);
+    let warn_style = cost_cfg.and_then(|c| c.warn_style.as_deref());
+    let critical_threshold = cost_cfg.and_then(|c| c.critical_threshold);
+    let critical_style = cost_cfg.and_then(|c| c.critical_style.as_deref());
+
+    // Format string takes priority if configured (AC1)
     if let Some(fmt) = cost_cfg.and_then(|c| c.format.as_deref()) {
-        return crate::format::apply_module_format(fmt, Some(&formatted), symbol, style);
+        let effective_style = crate::ansi::resolve_threshold_style(
+            Some(val),
+            style,
+            warn_threshold,
+            warn_style,
+            critical_threshold,
+            critical_style,
+        );
+        return crate::format::apply_module_format(fmt, Some(&formatted), symbol, effective_style);
     }
 
     // Default behavior — unchanged (AC5): threshold-style logic
     let symbol_str = symbol.unwrap_or("");
     let content = format!("{symbol_str}{formatted}");
-    let warn_threshold = cost_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = cost_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = cost_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = cost_cfg.and_then(|c| c.critical_style.as_deref());
 
     Some(crate::ansi::apply_style_with_threshold(
         &content,
@@ -345,5 +355,117 @@ mod tests {
         let ctx = ctx_with_cost(0.01);
         let result = render_total_lines_removed(&ctx, &CshipConfig::default());
         assert_eq!(result, Some("23".to_string()));
+    }
+
+    #[test]
+    fn test_cost_format_below_threshold_uses_base_style() {
+        // AC1: format + value below all thresholds → base style (None) used
+        let ctx = ctx_with_cost(3.0); // below warn_threshold of 5.0
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(5.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(10.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            !result.contains('\x1b'),
+            "expected NO ANSI codes below threshold with no base style: {result:?}"
+        );
+        assert!(
+            result.contains("$3.00"),
+            "expected formatted value: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_cost_format_with_warn_threshold_uses_warn_style() {
+        // AC1: format + warn_threshold → warn_style flows into format renderer
+        let ctx = ctx_with_cost(6.0); // above warn_threshold of 5.0
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(5.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(10.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes for warn style: {result:?}"
+        );
+        assert!(
+            result.contains("$6.00"),
+            "expected formatted value: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_cost_format_with_critical_threshold_uses_critical_style() {
+        // AC1: format + critical_threshold → critical_style flows into format renderer
+        let ctx = ctx_with_cost(12.0); // above critical_threshold of 10.0
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(5.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(10.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes for critical style: {result:?}"
+        );
+        assert!(
+            result.contains("$12.00"),
+            "expected formatted value: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_cost_format_warn_and_critical_produce_different_styles() {
+        // M1 fix: verify warn and critical styles are distinguishable
+        let warn_cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(5.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(100.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let crit_cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                warn_threshold: Some(5.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(5.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ctx = ctx_with_cost(6.0);
+        let warn_result = render(&ctx, &warn_cfg).unwrap();
+        let crit_result = render(&ctx, &crit_cfg).unwrap();
+        assert_ne!(
+            warn_result, crit_result,
+            "warn and critical styles must produce different output"
+        );
     }
 }

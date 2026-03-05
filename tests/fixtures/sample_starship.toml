@@ -16,5 +16,3 @@ style = "bold green"
 symbol = ""
 disabled = false
 label = false
-warn_threshold = 80.0
-critical_threshold = 95.0
