@@ -6,7 +6,7 @@ const SAMPLE_CONTEXT_PATH: &str = ".config/cship/sample-context.json";
 /// Run the explain subcommand and return the formatted output as a String.
 /// `main.rs` is the sole stdout writer — this function only builds the string.
 pub fn run(config_override: Option<&std::path::Path>) -> String {
-    let ctx = load_context();
+    let (ctx, creation_notes) = load_context();
     let workspace_dir = ctx
         .workspace
         .as_ref()
@@ -34,6 +34,8 @@ pub fn run(config_override: Option<&std::path::Path>) -> String {
     ));
     lines.push("─".repeat(mod_w + 1 + VAL_W + 1 + CFG_W));
 
+    let mut none_modules: Vec<(&str, String, String)> = Vec::new();
+
     for &module_name in crate::modules::ALL_NATIVE_MODULES {
         let value = crate::modules::render_module(module_name, &ctx, &cfg);
         let display_value = match &value {
@@ -49,22 +51,57 @@ pub fn run(config_override: Option<&std::path::Path>) -> String {
         } else {
             display_value
         };
+
+        let display_name = if value.is_none() {
+            let (error, remediation) = error_hint_for(module_name, &ctx, &cfg);
+            none_modules.push((module_name, error, remediation));
+            format!("⚠ {module_name}")
+        } else {
+            module_name.to_string()
+        };
+
         lines.push(format!(
             "{:<mod_w$} {:<VAL_W$} {}",
-            module_name, display_value, config_col
+            display_name, display_value, config_col
         ));
+    }
+
+    // Hints section for modules that returned None
+    if !none_modules.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "─── Hints for modules showing (empty) {}",
+            "─".repeat(34)
+        ));
+        for (name, error, remediation) in &none_modules {
+            lines.push(String::new());
+            lines.push(format!("⚠ {name}"));
+            lines.push(format!("  Error: {error}"));
+            lines.push(format!("  Hint:  {remediation}"));
+        }
+    }
+
+    // Sample file creation notes
+    if !creation_notes.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("─── Note {}", "─".repeat(59)));
+        lines.push(String::new());
+        for note in &creation_notes {
+            lines.push(format!("i  {note}"));
+        }
     }
 
     lines.join("\n")
 }
 
-fn load_context() -> crate::context::Context {
+fn load_context() -> (crate::context::Context, Vec<String>) {
     use std::io::IsTerminal;
+    let mut notes = Vec::new();
 
     // 1. If stdin is not a TTY, read from stdin (same path as main render pipeline)
     if !std::io::stdin().is_terminal() {
         match crate::context::from_reader(std::io::stdin()) {
-            Ok(ctx) => return ctx,
+            Ok(ctx) => return (ctx, notes),
             Err(e) => {
                 tracing::warn!(
                     "cship explain: failed to parse stdin JSON: {e} — falling back to sample context"
@@ -76,16 +113,113 @@ fn load_context() -> crate::context::Context {
     // 2. Try ~/.config/cship/sample-context.json
     if let Ok(home) = std::env::var("HOME") {
         let sample_path = std::path::Path::new(&home).join(SAMPLE_CONTEXT_PATH);
-        if let Ok(content) = std::fs::read_to_string(&sample_path)
-            && let Ok(ctx) = serde_json::from_str(&content)
-        {
-            return ctx;
+        if sample_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&sample_path)
+                && let Ok(ctx) = serde_json::from_str(&content)
+            {
+                return (ctx, notes);
+            }
+        } else {
+            // File does not exist — create it from the embedded template
+            if let Some(parent) = sample_path.parent()
+                && std::fs::create_dir_all(parent).is_ok()
+                && std::fs::write(&sample_path, SAMPLE_CONTEXT).is_ok()
+            {
+                notes.push(format!(
+                    "Created sample context at {}. Edit it to test different threshold scenarios.",
+                    sample_path.display()
+                ));
+            }
         }
     }
 
     // 3. Use embedded template (always succeeds — compile-time guarantee)
-    serde_json::from_str(SAMPLE_CONTEXT)
-        .expect("embedded sample_context.json must be valid — this is a compile-time guarantee")
+    let ctx = serde_json::from_str(SAMPLE_CONTEXT)
+        .expect("embedded sample_context.json must be valid — this is a compile-time guarantee");
+    (ctx, notes)
+}
+
+fn is_disabled(name: &str, cfg: &crate::config::CshipConfig) -> bool {
+    let top = name.strip_prefix("cship.").unwrap_or(name);
+    let segment = top.split('.').next().unwrap_or(top);
+    match segment {
+        "model" => cfg.model.as_ref().and_then(|m| m.disabled).unwrap_or(false),
+        "cost" => cfg.cost.as_ref().and_then(|m| m.disabled).unwrap_or(false),
+        "context_bar" => cfg
+            .context_bar
+            .as_ref()
+            .and_then(|m| m.disabled)
+            .unwrap_or(false),
+        "context_window" => cfg
+            .context_window
+            .as_ref()
+            .and_then(|m| m.disabled)
+            .unwrap_or(false),
+        "vim" => cfg.vim.as_ref().and_then(|m| m.disabled).unwrap_or(false),
+        "agent" => cfg.agent.as_ref().and_then(|m| m.disabled).unwrap_or(false),
+        "cwd" | "session_id" | "transcript_path" | "version" | "output_style" => cfg
+            .session
+            .as_ref()
+            .and_then(|m| m.disabled)
+            .unwrap_or(false),
+        "workspace" => cfg
+            .workspace
+            .as_ref()
+            .and_then(|m| m.disabled)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn error_hint_for(
+    name: &str,
+    _ctx: &crate::context::Context,
+    cfg: &crate::config::CshipConfig,
+) -> (String, String) {
+    let top = name.strip_prefix("cship.").unwrap_or(name);
+    let segment = top.split('.').next().unwrap_or(top);
+    if is_disabled(name, cfg) {
+        return (
+            "module explicitly disabled in config".into(),
+            format!(
+                "Remove `disabled = true` from the [cship.{segment}] section in starship.toml."
+            ),
+        );
+    }
+    match segment {
+        "model" => (
+            "model data absent from Claude Code context".into(),
+            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+        ),
+        "cost" => (
+            "cost data absent from Claude Code context".into(),
+            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+        ),
+        "context_bar" | "context_window" => (
+            "context_window data absent from Claude Code context (may be absent early in a session)".into(),
+            "Ensure Claude Code is running. Context window data appears after the first API response.".into(),
+        ),
+        "vim" => (
+            "vim mode data absent — vim mode may not be enabled".into(),
+            "Enable vim mode: add \"vim.mode\": \"INSERT\" to ~/.claude/settings.json.".into(),
+        ),
+        "agent" => (
+            "agent data absent — no agent session active".into(),
+            "Agent data is only present during agent sessions. Start an agent session or use the --agent flag.".into(),
+        ),
+        "cwd" | "session_id" | "transcript_path" | "version" | "output_style" => (
+            "session field absent from Claude Code context".into(),
+            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+        ),
+        "workspace" => (
+            "workspace data absent from Claude Code context".into(),
+            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+        ),
+        _ => (
+            "module returned no value".into(),
+            "Check cship configuration and ensure Claude Code is running.".into(),
+        ),
+    }
 }
 
 fn config_section_for(module_name: &str, cfg: &crate::config::CshipConfig) -> &'static str {
@@ -111,7 +245,7 @@ fn config_section_for(module_name: &str, cfg: &crate::config::CshipConfig) -> &'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::CshipConfig;
+    use crate::config::{CshipConfig, ModelConfig};
     use crate::context::{Context, Model};
 
     #[test]
@@ -225,5 +359,86 @@ mod tests {
         let value = crate::modules::render_module("cship.model", &model_ctx, &cfg);
         let stripped = crate::ansi::strip_ansi(&value.unwrap_or_default());
         assert!(stripped.contains("TestModel"));
+    }
+
+    #[test]
+    fn test_run_shows_warning_indicator_for_none_module() {
+        // run() loads the embedded sample context — cship.context_window.exceeds_200k
+        // returns None because sample context value is below 200k threshold.
+        let output = run(None);
+        assert!(
+            output.contains("⚠ cship.context_window.exceeds_200k"),
+            "expected '⚠ cship.context_window.exceeds_200k' in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_run_shows_hint_section_for_none_module() {
+        let output = run(None);
+        assert!(
+            output.contains("Hints for modules"),
+            "expected hints section in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_run_shows_error_reason_in_hint() {
+        let output = run(None);
+        // model data absent hint should appear since sample context has model data,
+        // but other modules like vim will be absent
+        assert!(
+            output.contains("absent"),
+            "expected 'absent' in hint output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_error_hint_for_disabled_module_returns_disabled_text() {
+        let mut cfg = CshipConfig::default();
+        cfg.model = Some(ModelConfig {
+            disabled: Some(true),
+            ..Default::default()
+        });
+        let ctx = Context {
+            model: Some(Model {
+                display_name: Some("Sonnet".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Even with model data present, disabled=true makes it return None
+        let value = crate::modules::render_module("cship.model", &ctx, &cfg);
+        assert!(value.is_none(), "disabled module must return None");
+        let (error, remediation) = error_hint_for("cship.model", &ctx, &cfg);
+        assert!(
+            error.contains("disabled"),
+            "expected 'disabled' in error hint: {error}"
+        );
+        assert!(
+            remediation.contains("[cship.model]"),
+            "expected specific section '[cship.model]' in remediation: {remediation}"
+        );
+    }
+
+    #[test]
+    fn test_is_disabled_returns_true_for_disabled_model() {
+        let mut cfg = CshipConfig::default();
+        cfg.model = Some(ModelConfig {
+            disabled: Some(true),
+            ..Default::default()
+        });
+        assert!(
+            is_disabled("cship.model", &cfg),
+            "is_disabled should return true when model.disabled = Some(true)"
+        );
+    }
+
+    #[test]
+    fn test_is_disabled_returns_false_for_enabled_model() {
+        let cfg = CshipConfig::default();
+        assert!(
+            !is_disabled("cship.model", &cfg),
+            "is_disabled should return false when model config is absent"
+        );
     }
 }

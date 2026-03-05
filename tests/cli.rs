@@ -759,6 +759,34 @@ fn test_explain_no_stdin_uses_embedded_fallback() {
     );
 }
 
+// ── Story 3.2: per-module error hints integration tests ───────────────────
+
+#[test]
+fn test_explain_shows_warning_for_disabled_module() {
+    // Pipe a minimal JSON with no model data + use config that disables model
+    let json = r#"{"model":null}"#;
+    let output = cargo_bin_cmd!("cship")
+        .args(["explain", "--config", "tests/fixtures/disabled-model.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains('⚠'),
+        "expected '⚠' warning indicator in explain output: {stdout}"
+    );
+    // AC5: verify disabled-specific hint text appears with the actual section name
+    assert!(
+        stdout.contains("disabled"),
+        "expected 'disabled' in hint section: {stdout}"
+    );
+    assert!(
+        stdout.contains("[cship.model]"),
+        "expected specific section '[cship.model]' in remediation hint: {stdout}"
+    );
+}
+
 // ── Story 2.5: Per-module format strings integration tests ────────────────
 
 // AC1 — format style span with context_window.used_percentage
