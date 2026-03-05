@@ -47,20 +47,27 @@ pub fn render_passthrough(name: &str, ctx: &crate::context::Context) -> Option<S
         cmd.current_dir(dir);
     }
 
+    // Strip null bytes before passing strings to cmd.env(): environment variable values are
+    // null-terminated at the OS level, so Command::env panics if a value contains '\0'.
+    // serde_json faithfully decodes JSON \u0000 escapes into Rust Strings, making this possible.
+    let san = |s: &str| s.replace('\0', "");
+
     // CSHIP_* environment variable injection (all 9 — empty string for None fields)
     cmd.env(
         "CSHIP_MODEL",
-        ctx.model
+        san(ctx
+            .model
             .as_ref()
             .and_then(|m| m.display_name.as_deref())
-            .unwrap_or(""),
+            .unwrap_or("")),
     );
     cmd.env(
         "CSHIP_MODEL_ID",
-        ctx.model
+        san(ctx
+            .model
             .as_ref()
             .and_then(|m| m.id.as_deref())
-            .unwrap_or(""),
+            .unwrap_or("")),
     );
     cmd.env(
         "CSHIP_COST_USD",
@@ -88,20 +95,25 @@ pub fn render_passthrough(name: &str, ctx: &crate::context::Context) -> Option<S
     );
     cmd.env(
         "CSHIP_VIM_MODE",
-        ctx.vim
+        san(ctx
+            .vim
             .as_ref()
             .and_then(|v| v.mode.as_deref())
-            .unwrap_or(""),
+            .unwrap_or("")),
     );
     cmd.env(
         "CSHIP_AGENT_NAME",
-        ctx.agent
+        san(ctx
+            .agent
             .as_ref()
             .and_then(|a| a.name.as_deref())
-            .unwrap_or(""),
+            .unwrap_or("")),
     );
-    cmd.env("CSHIP_SESSION_ID", ctx.session_id.as_deref().unwrap_or(""));
-    cmd.env("CSHIP_CWD", cwd.unwrap_or(""));
+    cmd.env(
+        "CSHIP_SESSION_ID",
+        san(ctx.session_id.as_deref().unwrap_or("")),
+    );
+    cmd.env("CSHIP_CWD", san(cwd.unwrap_or("")));
 
     let output = match cmd.output() {
         Ok(o) => o,
