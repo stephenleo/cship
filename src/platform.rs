@@ -11,7 +11,6 @@
 ///
 /// Service name verified against live Claude Code credential store: "Claude Code-credentials"
 /// Reference: https://codelynx.dev/posts/claude-code-usage-limits-statusline
-
 #[cfg(target_os = "macos")]
 pub fn get_oauth_token() -> Result<String, String> {
     // CI gap: macOS path only compiled on target_os = "macos".
