@@ -6,4 +6,5 @@ pub mod explain;
 pub mod format;
 pub mod modules;
 pub mod passthrough;
+pub mod platform;
 pub mod renderer;

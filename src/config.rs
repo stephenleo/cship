@@ -15,6 +15,7 @@ pub struct CshipConfig {
     pub agent: Option<AgentConfig>,
     pub session: Option<SessionConfig>,
     pub workspace: Option<WorkspaceConfig>,
+    pub usage_limits: Option<UsageLimitsConfig>,
 }
 
 /// Per-module config fields shared by all native CShip modules.
@@ -132,6 +133,18 @@ pub struct WorkspaceConfig {
     pub symbol: Option<String>,
     pub disabled: Option<bool>,
     pub label: Option<String>,
+    pub format: Option<String>,
+}
+
+/// Configuration for `[cship.usage_limits]`.
+/// Story 5.1 defines the struct; Stories 5.2 and 5.3 implement the render logic.
+#[derive(Debug, Deserialize, Default)]
+pub struct UsageLimitsConfig {
+    pub disabled: Option<bool>,
+    pub warn_threshold: Option<f64>,
+    pub warn_style: Option<String>,
+    pub critical_threshold: Option<f64>,
+    pub critical_style: Option<String>,
     pub format: Option<String>,
 }
 

@@ -167,6 +167,11 @@ fn is_disabled(name: &str, cfg: &crate::config::CshipConfig) -> bool {
             .as_ref()
             .and_then(|m| m.disabled)
             .unwrap_or(false),
+        "usage_limits" => cfg
+            .usage_limits
+            .as_ref()
+            .and_then(|m| m.disabled)
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -215,6 +220,10 @@ fn error_hint_for(
             "workspace data absent from Claude Code context".into(),
             "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
         ),
+        "usage_limits" => (
+            "OAuth token retrieval failed — credential store unavailable or credentials not found".into(),
+            "Authenticate in Claude Code first. On Linux, ensure libsecret-tools is installed: sudo apt install libsecret-tools".into(),
+        ),
         _ => (
             "module returned no value".into(),
             "Check cship configuration and ensure Claude Code is running.".into(),
@@ -238,6 +247,7 @@ fn config_section_for(module_name: &str, cfg: &crate::config::CshipConfig) -> &'
             "[cship.session]"
         }
         "workspace" if cfg.workspace.is_some() => "[cship.workspace]",
+        "usage_limits" if cfg.usage_limits.is_some() => "[cship.usage_limits]",
         _ => "(default)",
     }
 }
