@@ -142,6 +142,19 @@ pub fn read_usage_limits(transcript_path: &Path) -> Option<UsageLimitsData> {
     Some(envelope.data)
 }
 
+/// Read the last cached usage limits data regardless of TTL or reset timestamps.
+///
+/// Used as a fallback when a live API fetch times out (AC #4): returns the most
+/// recently written data even if it has expired, so the statusline shows something
+/// meaningful rather than going blank. Returns `None` only if no cache file exists
+/// or it cannot be parsed.
+pub fn read_usage_limits_stale(transcript_path: &Path) -> Option<UsageLimitsData> {
+    let path = usage_limits_cache_path(transcript_path)?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let envelope: UsageLimitsCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    Some(envelope.data) // intentionally skips TTL and resets_at checks
+}
+
 /// Write usage limits data to the cache file.
 /// Sets `expires_at` to now + 60 seconds.
 /// Silently no-ops on any I/O error — cache write failure must never surface to the user.
@@ -425,6 +438,43 @@ mod tests {
             "empty resets_at should not trigger early invalidation"
         );
         drop(dir);
+    }
+
+    #[test]
+    fn test_read_usage_limits_stale_returns_expired_data() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        // Write a valid cache entry, then overwrite with expired TTL
+        write_usage_limits(&transcript, &sample_data());
+        let path = dir.path().join("cship").join("transcript-usage-limits");
+        let expired = serde_json::json!({
+            "data": {
+                "five_hour_pct": 77.0,
+                "seven_day_pct": 88.0,
+                "five_hour_resets_at": "2099-01-01T00:00:00Z",
+                "seven_day_resets_at": "2099-01-01T00:00:00Z"
+            },
+            "expires_at": 0_u64,           // expired
+            "five_hour_resets_at": 9_999_999_999_u64,
+            "seven_day_resets_at": 9_999_999_999_u64
+        });
+        std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
+        // Normal read returns None (TTL expired)
+        assert!(
+            read_usage_limits(&transcript).is_none(),
+            "normal read should be None"
+        );
+        // Stale read returns data regardless
+        let stale = read_usage_limits_stale(&transcript);
+        assert!(stale.is_some(), "stale read should return data");
+        assert!((stale.unwrap().five_hour_pct - 77.0).abs() < f64::EPSILON);
+        drop(dir);
+    }
+
+    #[test]
+    fn test_read_usage_limits_stale_returns_none_when_no_file() {
+        let (_dir, transcript) = temp_transcript("stale_miss");
+        assert!(read_usage_limits_stale(&transcript).is_none());
     }
 
     #[test]
