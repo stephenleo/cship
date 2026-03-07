@@ -221,8 +221,8 @@ fn error_hint_for(
             "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
         ),
         "usage_limits" => (
-            "OAuth token retrieval failed — credential store unavailable or credentials not found".into(),
-            "Authenticate in Claude Code first. On Linux, ensure libsecret-tools is installed: sudo apt install libsecret-tools".into(),
+            "usage_limits returned no data — API fetch failed, timed out, or no cached data available".into(),
+            "Check RUST_LOG=warn output for the specific cause (e.g. HTTP 429 = rate limited, 401 = re-authenticate in Claude Code). The module works normally in a live session once the rate limit clears.".into(),
         ),
         _ => (
             "module returned no value".into(),
