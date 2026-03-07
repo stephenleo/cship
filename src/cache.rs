@@ -79,7 +79,12 @@ fn usage_limits_cache_path(transcript_path: &Path) -> Option<std::path::PathBuf>
 /// invalidation as a safe default.
 fn iso8601_to_epoch(s: &str) -> u64 {
     fn inner(s: &str) -> Option<u64> {
-        let s = s.strip_suffix('Z')?;
+        // Accept both 'Z' (e.g. "...T00:00:00Z") and '+00:00' (e.g. "...T04:59:59.943648+00:00")
+        // — both are UTC. The Anthropic API uses '+00:00' in practice.
+        let s = s
+            .strip_suffix('Z')
+            .or_else(|| s.strip_suffix("+00:00"))
+            .unwrap_or(s);
         let (date_s, time_s) = s.split_once('T')?;
         let mut dp = date_s.split('-');
         let year: i64 = dp.next()?.parse().ok()?;
@@ -487,6 +492,42 @@ mod tests {
     fn test_iso8601_to_epoch_invalid_returns_zero() {
         assert_eq!(iso8601_to_epoch("not-a-date"), 0);
         assert_eq!(iso8601_to_epoch(""), 0);
+    }
+
+    #[test]
+    fn test_iso8601_to_epoch_plus_offset_format() {
+        // Anthropic API returns "+00:00" suffix, not "Z" — must parse to same epoch as Z form
+        assert_eq!(
+            iso8601_to_epoch("2000-01-01T00:00:00+00:00"),
+            946_684_800,
+            "+00:00 format should parse to same epoch as Z form"
+        );
+        assert_eq!(
+            iso8601_to_epoch("2000-01-01T00:00:01.943648+00:00"),
+            946_684_801,
+            "fractional seconds with +00:00 should be truncated"
+        );
+    }
+
+    #[test]
+    fn test_usage_limits_early_invalidation_with_plus_offset_resets_at() {
+        // Real API returns "+00:00" format — early invalidation must fire correctly
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        // five_hour_resets_at is in the past but uses +00:00 format
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: "2000-01-01T00:00:00+00:00".into(), // past, +00:00 format
+            seven_day_resets_at: "2099-01-01T00:00:00+00:00".into(), // future
+        };
+        write_usage_limits(&transcript, &data);
+        let result = read_usage_limits(&transcript);
+        assert!(
+            result.is_none(),
+            "past five_hour_resets_at (+00:00 format) should invalidate cache"
+        );
+        drop(dir);
     }
 
     #[test]
