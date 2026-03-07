@@ -32,12 +32,31 @@ pub fn get_oauth_token() -> Result<String, String> {
 
 #[cfg(target_os = "linux")]
 pub fn get_oauth_token() -> Result<String, String> {
-    // `secret-tool lookup <attr> <value>` prints the stored secret to stdout.
-    // The service attribute key for Claude Code is "service", value "Claude Code-credentials".
+    // Primary path: read ~/.claude/.credentials.json directly.
+    // Claude Code on Linux (including WSL2) stores credentials as a JSON file at this
+    // well-known path. This avoids requiring a running gnome-keyring / D-Bus session,
+    // which is unavailable in WSL2 by default.
+    if let Some(token) = read_credentials_file() {
+        return Ok(token);
+    }
+
+    // Fallback: secret-tool (for users with a running gnome-keyring).
     get_oauth_token_with_cmd(
         "secret-tool",
         &["lookup", "service", "Claude Code-credentials"],
     )
+}
+
+/// Read `~/.claude/.credentials.json` and extract the OAuth access token.
+/// Returns `None` if the file is absent, unreadable, or malformed.
+#[cfg(target_os = "linux")]
+fn read_credentials_file() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::Path::new(&home)
+        .join(".claude")
+        .join(".credentials.json");
+    let contents = std::fs::read_to_string(&path).ok()?;
+    extract_access_token(contents.trim())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -171,6 +190,28 @@ mod tests {
     fn test_extract_access_token_empty_token() {
         let json = r#"{"claudeAiOauth":{"accessToken":""}}"#;
         assert_eq!(extract_access_token(json), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_read_credentials_file_valid() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let creds_path = claude_dir.join(".credentials.json");
+        let json = r#"{"claudeAiOauth":{"accessToken":"sk-ant-file-token","refreshToken":"rt","expiresAt":9999}}"#;
+        std::fs::File::create(&creds_path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        // Temporarily override HOME for this test
+        let orig_home = std::env::var("HOME").unwrap_or_default();
+        // SAFETY: single-threaded test, no concurrent env reads
+        unsafe { std::env::set_var("HOME", dir.path()) };
+        let result = read_credentials_file();
+        unsafe { std::env::set_var("HOME", &orig_home) };
+        assert_eq!(result, Some("sk-ant-file-token".to_string()));
     }
 
     #[test]
