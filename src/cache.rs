@@ -1,14 +1,19 @@
-//! File-based cache for Starship passthrough module results.
+//! File-based cache for cship module results.
 //!
-//! Cache path: {dirname(transcript_path)}/cship/{transcript_stem}-starship-{module_name}
-//! TTL: 5 seconds (compared against file mtime — no metadata file needed).
-//! Format: raw UTF-8 text (exact `starship module` stdout output, trimmed for storage).
+//! ## Passthrough cache (Story 4.2)
+//! Path: `{dirname(transcript_path)}/cship/{transcript_stem}-starship-{module_name}`
+//! TTL: 5 seconds via file mtime. Format: raw UTF-8 text.
 //!
-//! Story 4.2: passthrough cache only.
-//! TODO: Story 5.2 adds `read_usage_limits`/`write_usage_limits`.
+//! ## Usage limits cache (Story 5.2)
+//! Path: `{dirname(transcript_path)}/cship/{transcript_stem}-usage-limits`
+//! TTL: 60 seconds + early invalidation when a usage window resets.
+//! Format: JSON envelope `{ "data": {...}, "expires_at": u64, "five_hour_resets_at": u64, "seven_day_resets_at": u64 }`
+//! The OAuth token is NEVER written to any cache file (NFR-S3).
 
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::usage_limits::UsageLimitsData;
 
 const PASSTHROUGH_TTL: Duration = Duration::from_secs(5);
 
@@ -45,6 +50,118 @@ pub fn write_passthrough(module_name: &str, transcript_path: &Path, content: &st
             let _ = std::fs::create_dir_all(dir);
         }
         let _ = std::fs::write(path, content);
+    }
+}
+
+// ── Usage limits cache ────────────────────────────────────────────────────────
+
+/// Cache envelope stored on disk for usage limits data.
+/// Envelope timestamps are Unix epoch seconds for cheap comparison.
+/// The `data` field preserves ISO 8601 strings for rendering (Story 5.3).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct UsageLimitsCacheEnvelope {
+    data: UsageLimitsData,
+    expires_at: u64,
+    five_hour_resets_at: u64,
+    seven_day_resets_at: u64,
+}
+
+/// Derive the cache file path for usage limits.
+/// Example: `.../session.jsonl` → `.../cship/session-usage-limits`
+fn usage_limits_cache_path(transcript_path: &Path) -> Option<std::path::PathBuf> {
+    let dir = transcript_path.parent()?;
+    let stem = transcript_path.file_stem()?.to_str()?;
+    Some(dir.join("cship").join(format!("{stem}-usage-limits")))
+}
+
+/// Parse "YYYY-MM-DDTHH:MM:SSZ" to Unix epoch seconds using the Howard Hinnant
+/// civil-date algorithm. Returns 0 on any parse failure — causing immediate cache
+/// invalidation as a safe default.
+fn iso8601_to_epoch(s: &str) -> u64 {
+    fn inner(s: &str) -> Option<u64> {
+        let s = s.strip_suffix('Z')?;
+        let (date_s, time_s) = s.split_once('T')?;
+        let mut dp = date_s.split('-');
+        let year: i64 = dp.next()?.parse().ok()?;
+        let month: i64 = dp.next()?.parse().ok()?;
+        let day: i64 = dp.next()?.parse().ok()?;
+        let mut tp = time_s.split(':');
+        let hour: i64 = tp.next()?.parse().ok()?;
+        let min: i64 = tp.next()?.parse().ok()?;
+        let sec: i64 = tp.next()?.parse().ok()?;
+        // Howard Hinnant civil-to-days algorithm
+        let y = if month <= 2 { year - 1 } else { year };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        let days = era * 146097 + doe - 719468;
+        let total = days * 86400 + hour * 3600 + min * 60 + sec;
+        u64::try_from(total).ok()
+    }
+    inner(s).unwrap_or(0)
+}
+
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Convert an ISO 8601 `resets_at` string to epoch seconds for cache comparison.
+/// Returns `u64::MAX` when the input is empty or unparseable — meaning "no reset
+/// scheduled, never trigger early invalidation via this field."
+fn epoch_or_never(s: &str) -> u64 {
+    if s.is_empty() {
+        return u64::MAX;
+    }
+    match iso8601_to_epoch(s) {
+        0 => u64::MAX,
+        v => v,
+    }
+}
+
+/// Read a cached usage limits value if the cache is still valid.
+///
+/// The cache is invalid (returns `None`) if:
+/// 1. Current time ≥ `expires_at` (60 s TTL since last write), OR
+/// 2. Current time ≥ `five_hour_resets_at` OR `seven_day_resets_at`
+///    (ensures the display refreshes immediately when a usage window resets)
+pub fn read_usage_limits(transcript_path: &Path) -> Option<UsageLimitsData> {
+    let path = usage_limits_cache_path(transcript_path)?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let envelope: UsageLimitsCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    let now = now_epoch();
+    if now >= envelope.expires_at {
+        return None; // TTL expired
+    }
+    if now >= envelope.five_hour_resets_at || now >= envelope.seven_day_resets_at {
+        return None; // usage window reset — stale data
+    }
+    Some(envelope.data)
+}
+
+/// Write usage limits data to the cache file.
+/// Sets `expires_at` to now + 60 seconds.
+/// Silently no-ops on any I/O error — cache write failure must never surface to the user.
+/// The OAuth token is never present in the written data (NFR-S3).
+pub fn write_usage_limits(transcript_path: &Path, data: &UsageLimitsData) {
+    let Some(path) = usage_limits_cache_path(transcript_path) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let now = now_epoch();
+    let envelope = UsageLimitsCacheEnvelope {
+        data: data.clone(),
+        expires_at: now + 60,
+        five_hour_resets_at: epoch_or_never(&data.five_hour_resets_at),
+        seven_day_resets_at: epoch_or_never(&data.seven_day_resets_at),
+    };
+    if let Ok(json) = serde_json::to_string(&envelope) {
+        let _ = std::fs::write(path, json);
     }
 }
 
@@ -155,5 +272,170 @@ mod tests {
 
         let result = read_passthrough("git_branch", &transcript);
         assert!(result.is_none(), "stale cache should return None");
+    }
+
+    // ── Usage limits cache tests ──────────────────────────────────────────────
+
+    fn sample_data() -> UsageLimitsData {
+        UsageLimitsData {
+            five_hour_pct: 23.4,
+            seven_day_pct: 45.1,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn test_usage_limits_cache_hit_within_ttl() {
+        let (dir, transcript) = temp_transcript("s5_2_hit");
+        write_usage_limits(&transcript, &sample_data());
+        let result = read_usage_limits(&transcript);
+        assert!(result.is_some(), "fresh cache should return Some");
+        let data = result.unwrap();
+        assert!((data.five_hour_pct - 23.4).abs() < f64::EPSILON);
+        assert!((data.seven_day_pct - 45.1).abs() < f64::EPSILON);
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_cache_miss_nonexistent_file() {
+        let (_dir, transcript) = temp_transcript("s5_2_miss");
+        let result = read_usage_limits(&transcript);
+        assert!(
+            result.is_none(),
+            "nonexistent cache file should return None"
+        );
+    }
+
+    #[test]
+    fn test_usage_limits_cache_file_path_and_json_structure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_usage_limits(&transcript, &sample_data());
+        let expected_path = dir.path().join("cship").join("transcript-usage-limits");
+        assert!(expected_path.exists(), "cache file at: {expected_path:?}");
+        let raw = std::fs::read_to_string(&expected_path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(v["data"]["five_hour_pct"].is_number());
+        assert!(v["data"]["seven_day_pct"].is_number());
+        assert!(v["data"]["five_hour_resets_at"].is_string());
+        assert!(v["data"]["seven_day_resets_at"].is_string());
+        assert!(v["expires_at"].is_number());
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_ttl_invalidation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        // Write a valid cache entry first
+        write_usage_limits(&transcript, &sample_data());
+        // Overwrite with an expired envelope (expires_at = 0, resets_at far future)
+        let path = dir.path().join("cship").join("transcript-usage-limits");
+        let expired = serde_json::json!({
+            "data": {
+                "five_hour_pct": 23.4,
+                "seven_day_pct": 45.1,
+                "five_hour_resets_at": "2099-01-01T00:00:00Z",
+                "seven_day_resets_at": "2099-01-01T00:00:00Z"
+            },
+            "expires_at": 0_u64,
+            "five_hour_resets_at": 9_999_999_999_u64,
+            "seven_day_resets_at": 9_999_999_999_u64
+        });
+        std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
+        let result = read_usage_limits(&transcript);
+        assert!(result.is_none(), "expired TTL should return None");
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_resets_at_early_invalidation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        // five_hour_resets_at is in the past — should invalidate even within 60s TTL
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: "2000-01-01T00:00:00Z".into(), // past
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(), // future
+        };
+        write_usage_limits(&transcript, &data);
+        let result = read_usage_limits(&transcript);
+        assert!(
+            result.is_none(),
+            "past five_hour_resets_at should invalidate cache"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_write_creates_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("deep").join("nested").join("t.jsonl");
+        write_usage_limits(&transcript, &sample_data());
+        let cache_file = dir
+            .path()
+            .join("deep")
+            .join("nested")
+            .join("cship")
+            .join("t-usage-limits");
+        assert!(
+            cache_file.exists(),
+            "directory should be created: {cache_file:?}"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_seven_day_resets_at_early_invalidation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        // seven_day_resets_at is in the past, five_hour is in the future
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(), // future
+            seven_day_resets_at: "2000-01-01T00:00:00Z".into(), // past
+        };
+        write_usage_limits(&transcript, &data);
+        let result = read_usage_limits(&transcript);
+        assert!(
+            result.is_none(),
+            "past seven_day_resets_at should invalidate cache"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_empty_resets_at_does_not_invalidate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        // Both resets_at are empty (API returned null) — cache should still be valid within TTL
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: String::new(),
+            seven_day_resets_at: String::new(),
+        };
+        write_usage_limits(&transcript, &data);
+        let result = read_usage_limits(&transcript);
+        assert!(
+            result.is_some(),
+            "empty resets_at should not trigger early invalidation"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_iso8601_to_epoch_known_value() {
+        // 2000-01-01T00:00:00Z = 946,684,800 seconds since epoch
+        assert_eq!(iso8601_to_epoch("2000-01-01T00:00:00Z"), 946_684_800);
+    }
+
+    #[test]
+    fn test_iso8601_to_epoch_invalid_returns_zero() {
+        assert_eq!(iso8601_to_epoch("not-a-date"), 0);
+        assert_eq!(iso8601_to_epoch(""), 0);
     }
 }
