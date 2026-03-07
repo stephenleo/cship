@@ -88,7 +88,7 @@ fn iso8601_to_epoch(s: &str) -> u64 {
         let mut tp = time_s.split(':');
         let hour: i64 = tp.next()?.parse().ok()?;
         let min: i64 = tp.next()?.parse().ok()?;
-        let sec: i64 = tp.next()?.parse().ok()?;
+        let sec: i64 = tp.next()?.split('.').next()?.parse().ok()?;
         // Howard Hinnant civil-to-days algorithm
         let y = if month <= 2 { year - 1 } else { year };
         let era = y.div_euclid(400);
@@ -437,5 +437,20 @@ mod tests {
     fn test_iso8601_to_epoch_invalid_returns_zero() {
         assert_eq!(iso8601_to_epoch("not-a-date"), 0);
         assert_eq!(iso8601_to_epoch(""), 0);
+    }
+
+    #[test]
+    fn test_iso8601_to_epoch_fractional_seconds() {
+        // Sub-second precision must parse to the same epoch as the whole-second form
+        assert_eq!(
+            iso8601_to_epoch("2000-01-01T00:00:01.000Z"),
+            946_684_801,
+            "fractional-second timestamp should parse correctly"
+        );
+        assert_eq!(
+            iso8601_to_epoch("2000-01-01T00:00:01.999Z"),
+            946_684_801,
+            "fractional seconds are truncated, not rounded"
+        );
     }
 }
