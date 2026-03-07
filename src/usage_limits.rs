@@ -58,8 +58,10 @@ pub fn fetch_usage_limits(token: &str) -> Result<UsageLimitsData, String> {
         .map_err(|e| format!("unexpected response format: {e}"))?;
 
     Ok(UsageLimitsData {
-        five_hour_pct: api.five_hour.utilization * 100.0,
-        seven_day_pct: api.seven_day.utilization * 100.0,
+        // API returns utilization as a percentage (0–100), not a fraction (0–1).
+        // Reference: https://codelynx.dev/posts/claude-code-usage-limits-statusline
+        five_hour_pct: api.five_hour.utilization,
+        seven_day_pct: api.seven_day.utilization,
         five_hour_resets_at: api.five_hour.resets_at.unwrap_or_default(),
         seven_day_resets_at: api.seven_day.resets_at.unwrap_or_default(),
     })

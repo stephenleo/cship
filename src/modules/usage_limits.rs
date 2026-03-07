@@ -158,8 +158,11 @@ fn format_time_until(resets_at: &str) -> String {
 /// Duplicated here because the 2-file rule prohibits modifying `cache.rs`.
 /// Returns `None` on any parse failure.
 fn iso8601_to_epoch(s: &str) -> Option<u64> {
-    // Strip trailing Z and split on T
-    let s = s.strip_suffix('Z').unwrap_or(s);
+    // Strip UTC marker: 'Z' or '+00:00' (Anthropic API uses '+00:00' in practice)
+    let s = s
+        .strip_suffix('Z')
+        .or_else(|| s.strip_suffix("+00:00"))
+        .unwrap_or(s);
     let (date_s, time_s) = s.split_once('T')?;
     let mut dp = date_s.split('-');
     let year: i64 = dp.next()?.parse().ok()?;
@@ -477,6 +480,18 @@ mod tests {
         assert!(
             result.ends_with('m') && !result.contains('h'),
             "expected Xm format: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_time_until_plus_offset_format() {
+        // Anthropic API returns "+00:00" not "Z" — format_time_until must handle it
+        // Use a far-future timestamp so this test is stable regardless of when it runs
+        let result = format_time_until("2099-01-01T00:00:00+00:00");
+        assert_ne!(result, "?", "should parse +00:00 format, not return '?'");
+        assert_ne!(
+            result, "now",
+            "far-future +00:00 timestamp should not be 'now'"
         );
     }
 
