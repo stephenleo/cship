@@ -126,8 +126,8 @@ mod tests {
 
     #[test]
     fn test_nonzero_exit_returns_credential_not_found_error() {
-        // `/bin/false` always exits with code 1 — simulates "credential not found".
-        let result = get_oauth_token_with_cmd("/bin/false", &[]);
+        // `sh -c "exit 1"` always exits with code 1 — simulates "credential not found".
+        let result = get_oauth_token_with_cmd("sh", &["-c", "exit 1"]);
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(
@@ -138,10 +138,10 @@ mod tests {
 
     #[test]
     fn test_successful_token_extraction() {
-        // Use /usr/bin/sh to emit a JSON blob matching the real credential format.
+        // Use `sh` (PATH lookup) to emit a JSON blob matching the real credential format.
         let json = r#"{"claudeAiOauth":{"accessToken":"sk-ant-test-token","refreshToken":"rt","expiresAt":9999}}"#;
         let script = format!("printf '%s' '{json}'");
-        let result = get_oauth_token_with_cmd("/usr/bin/sh", &["-c", &script]);
+        let result = get_oauth_token_with_cmd("sh", &["-c", &script]);
         assert!(result.is_ok(), "expected Ok, got: {:?}", result);
         assert_eq!(result.unwrap(), "sk-ant-test-token");
     }
