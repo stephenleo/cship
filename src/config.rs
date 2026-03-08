@@ -196,7 +196,11 @@ pub fn load_with_source(
         });
         return ConfigLoadResult {
             config,
-            source: ConfigSource::Override(path.to_path_buf()),
+            source: if path.file_name().map(|n| n == "cship.toml").unwrap_or(false) {
+                ConfigSource::DedicatedFile(path.to_path_buf())
+            } else {
+                ConfigSource::Override(path.to_path_buf())
+            },
         };
     }
 
@@ -559,6 +563,24 @@ mod tests {
         assert!(
             matches!(result.source, ConfigSource::DedicatedFile(_)),
             "expected DedicatedFile source, got: {}",
+            result.source
+        );
+        assert_eq!(result.config.lines.as_ref().unwrap()[0], "$cship.cost");
+    }
+
+    #[test]
+    fn test_load_with_source_override_cship_toml_returns_dedicated_file_variant() {
+        // Regression: --config override pointing to cship.toml must return DedicatedFile, not Override
+        let dir = tempfile::tempdir().unwrap();
+
+        let cship_path = dir.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(f, "lines = [\"$cship.cost\"]").unwrap();
+
+        let result = load_with_source(Some(&cship_path), None);
+        assert!(
+            matches!(result.source, ConfigSource::DedicatedFile(_)),
+            "expected DedicatedFile source for cship.toml override, got: {}",
             result.source
         );
         assert_eq!(result.config.lines.as_ref().unwrap()[0], "$cship.cost");
