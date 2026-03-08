@@ -164,6 +164,8 @@ pub enum ConfigSource {
     ProjectLocal(std::path::PathBuf),
     Global(std::path::PathBuf),
     Override(std::path::PathBuf),
+    /// Config loaded from a dedicated `cship.toml` file (no `[cship]` wrapper needed).
+    DedicatedFile(std::path::PathBuf),
     Default,
 }
 
@@ -173,21 +175,22 @@ impl std::fmt::Display for ConfigSource {
             ConfigSource::ProjectLocal(p) | ConfigSource::Global(p) | ConfigSource::Override(p) => {
                 write!(f, "{}", p.display())
             }
-            ConfigSource::Default => write!(f, "(default — no starship.toml found)"),
+            ConfigSource::DedicatedFile(p) => write!(f, "{} (cship.toml)", p.display()),
+            ConfigSource::Default => write!(f, "(default — no config file found)"),
         }
     }
 }
 
 /// Discover and load config, returning both the config and where it was loaded from.
 /// Used by `explain.rs` to show the user which config was loaded.
-/// Implements the same 4-step discovery chain as `discover_and_load` (AC1).
+/// Implements the same discovery chain as `discover_and_load` (AC1).
 pub fn load_with_source(
     override_path: Option<&std::path::Path>,
     workspace_dir: Option<&str>,
 ) -> ConfigLoadResult {
     // Step 1: --config flag override
     if let Some(path) = override_path {
-        let config = load_from_path(path).unwrap_or_else(|e| {
+        let config = load_override(path).unwrap_or_else(|e| {
             tracing::warn!("cship: failed to load config from {}: {e}", path.display());
             CshipConfig::default()
         });
@@ -197,10 +200,21 @@ pub fn load_with_source(
         };
     }
 
-    // Step 2: Walk up from workspace_dir
+    // Step 2: Walk up from workspace_dir — check cship.toml before starship.toml
     if let Some(dir) = workspace_dir {
         let mut current = std::path::Path::new(dir);
         loop {
+            let cship_candidate = current.join("cship.toml");
+            if cship_candidate.exists() {
+                let config = load_cship_toml(&cship_candidate).unwrap_or_else(|e| {
+                    tracing::warn!("cship: failed to load dedicated config: {e}");
+                    CshipConfig::default()
+                });
+                return ConfigLoadResult {
+                    config,
+                    source: ConfigSource::DedicatedFile(cship_candidate),
+                };
+            }
             let candidate = current.join("starship.toml");
             if candidate.exists() {
                 let config = load_from_path(&candidate).unwrap_or_else(|e| {
@@ -219,8 +233,21 @@ pub fn load_with_source(
         }
     }
 
-    // Step 3: Global fallback ~/.config/starship.toml
+    // Step 3: Global fallback — check ~/.config/cship.toml before ~/.config/starship.toml
     if let Ok(home) = std::env::var("HOME") {
+        let cship_global = std::path::Path::new(&home)
+            .join(".config")
+            .join("cship.toml");
+        if cship_global.exists() {
+            let config = load_cship_toml(&cship_global).unwrap_or_else(|e| {
+                tracing::warn!("cship: failed to load global dedicated config: {e}");
+                CshipConfig::default()
+            });
+            return ConfigLoadResult {
+                config,
+                source: ConfigSource::DedicatedFile(cship_global),
+            };
+        }
         let global = std::path::Path::new(&home)
             .join(".config")
             .join("starship.toml");
@@ -237,7 +264,7 @@ pub fn load_with_source(
     }
 
     // Step 4: No config found — use defaults
-    tracing::debug!("no starship.toml found; using default CshipConfig");
+    tracing::debug!("no config file found; using default CshipConfig");
     ConfigLoadResult {
         config: CshipConfig::default(),
         source: ConfigSource::Default,
@@ -252,7 +279,7 @@ struct StarshipToml {
     cship: Option<CshipConfig>,
 }
 
-/// Load `CshipConfig` from a file at `path`.
+/// Load `CshipConfig` from a `starship.toml`-format file at `path`.
 /// Returns an error if the file cannot be read OR if the TOML is malformed.
 /// Returns default `CshipConfig` if `[cship]` section is absent (not an error).
 fn load_from_path(path: &std::path::Path) -> anyhow::Result<CshipConfig> {
@@ -264,12 +291,46 @@ fn load_from_path(path: &std::path::Path) -> anyhow::Result<CshipConfig> {
     Ok(wrapper.cship.unwrap_or_default())
 }
 
-/// Discover and load `CshipConfig` using the 4-step discovery chain.
+/// Load `CshipConfig` from a dedicated `cship.toml` file at `path`.
+///
+/// The file is parsed directly as `CshipConfig` (no `[cship]` wrapper needed).
+/// If a top-level `cship` key is detected (user error), emits a `tracing::warn!`
+/// and falls back to `StarshipToml` wrapper extraction (lenient handling, AC#7).
+fn load_cship_toml(path: &std::path::Path) -> anyhow::Result<CshipConfig> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
+    let value: toml::Value = toml::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("malformed TOML in {}: {e}", path.display()))?;
+    if value.get("cship").is_some() {
+        tracing::warn!("cship.toml should not contain a [cship] section; loading via wrapper");
+        let wrapper: StarshipToml = toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("malformed TOML in {}: {e}", path.display()))?;
+        tracing::debug!("loaded config from {} (via wrapper)", path.display());
+        return Ok(wrapper.cship.unwrap_or_default());
+    }
+    let config: CshipConfig = toml::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("malformed TOML in {}: {e}", path.display()))?;
+    tracing::debug!("loaded config from {}", path.display());
+    Ok(config)
+}
+
+/// Load `CshipConfig` from an explicit `--config` override path.
+/// Routes to `load_cship_toml` if the filename is `cship.toml`, otherwise
+/// uses the `StarshipToml` wrapper (standard starship.toml format).
+fn load_override(path: &std::path::Path) -> anyhow::Result<CshipConfig> {
+    if path.file_name().map(|n| n == "cship.toml").unwrap_or(false) {
+        load_cship_toml(path)
+    } else {
+        load_from_path(path)
+    }
+}
+
+/// Discover and load `CshipConfig` using the discovery chain.
 ///
 /// Priority order:
 /// 1. If `config_path` is `Some`, load that file directly (bypasses discovery).
-/// 2. Walk up the directory tree from `workspace_dir`, return first `starship.toml` found.
-/// 3. Fall back to `$HOME/.config/starship.toml`.
+/// 2. Walk up the directory tree from `workspace_dir`, checking `cship.toml` then `starship.toml`.
+/// 3. Fall back to `$HOME/.config/cship.toml`, then `$HOME/.config/starship.toml`.
 /// 4. If nothing found, return `CshipConfig::default()` without error.
 ///
 /// Returns `Err` only if a file is found but fails to parse (malformed TOML or unreadable).
@@ -279,7 +340,7 @@ pub fn discover_and_load(
 ) -> anyhow::Result<CshipConfig> {
     // Step 1: explicit override — propagate parse errors (caller handles exit)
     if let Some(path) = config_path {
-        return load_from_path(std::path::Path::new(path));
+        return load_override(std::path::Path::new(path));
     }
     // Steps 2–4: delegate to load_with_source (workspace walk-up → global → default)
     Ok(load_with_source(None, workspace_dir).config)
@@ -368,5 +429,138 @@ mod tests {
 
         // cleanup
         std::fs::remove_dir_all(&parent).ok();
+    }
+
+    // --- Task 6: cship.toml discovery tests ---
+    //
+    // NOTE: AC#3 (~/.config/cship.toml global fallback) is not directly unit-tested.
+    // The global path uses the same `load_cship_toml` function tested below, and
+    // mutating HOME in parallel tests is unsafe (Rust 2024). The workspace walk-up
+    // path (AC#4) exercises the same discovery+load logic.  AC#3 correctness is
+    // verified by code review of `load_with_source` Step 3.
+
+    #[test]
+    fn test_cship_toml_takes_priority_over_starship_toml() {
+        // AC#1: cship.toml in workspace dir is loaded instead of starship.toml
+        let dir = tempfile::tempdir().unwrap();
+
+        let cship_path = dir.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(f, "lines = [\"$cship.cost\"]").unwrap();
+
+        let starship_path = dir.path().join("starship.toml");
+        let mut g = std::fs::File::create(&starship_path).unwrap();
+        writeln!(g, "[cship]\nlines = [\"$cship.model\"]").unwrap();
+
+        let cfg = discover_and_load(dir.path().to_str(), None).unwrap();
+        // Should load from cship.toml (cost), not starship.toml (model)
+        assert_eq!(cfg.lines.as_ref().unwrap()[0], "$cship.cost");
+    }
+
+    #[test]
+    fn test_cship_toml_absent_falls_through_to_starship_toml() {
+        // AC#2: without cship.toml, existing starship.toml discovery is unchanged
+        let dir = tempfile::tempdir().unwrap();
+
+        let starship_path = dir.path().join("starship.toml");
+        let mut f = std::fs::File::create(&starship_path).unwrap();
+        writeln!(f, "[cship]\nlines = [\"$cship.model\"]").unwrap();
+
+        let cfg = discover_and_load(dir.path().to_str(), None).unwrap();
+        assert_eq!(cfg.lines.as_ref().unwrap()[0], "$cship.model");
+    }
+
+    #[test]
+    fn test_cship_toml_walk_up_from_subdirectory() {
+        // AC#4: cship.toml in parent directory is discovered via walk-up
+        let parent = tempfile::tempdir().unwrap();
+        let subdir = parent.path().join("child");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        let cship_path = parent.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(f, "lines = [\"$cship.workspace\"]").unwrap();
+
+        let cfg = discover_and_load(subdir.to_str(), None).unwrap();
+        assert_eq!(cfg.lines.as_ref().unwrap()[0], "$cship.workspace");
+    }
+
+    #[test]
+    fn test_cship_toml_with_wrapper_section_still_parses() {
+        // AC#7: a cship.toml with an accidental [cship] wrapper is parsed leniently
+        let dir = tempfile::tempdir().unwrap();
+
+        let cship_path = dir.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(f, "[cship]\nlines = [\"$cship.agent\"]").unwrap();
+
+        let cfg = load_cship_toml(&cship_path).unwrap();
+        // Despite the [cship] wrapper, config is extracted correctly
+        assert_eq!(cfg.lines.as_ref().unwrap()[0], "$cship.agent");
+    }
+
+    #[test]
+    fn test_cship_toml_direct_cshipconfig_parsing() {
+        // AC#1: cship.toml is parsed directly as CshipConfig (no [cship] wrapper)
+        let dir = tempfile::tempdir().unwrap();
+
+        let cship_path = dir.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(
+            f,
+            "lines = [\"$cship.model\"]\n\n[model]\nstyle = \"bold green\""
+        )
+        .unwrap();
+
+        let cfg = load_cship_toml(&cship_path).unwrap();
+        assert_eq!(cfg.lines.as_ref().unwrap()[0], "$cship.model");
+        assert_eq!(
+            cfg.model.as_ref().unwrap().style.as_deref(),
+            Some("bold green")
+        );
+    }
+
+    #[test]
+    fn test_dedicated_file_config_source_display() {
+        // AC#6: DedicatedFile variant displays path with (cship.toml) annotation
+        let path = std::path::PathBuf::from("/home/user/.config/cship.toml");
+        let source = ConfigSource::DedicatedFile(path);
+        let display = source.to_string();
+        assert!(display.contains("cship.toml"), "display: {display}");
+        assert!(
+            display.contains("(cship.toml)"),
+            "should have annotation: {display}"
+        );
+    }
+
+    #[test]
+    fn test_override_cship_toml_routes_correctly() {
+        // AC#5: --config override pointing to cship.toml parses directly as CshipConfig
+        let dir = tempfile::tempdir().unwrap();
+
+        let cship_path = dir.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(f, "lines = [\"$cship.session\"]").unwrap();
+
+        let cfg = discover_and_load(None, cship_path.to_str()).unwrap();
+        assert_eq!(cfg.lines.as_ref().unwrap()[0], "$cship.session");
+    }
+
+    #[test]
+    fn test_load_with_source_returns_dedicated_file_variant() {
+        // M1: Verify discovery flow returns ConfigSource::DedicatedFile for cship.toml
+        let dir = tempfile::tempdir().unwrap();
+
+        let cship_path = dir.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(f, "lines = [\"$cship.cost\"]").unwrap();
+
+        let result = load_with_source(None, dir.path().to_str());
+        assert!(
+            matches!(result.source, ConfigSource::DedicatedFile(_)),
+            "expected DedicatedFile source, got: {}",
+            result.source
+        );
+        assert_eq!(result.config.lines.as_ref().unwrap()[0], "$cship.cost");
     }
 }
