@@ -117,7 +117,7 @@ fn epoch_or_never(s: &str) -> u64 {
     if s.is_empty() {
         return u64::MAX;
     }
-    iso8601_to_epoch(s).unwrap_or(u64::MAX)
+    iso8601_to_epoch(s).filter(|&e| e > 0).unwrap_or(u64::MAX)
 }
 
 /// Read a cached usage limits value.
