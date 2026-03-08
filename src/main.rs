@@ -39,8 +39,7 @@ fn main() {
             }
         }
         Some(Commands::Uninstall) => {
-            // Story 3.2+ — stub only
-            tracing::warn!("cship uninstall: not yet implemented");
+            cship::uninstall::run();
         }
         None => {
             let ctx = match cship::context::from_stdin() {
@@ -68,7 +67,7 @@ fn main() {
             };
 
             // Render and emit — main.rs is the SOLE owner of stdout.
-            // println! is the ONLY stdout write in the entire codebase.
+            // println! is the ONLY stdout write in the rendering pipeline.
             let lines = cfg.lines.as_deref().unwrap_or(&[]);
             if !lines.is_empty() {
                 let output = cship::renderer::render(lines, &ctx, &cfg);
