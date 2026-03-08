@@ -18,6 +18,8 @@
 
 ## Quality Gates (required before any story is complete)
 - `cargo clippy -- -D warnings && cargo fmt --check && cargo test`
+- Non-Rust deliverables (scripts, workflows, docs): run `git status` + `git add` + verify commit before marking story ready for review
+- Shell script stories: include a smoke test exercising the script in piped execution context (`curl | bash`), not just `bash script.sh` directly
 
 ## Git Convention
 - Branch: `{issue-number}-story-{epic}-{story}-{slug}` (e.g. `13-story-2-1-cost-module`)
