@@ -35,7 +35,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let transcript_path = std::path::Path::new(transcript_str);
 
     // Step 3: cache hit → render immediately
-    let data = if let Some(cached) = cache::read_usage_limits(transcript_path) {
+    let data = if let Some(cached) = cache::read_usage_limits(transcript_path, false) {
         cached
     } else {
         // Step 4a: get OAuth token
@@ -56,7 +56,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
             }
             // AC #4: on timeout or API error, fall back to last cached value (may be stale)
             // Do NOT write stale data back to cache — that would falsely reset the TTL
-            None => cache::read_usage_limits_stale(transcript_path)?,
+            None => cache::read_usage_limits(transcript_path, true)?,
         }
     };
 
@@ -128,7 +128,7 @@ fn format_time_until(resets_at: &str) -> String {
     if resets_at.is_empty() {
         return "?".to_string();
     }
-    let reset_epoch = match iso8601_to_epoch(resets_at) {
+    let reset_epoch = match crate::cache::iso8601_to_epoch(resets_at) {
         Some(e) => e,
         None => return "?".to_string(),
     };
@@ -150,39 +150,6 @@ fn format_time_until(resets_at: &str) -> String {
     } else {
         format!("{}m", mins)
     }
-}
-
-/// Parse "YYYY-MM-DDTHH:MM:SSZ" (or with fractional seconds) to Unix epoch seconds.
-///
-/// Uses the Howard Hinnant civil-date algorithm — same as `cache::iso8601_to_epoch`.
-/// Duplicated here because the 2-file rule prohibits modifying `cache.rs`.
-/// Returns `None` on any parse failure.
-fn iso8601_to_epoch(s: &str) -> Option<u64> {
-    // Strip UTC marker: 'Z' or '+00:00' (Anthropic API uses '+00:00' in practice)
-    let s = s
-        .strip_suffix('Z')
-        .or_else(|| s.strip_suffix("+00:00"))
-        .unwrap_or(s);
-    let (date_s, time_s) = s.split_once('T')?;
-    let mut dp = date_s.split('-');
-    let year: i64 = dp.next()?.parse().ok()?;
-    let month: i64 = dp.next()?.parse().ok()?;
-    let day: i64 = dp.next()?.parse().ok()?;
-    let mut tp = time_s.split(':');
-    let hour: i64 = tp.next()?.parse().ok()?;
-    let min: i64 = tp.next()?.parse().ok()?;
-    // Truncate fractional seconds if present
-    let sec: i64 = tp.next()?.split('.').next()?.parse().ok()?;
-
-    // Howard Hinnant civil-to-days algorithm
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    let total = days * 86400 + hour * 3600 + min * 60 + sec;
-    u64::try_from(total).ok()
 }
 
 #[cfg(test)]
@@ -371,7 +338,7 @@ mod tests {
     #[test]
     fn test_render_stale_cache_returned_on_fetch_timeout() {
         // Write an expired cache entry (expires_at = 0 so read_usage_limits returns None)
-        // but read_usage_limits_stale should still return it
+        // but read_usage_limits(allow_stale=true) should still return it
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("test.jsonl");
         // Write valid cache first so the file exists
@@ -382,8 +349,8 @@ mod tests {
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
         };
         crate::cache::write_usage_limits(&transcript, &data);
-        // Verify read_usage_limits_stale works even after TTL would normally expire
-        let stale = crate::cache::read_usage_limits_stale(&transcript);
+        // Verify read_usage_limits(allow_stale=true) works even after TTL would normally expire
+        let stale = crate::cache::read_usage_limits(&transcript, true);
         assert!(
             stale.is_some(),
             "stale read should return data regardless of TTL"
@@ -493,19 +460,5 @@ mod tests {
             result, "now",
             "far-future +00:00 timestamp should not be 'now'"
         );
-    }
-
-    // ── iso8601_to_epoch() tests ──────────────────────────────────────────────
-
-    #[test]
-    fn test_iso8601_to_epoch_known_value() {
-        // 2000-01-01T00:00:00Z = 946,684,800
-        assert_eq!(iso8601_to_epoch("2000-01-01T00:00:00Z"), Some(946_684_800));
-    }
-
-    #[test]
-    fn test_iso8601_to_epoch_invalid_returns_none() {
-        assert_eq!(iso8601_to_epoch("not-a-date"), None);
-        assert_eq!(iso8601_to_epoch(""), None);
     }
 }
