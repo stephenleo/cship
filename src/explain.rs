@@ -222,8 +222,11 @@ fn error_hint_for(
         ),
         "usage_limits" => {
             // Probe credential state to distinguish missing token from expired token.
+            // NOTE: This arm spawns a subprocess or reads a file — acceptable for the
+            // interactive `cship explain` command but must NOT be called from the
+            // rendering hot path (main.rs pipeline).
             match crate::platform::get_oauth_token() {
-                Err(msg) if msg.contains("not found") => (
+                Err(msg) if msg.contains("credentials not found") => (
                     "usage_limits returned no data — no Claude Code credential found".into(),
                     "Authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
                 ),
@@ -497,51 +500,26 @@ mod tests {
     }
 
     #[test]
-    fn test_error_hint_usage_limits_no_credential_branch() {
-        // In CI and on a clean checkout there is no Claude Code credential.
-        // get_oauth_token() returns Err containing "not found", so the
-        // "no credential found" branch fires.
-        //
-        // If credentials ARE present on the dev machine, this test is skipped
-        // because the token-present branch fires instead — that's correct
-        // behaviour in that environment.
+    fn test_error_hint_usage_limits_matches_valid_branch() {
+        // The exact branch depends on the environment's credential state.
+        // Instead of vacuously skipping assertions, we always verify the
+        // result matches ONE of the three valid branch patterns.
         let cfg = CshipConfig::default();
         let ctx = crate::context::Context::default();
-        let cred = crate::platform::get_oauth_token();
-        if let Err(ref msg) = cred {
-            if msg.contains("not found") {
-                let (error, remediation) = error_hint_for("usage_limits", &ctx, &cfg);
-                assert!(
-                    error.contains("no Claude Code credential found"),
-                    "expected 'no Claude Code credential found' branch, got: {error}"
-                );
-                assert!(
-                    remediation.contains("login flow"),
-                    "expected login flow instruction in remediation, got: {remediation}"
-                );
-            }
-        }
-        // If cred is Ok(_) or Err with different message, test passes vacuously —
-        // the environment has credentials present and the other branch is correct.
-    }
+        let (error, remediation) = error_hint_for("usage_limits", &ctx, &cfg);
 
-    #[test]
-    fn test_error_hint_usage_limits_token_present_branch() {
-        // If a valid credential IS present, verify the expired-token hint fires.
-        let cfg = CshipConfig::default();
-        let ctx = crate::context::Context::default();
-        let cred = crate::platform::get_oauth_token();
-        if cred.is_ok() {
-            let (error, remediation) = error_hint_for("usage_limits", &ctx, &cfg);
-            assert!(
-                error.contains("credential present"),
-                "expected 'credential present' branch, got: {error}"
-            );
-            assert!(
-                remediation.contains("may have expired"),
-                "expected expired-token hint in remediation, got: {remediation}"
-            );
-        }
-        // Vacuously passes when no credential is present.
+        let is_no_credential = error.contains("no Claude Code credential found");
+        let is_token_present = error.contains("credential present but API fetch failed");
+        let is_malformed = error.contains("credential appears malformed");
+
+        assert!(
+            is_no_credential || is_token_present || is_malformed,
+            "error must match one of the three hint branches, got: {error}"
+        );
+        // All branches include a re-authentication instruction.
+        assert!(
+            remediation.contains("login flow"),
+            "remediation must include login flow instruction, got: {remediation}"
+        );
     }
 }
