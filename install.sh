@@ -89,7 +89,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "Warning: python3 not found. Skipping settings.json update."
   echo "To wire cship manually, add \"statusline\": \"cship\" to $SETTINGS"
 elif [ -f "$SETTINGS" ]; then
-  python3 - "$SETTINGS" <<'PYEOF' || echo "Warning: failed to update settings.json — add \"statusline\": \"cship\" manually."
+  python3 - "$SETTINGS" <<'PYEOF' || echo "Warning: failed to update settings.json — add statusLine manually."
 import json, sys
 path = sys.argv[1]
 try:
@@ -98,14 +98,14 @@ try:
 except (json.JSONDecodeError, ValueError) as e:
     print('Warning: ' + path + ' contains invalid JSON: ' + str(e))
     sys.exit(1)
-if 'statusline' not in d:
-    d['statusline'] = 'cship'
+if 'statusLine' not in d:
+    d['statusLine'] = {'type': 'command', 'command': 'cship'}
     with open(path, 'w') as f:
         json.dump(d, f, indent=2)
         f.write('\n')
-    print('Added "statusline": "cship" to ' + path)
+    print('Added statusLine config to ' + path)
 else:
-    print('"statusline" already set in ' + path + ', skipping.')
+    print('"statusLine" already set in ' + path + ', skipping.')
 PYEOF
 else
   echo "settings.json not found at $SETTINGS — skipping (Claude Code may not be installed yet)."
