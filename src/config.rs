@@ -144,6 +144,7 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Deserialize, Default)]
 pub struct UsageLimitsConfig {
     pub disabled: Option<bool>,
+    pub style: Option<String>,
     pub warn_threshold: Option<f64>,
     pub warn_style: Option<String>,
     pub critical_threshold: Option<f64>,

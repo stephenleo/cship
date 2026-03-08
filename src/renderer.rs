@@ -58,7 +58,7 @@ fn parse_line(line: &str) -> Vec<Token> {
                 // special_pos == 0 and not '[' (handled above) → must be '$'
                 let after_dollar = &remaining[1..];
                 let name_end = after_dollar
-                    .find(|c: char| c.is_whitespace() || c == '[')
+                    .find(|c: char| c.is_whitespace() || c == '[' || c == '$')
                     .unwrap_or(after_dollar.len());
                 let name = &after_dollar[..name_end];
                 if !name.is_empty() {

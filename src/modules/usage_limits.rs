@@ -66,6 +66,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 
     // Step 6: threshold styling — use higher of the two utilization percentages
     let max_pct = data.five_hour_pct.max(data.seven_day_pct);
+    let style = ul_cfg.and_then(|c| c.style.as_deref());
     let warn_threshold = ul_cfg.and_then(|c| c.warn_threshold);
     let warn_style = ul_cfg.and_then(|c| c.warn_style.as_deref());
     let critical_threshold = ul_cfg.and_then(|c| c.critical_threshold);
@@ -74,7 +75,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     Some(crate::ansi::apply_style_with_threshold(
         &content,
         Some(max_pct),
-        None, // UsageLimitsConfig has no base `style` field
+        style,
         warn_threshold,
         warn_style,
         critical_threshold,
