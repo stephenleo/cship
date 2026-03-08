@@ -16,14 +16,15 @@ pub fn run() {
 }
 
 fn remove_binary(home: &std::path::Path) {
-    let bin = home.join(".local/bin/cship");
-    if bin.exists() {
-        match std::fs::remove_file(&bin) {
-            Ok(()) => println!("Removed: {}", bin.display()),
-            Err(e) => println!("Could not remove {}: {e}", bin.display()),
+    for bin in [home.join(".local/bin/cship"), home.join(".cargo/bin/cship")] {
+        if bin.exists() {
+            match std::fs::remove_file(&bin) {
+                Ok(()) => println!("Removed: {}", bin.display()),
+                Err(e) => println!("Could not remove {}: {e}", bin.display()),
+            }
+        } else {
+            println!("Binary not found at {} — skipping.", bin.display());
         }
-    } else {
-        println!("Binary not found at {} — skipping.", bin.display());
     }
 }
 
@@ -108,13 +109,19 @@ mod tests {
     #[test]
     fn test_remove_binary_present() {
         with_tempdir(|home| {
-            let bin_dir = home.join(".local/bin");
-            std::fs::create_dir_all(&bin_dir).unwrap();
-            let bin_path = bin_dir.join("cship");
-            std::fs::write(&bin_path, b"fake binary").unwrap();
-            assert!(bin_path.exists());
+            let local_bin = home.join(".local/bin");
+            std::fs::create_dir_all(&local_bin).unwrap();
+            let local_path = local_bin.join("cship");
+            std::fs::write(&local_path, b"fake binary").unwrap();
+
+            let cargo_bin = home.join(".cargo/bin");
+            std::fs::create_dir_all(&cargo_bin).unwrap();
+            let cargo_path = cargo_bin.join("cship");
+            std::fs::write(&cargo_path, b"fake binary").unwrap();
+
             remove_binary(home);
-            assert!(!bin_path.exists());
+            assert!(!local_path.exists());
+            assert!(!cargo_path.exists());
         });
     }
 
