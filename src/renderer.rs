@@ -58,7 +58,7 @@ fn parse_line(line: &str) -> Vec<Token> {
                 // special_pos == 0 and not '[' (handled above) → must be '$'
                 let after_dollar = &remaining[1..];
                 let name_end = after_dollar
-                    .find(char::is_whitespace)
+                    .find(|c: char| c.is_whitespace() || c == '[')
                     .unwrap_or(after_dollar.len());
                 let name = &after_dollar[..name_end];
                 if !name.is_empty() {
@@ -236,6 +236,17 @@ mod tests {
         assert!(matches!(&tokens[0], Token::Literal(t) if t == "prefix "));
         assert!(
             matches!(&tokens[1], Token::StyledSpan { content, style } if content == "text" && style == "bold green")
+        );
+    }
+
+    #[test]
+    fn test_parse_line_styled_span_adjacent_to_token_no_space() {
+        // Regression: $token[span](style) without space must not absorb '[' into token name
+        let tokens = parse_line("$cship.model[sep](fg:red)");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(&tokens[0], Token::Native(n) if n == "cship.model"));
+        assert!(
+            matches!(&tokens[1], Token::StyledSpan { content, style } if content == "sep" && style == "fg:red")
         );
     }
 
