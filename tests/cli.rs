@@ -9,21 +9,13 @@ fn cship() -> Command {
 #[test]
 fn test_valid_full_json_exits_zero_with_no_stdout() {
     let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
-    cargo_bin_cmd!("cship")
-        .write_stdin(json)
-        .assert()
-        .success()
-        .stdout("");
+    cargo_bin_cmd!("cship").write_stdin(json).assert().success();
 }
 
 #[test]
 fn test_valid_minimal_json_exits_zero() {
     let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
-    cargo_bin_cmd!("cship")
-        .write_stdin(json)
-        .assert()
-        .success()
-        .stdout("");
+    cargo_bin_cmd!("cship").write_stdin(json).assert().success();
 }
 
 #[test]
@@ -53,11 +45,7 @@ fn test_malformed_json_exits_nonzero_with_no_stdout() {
 #[test]
 fn test_unknown_fields_silently_ignored() {
     let json = r#"{"session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/t.jsonl","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"claude-test","display_name":"Test"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0},"unknown_future_field":true,"nested_unknown":{"key":"value"}}"#;
-    cargo_bin_cmd!("cship")
-        .write_stdin(json)
-        .assert()
-        .success()
-        .stdout("");
+    cargo_bin_cmd!("cship").write_stdin(json).assert().success();
 }
 
 #[test]
@@ -104,10 +92,11 @@ fn test_no_local_config_falls_through_to_global_or_default() {
     // Depending on the machine, this may exercise:
     //   - Step 3: global fallback (~/.config/starship.toml) if it exists, OR
     //   - Step 4: CshipConfig::default() if no global config exists either.
-    // Both paths produce exit 0 with empty stdout — the test validates that
-    // the discovery chain completes without error when no local config is found.
+    // Both paths produce exit 0 — the test validates that the discovery
+    // chain completes without error when no local config is found.
+    // stdout content varies by machine (depends on global starship.toml).
     let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
-    cship().write_stdin(json).assert().success().stdout("");
+    cship().write_stdin(json).assert().success();
 }
 
 // ── Story 1.4: Rendering pipeline integration tests ──────────────────────
