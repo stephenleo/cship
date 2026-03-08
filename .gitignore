@@ -8,3 +8,4 @@ _bmad*
 starship.toml
 
 .vscode/
+install_private.sh
