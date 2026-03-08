@@ -132,8 +132,30 @@ fn parse_color(name: &str) -> Option<Color> {
         "purple" | "magenta" => Some(Color::Purple),
         "cyan" => Some(Color::Cyan),
         "white" => Some(Color::White),
-        _ => None,
+        _ => {
+            // #RRGGBB — 6-digit hex
+            if name.starts_with('#') && name.len() == 7 {
+                let r = u8::from_str_radix(&name[1..3], 16).ok()?;
+                let g = u8::from_str_radix(&name[3..5], 16).ok()?;
+                let b = u8::from_str_radix(&name[5..7], 16).ok()?;
+                return Some(Color::Rgb(r, g, b));
+            }
+            // #RGB — 3-digit short-form (each nibble doubled)
+            if name.starts_with('#') && name.len() == 4 {
+                let mut chars = name[1..].chars();
+                let r = hex_nibble(chars.next()?)? * 17;
+                let g = hex_nibble(chars.next()?)? * 17;
+                let b = hex_nibble(chars.next()?)? * 17;
+                return Some(Color::Rgb(r, g, b));
+            }
+            // Numeric 256-color palette index (0–255)
+            name.parse::<u8>().ok().map(Color::Fixed)
+        }
     }
+}
+
+fn hex_nibble(c: char) -> Option<u8> {
+    c.to_digit(16).map(|d| d as u8)
 }
 
 #[cfg(test)]
@@ -314,5 +336,110 @@ mod tests {
             Some("red"),
         );
         assert_eq!(result, Some("yellow"));
+    }
+
+    // --- Hex & 256-color tests (Story 7.1) ---
+
+    #[test]
+    fn test_hex_6digit_fg_applies_rgb() {
+        // fg:#c3e88d → R=195, G=232, B=141 (AC1)
+        let result = apply_style("text", Some("fg:#c3e88d"));
+        assert!(
+            result.contains("38;2;195;232;141"),
+            "expected 24-bit RGB 195,232,141 in: {result:?}"
+        );
+        assert!(result.contains("text"), "content preserved: {result:?}");
+    }
+
+    #[test]
+    fn test_hex_3digit_expands_to_rgb() {
+        // fg:#fff → expanded to #ffffff → Color::Rgb(255, 255, 255) (AC2)
+        let result = apply_style("text", Some("fg:#fff"));
+        assert!(
+            result.contains("38;2;255;255;255"),
+            "expected 24-bit RGB 255,255,255 in: {result:?}"
+        );
+        assert!(result.contains("text"), "content preserved: {result:?}");
+    }
+
+    #[test]
+    fn test_hex_3digit_mid_value_expands_correctly() {
+        // fg:#80f → R=0x88=136, G=0x00=0, B=0xFF=255
+        let result = apply_style("text", Some("fg:#80f"));
+        assert!(
+            result.contains("38;2;136;0;255"),
+            "expected 24-bit RGB 136,0,255 in: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_256_palette_index_fixed() {
+        // fg:220 → Color::Fixed(220) (AC3)
+        let result = apply_style("text", Some("fg:220"));
+        assert!(
+            result.contains("38;5;220"),
+            "expected 256-color index 220 in: {result:?}"
+        );
+        assert!(result.contains("text"), "content preserved: {result:?}");
+    }
+
+    #[test]
+    fn test_256_palette_index_zero() {
+        let result = apply_style("text", Some("fg:0"));
+        assert!(
+            result.contains("38;5;0"),
+            "expected 256-color index 0 in: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_256_palette_index_max() {
+        let result = apply_style("text", Some("fg:255"));
+        assert!(
+            result.contains("38;5;255"),
+            "expected 256-color index 255 in: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hex_bg_applies_background() {
+        // bg:#1e1e2e → applied as background (AC4)
+        let result = apply_style("text", Some("bg:#1e1e2e"));
+        // 48;2;R;G;B is the ANSI sequence for 24-bit background color
+        assert!(
+            result.contains("48;2;30;30;46"),
+            "expected 24-bit bg RGB 30,30,46 in: {result:?}"
+        );
+        assert!(result.contains("text"), "content preserved: {result:?}");
+    }
+
+    #[test]
+    fn test_unknown_color_token_silent_ignore_regression() {
+        // Unrecognized token → content returned unchanged, no ANSI (AC5)
+        let result = apply_style("text", Some("fg:notacolor"));
+        assert!(!result.contains('\x1b'), "unexpected ANSI in: {result:?}");
+        assert_eq!(result, "text");
+    }
+
+    #[test]
+    fn test_hex_3digit_invalid_chars_ignored() {
+        // #xyz contains non-hex chars → must be silently ignored (AC5)
+        let result = apply_style("text", Some("fg:#xyz"));
+        assert!(
+            !result.contains('\x1b'),
+            "unexpected ANSI for #xyz: {result:?}"
+        );
+        assert_eq!(result, "text");
+    }
+
+    #[test]
+    fn test_numeric_out_of_u8_range_ignored() {
+        // 256 is out of u8 range → silently ignored
+        let result = apply_style("text", Some("fg:256"));
+        assert!(
+            !result.contains('\x1b'),
+            "unexpected ANSI for 256: {result:?}"
+        );
+        assert_eq!(result, "text");
     }
 }
