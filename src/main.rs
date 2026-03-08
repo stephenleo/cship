@@ -69,7 +69,7 @@ fn main() {
             // Render and emit — main.rs is the SOLE owner of stdout.
             // println! is the ONLY stdout write in the rendering pipeline.
             let lines = cfg.lines.as_deref().unwrap_or(&[]);
-            if !lines.is_empty() {
+            if cfg.format.is_some() || !lines.is_empty() {
                 let output = cship::renderer::render(lines, &ctx, &cfg);
                 if !output.is_empty() {
                     println!("{output}");

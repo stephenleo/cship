@@ -966,3 +966,26 @@ fn test_literal_text_in_lines_preserved() {
         .success()
         .stdout(predicate::str::contains("in: 15234"));
 }
+
+// ── Story 7.6: Starship-compatible format field integration tests ──────────
+
+#[test]
+fn test_format_field_line_break_produces_two_rows() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // format_line_break.toml: format = "$cship.model$line_break$cship.model"
+    let output = cship()
+        .args(["--config", "tests/fixtures/format_line_break.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.trim_end_matches('\n').split('\n').collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected 2 lines from format with $line_break; got: {stdout:?}"
+    );
+    assert!(lines[0].contains("Opus"), "line 0: {}", lines[0]);
+    assert!(lines[1].contains("Opus"), "line 1: {}", lines[1]);
+}

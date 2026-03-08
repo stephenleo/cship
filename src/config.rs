@@ -6,6 +6,9 @@ pub struct CshipConfig {
     /// `lines` array — each element is a format string for one statusline row.
     /// Example: `["$cship.model $git_branch", "$cship.cost"]`
     pub lines: Option<Vec<String>>,
+    /// Starship-compatible top-level format string. Split on `$line_break` to produce
+    /// multiple rows. Takes priority over `lines` when both are set.
+    pub format: Option<String>,
     /// Configuration for the `[cship.model]` section.
     pub model: Option<ModelConfig>,
     pub cost: Option<CostConfig>,
