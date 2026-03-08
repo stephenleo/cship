@@ -145,7 +145,12 @@ pub struct UsageLimitsConfig {
     pub warn_style: Option<String>,
     pub critical_threshold: Option<f64>,
     pub critical_style: Option<String>,
+    /// Reserved — not yet rendered. Use `five_hour_format`, `seven_day_format`,
+    /// and `separator` for per-section format control.
     pub format: Option<String>,
+    pub five_hour_format: Option<String>,
+    pub seven_day_format: Option<String>,
+    pub separator: Option<String>,
 }
 
 /// Result of a config load operation — includes the loaded config and its source.

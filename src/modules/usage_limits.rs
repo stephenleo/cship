@@ -7,7 +7,7 @@
 //! [Source: architecture.md#src/modules/usage_limits.rs]
 
 use crate::cache;
-use crate::config::CshipConfig;
+use crate::config::{CshipConfig, UsageLimitsConfig};
 use crate::context::Context;
 use crate::usage_limits::UsageLimitsData;
 
@@ -61,7 +61,8 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     };
 
     // Step 5: format output
-    let content = format_output(&data);
+    let default_ul_cfg = UsageLimitsConfig::default();
+    let content = format_output(&data, ul_cfg.unwrap_or(&default_ul_cfg));
 
     // Step 6: threshold styling — use higher of the two utilization percentages
     let max_pct = data.five_hour_pct.max(data.seven_day_pct);
@@ -106,14 +107,40 @@ where
     }
 }
 
-/// Format usage data as `5h: 23% resets in 4h12m | 7d: 45% resets in 3d2h`.
-fn format_output(data: &UsageLimitsData) -> String {
+/// Format usage data using configurable format strings.
+///
+/// Placeholders in format strings (all occurrences are substituted):
+/// - `{pct}` — percentage as integer (e.g. `"23"`)
+/// - `{reset}` — time-until-reset string (e.g. `"4h12m"`)
+///
+/// Defaults (backwards compatible with pre-7.2 hardcoded output):
+/// - `five_hour_format`: `"5h: {pct}% resets in {reset}"`
+/// - `seven_day_format`: `"7d: {pct}% resets in {reset}"`
+/// - `separator`: `" | "`
+fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
+    let five_h_pct = format!("{:.0}", data.five_hour_pct);
     let five_h_reset = format_time_until(&data.five_hour_resets_at);
+    let seven_d_pct = format!("{:.0}", data.seven_day_pct);
     let seven_d_reset = format_time_until(&data.seven_day_resets_at);
-    format!(
-        "5h: {:.0}% resets in {} | 7d: {:.0}% resets in {}",
-        data.five_hour_pct, five_h_reset, data.seven_day_pct, seven_d_reset,
-    )
+
+    let five_h_fmt = cfg
+        .five_hour_format
+        .as_deref()
+        .unwrap_or("5h: {pct}% resets in {reset}");
+    let seven_d_fmt = cfg
+        .seven_day_format
+        .as_deref()
+        .unwrap_or("7d: {pct}% resets in {reset}");
+    let sep = cfg.separator.as_deref().unwrap_or(" | ");
+
+    let five_h_part = five_h_fmt
+        .replace("{pct}", &five_h_pct)
+        .replace("{reset}", &five_h_reset);
+    let seven_d_part = seven_d_fmt
+        .replace("{pct}", &seven_d_pct)
+        .replace("{reset}", &seven_d_reset);
+
+    format!("{five_h_part}{sep}{seven_d_part}")
 }
 
 /// Convert an ISO 8601 reset timestamp to a human-readable time-until string.
@@ -327,7 +354,7 @@ mod tests {
         };
         let result = render(&ctx, &cfg).unwrap();
         // Verify critical style ("bold red") is applied, NOT warn style ("yellow")
-        let content = format_output(&data);
+        let content = format_output(&data, &UsageLimitsConfig::default());
         let expected_critical = crate::ansi::apply_style(&content, Some("bold red"));
         let expected_warn = crate::ansi::apply_style(&content, Some("yellow"));
         assert_eq!(result, expected_critical, "expected critical style applied");
@@ -507,5 +534,146 @@ mod tests {
     fn test_iso8601_to_epoch_invalid_returns_none() {
         assert_eq!(iso8601_to_epoch("not-a-date"), None);
         assert_eq!(iso8601_to_epoch(""), None);
+    }
+
+    // ── format_output() tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_format_output_default_produces_legacy_format() {
+        // AC1: no config → identical to old hardcoded string
+        let data = UsageLimitsData {
+            five_hour_pct: 23.4,
+            seven_day_pct: 45.1,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+        };
+        let cfg = UsageLimitsConfig::default();
+        let result = format_output(&data, &cfg);
+        assert!(result.starts_with("5h: 23%"), "5h prefix: {result:?}");
+        assert!(result.contains(" | "), "default separator: {result:?}");
+        assert!(result.contains("7d: 45%"), "7d prefix: {result:?}");
+    }
+
+    #[test]
+    fn test_format_output_custom_five_hour_format() {
+        // AC2: custom five_hour_format
+        let data = UsageLimitsData {
+            five_hour_pct: 23.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("⏱: {pct}%({reset})".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.starts_with("⏱: 23%("),
+            "expected custom 5h format: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_custom_seven_day_format() {
+        // AC3: custom seven_day_format
+        let data = UsageLimitsData {
+            five_hour_pct: 10.0,
+            seven_day_pct: 45.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+        };
+        let cfg = UsageLimitsConfig {
+            seven_day_format: Some("7d {pct}%/{reset}".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.contains("7d 45%/"),
+            "expected custom 7d format: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_custom_separator() {
+        // AC4: custom separator
+        let data = UsageLimitsData {
+            five_hour_pct: 10.0,
+            seven_day_pct: 20.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+        };
+        let cfg = UsageLimitsConfig {
+            separator: Some(" — ".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.contains(" — "),
+            "expected em-dash separator: {result:?}"
+        );
+        assert!(
+            !result.contains(" | "),
+            "should not contain default separator: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_pct_only_no_reset_placeholder() {
+        // AC5: format with only {pct}, no {reset} — no extra text
+        let data = UsageLimitsData {
+            five_hour_pct: 30.0,
+            seven_day_pct: 50.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        // Should be "30% | 50%" — no "resets in" text
+        assert_eq!(result, "30% | 50%", "unexpected content: {result:?}");
+    }
+
+    #[test]
+    fn test_threshold_styling_applies_to_custom_format() {
+        // AC6: threshold styling wraps the full composed output after format substitution
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("test.jsonl");
+        let data = UsageLimitsData {
+            five_hour_pct: 75.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+        };
+        crate::cache::write_usage_limits(&transcript, &data);
+
+        let ctx = Context {
+            transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+        let cfg = CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                five_hour_format: Some("{pct}%".into()),
+                seven_day_format: Some("{pct}%".into()),
+                separator: Some("/".into()),
+                warn_threshold: Some(70.0),
+                warn_style: Some("bold yellow".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        // Custom format produces "75%/10%", warn threshold triggers ANSI wrapping
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes on custom-formatted output: {result:?}"
+        );
+        assert!(
+            result.contains("75%"),
+            "custom format content should be present: {result:?}"
+        );
     }
 }
