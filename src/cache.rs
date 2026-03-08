@@ -75,36 +75,32 @@ fn usage_limits_cache_path(transcript_path: &Path) -> Option<std::path::PathBuf>
 }
 
 /// Parse "YYYY-MM-DDTHH:MM:SSZ" to Unix epoch seconds using the Howard Hinnant
-/// civil-date algorithm. Returns 0 on any parse failure — causing immediate cache
-/// invalidation as a safe default.
-fn iso8601_to_epoch(s: &str) -> u64 {
-    fn inner(s: &str) -> Option<u64> {
-        // Accept both 'Z' (e.g. "...T00:00:00Z") and '+00:00' (e.g. "...T04:59:59.943648+00:00")
-        // — both are UTC. The Anthropic API uses '+00:00' in practice.
-        let s = s
-            .strip_suffix('Z')
-            .or_else(|| s.strip_suffix("+00:00"))
-            .unwrap_or(s);
-        let (date_s, time_s) = s.split_once('T')?;
-        let mut dp = date_s.split('-');
-        let year: i64 = dp.next()?.parse().ok()?;
-        let month: i64 = dp.next()?.parse().ok()?;
-        let day: i64 = dp.next()?.parse().ok()?;
-        let mut tp = time_s.split(':');
-        let hour: i64 = tp.next()?.parse().ok()?;
-        let min: i64 = tp.next()?.parse().ok()?;
-        let sec: i64 = tp.next()?.split('.').next()?.parse().ok()?;
-        // Howard Hinnant civil-to-days algorithm
-        let y = if month <= 2 { year - 1 } else { year };
-        let era = y.div_euclid(400);
-        let yoe = y - era * 400;
-        let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        let days = era * 146097 + doe - 719468;
-        let total = days * 86400 + hour * 3600 + min * 60 + sec;
-        u64::try_from(total).ok()
-    }
-    inner(s).unwrap_or(0)
+/// civil-date algorithm. Returns `None` on any parse failure.
+pub(crate) fn iso8601_to_epoch(s: &str) -> Option<u64> {
+    // Accept both 'Z' (e.g. "...T00:00:00Z") and '+00:00' (e.g. "...T04:59:59.943648+00:00")
+    // — both are UTC. The Anthropic API uses '+00:00' in practice.
+    let s = s
+        .strip_suffix('Z')
+        .or_else(|| s.strip_suffix("+00:00"))
+        .unwrap_or(s);
+    let (date_s, time_s) = s.split_once('T')?;
+    let mut dp = date_s.split('-');
+    let year: i64 = dp.next()?.parse().ok()?;
+    let month: i64 = dp.next()?.parse().ok()?;
+    let day: i64 = dp.next()?.parse().ok()?;
+    let mut tp = time_s.split(':');
+    let hour: i64 = tp.next()?.parse().ok()?;
+    let min: i64 = tp.next()?.parse().ok()?;
+    let sec: i64 = tp.next()?.split('.').next()?.parse().ok()?;
+    // Howard Hinnant civil-to-days algorithm
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let total = days * 86400 + hour * 3600 + min * 60 + sec;
+    u64::try_from(total).ok()
 }
 
 fn now_epoch() -> u64 {
@@ -121,22 +117,26 @@ fn epoch_or_never(s: &str) -> u64 {
     if s.is_empty() {
         return u64::MAX;
     }
-    match iso8601_to_epoch(s) {
-        0 => u64::MAX,
-        v => v,
-    }
+    iso8601_to_epoch(s).filter(|&e| e > 0).unwrap_or(u64::MAX)
 }
 
-/// Read a cached usage limits value if the cache is still valid.
+/// Read a cached usage limits value.
 ///
-/// The cache is invalid (returns `None`) if:
+/// When `allow_stale` is `false`, the cache is invalid (returns `None`) if:
 /// 1. Current time ≥ `expires_at` (60 s TTL since last write), OR
 /// 2. Current time ≥ `five_hour_resets_at` OR `seven_day_resets_at`
 ///    (ensures the display refreshes immediately when a usage window resets)
-pub fn read_usage_limits(transcript_path: &Path) -> Option<UsageLimitsData> {
+///
+/// When `allow_stale` is `true`, returns the most recently written data regardless
+/// of TTL or reset timestamps — used as a fallback when a live API fetch times out
+/// so the statusline shows something meaningful rather than going blank.
+pub fn read_usage_limits(transcript_path: &Path, allow_stale: bool) -> Option<UsageLimitsData> {
     let path = usage_limits_cache_path(transcript_path)?;
     let raw = std::fs::read_to_string(&path).ok()?;
     let envelope: UsageLimitsCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    if allow_stale {
+        return Some(envelope.data);
+    }
     let now = now_epoch();
     if now >= envelope.expires_at {
         return None; // TTL expired
@@ -145,19 +145,6 @@ pub fn read_usage_limits(transcript_path: &Path) -> Option<UsageLimitsData> {
         return None; // usage window reset — stale data
     }
     Some(envelope.data)
-}
-
-/// Read the last cached usage limits data regardless of TTL or reset timestamps.
-///
-/// Used as a fallback when a live API fetch times out (AC #4): returns the most
-/// recently written data even if it has expired, so the statusline shows something
-/// meaningful rather than going blank. Returns `None` only if no cache file exists
-/// or it cannot be parsed.
-pub fn read_usage_limits_stale(transcript_path: &Path) -> Option<UsageLimitsData> {
-    let path = usage_limits_cache_path(transcript_path)?;
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let envelope: UsageLimitsCacheEnvelope = serde_json::from_str(&raw).ok()?;
-    Some(envelope.data) // intentionally skips TTL and resets_at checks
 }
 
 /// Write usage limits data to the cache file.
@@ -307,7 +294,7 @@ mod tests {
     fn test_usage_limits_cache_hit_within_ttl() {
         let (dir, transcript) = temp_transcript("s5_2_hit");
         write_usage_limits(&transcript, &sample_data());
-        let result = read_usage_limits(&transcript);
+        let result = read_usage_limits(&transcript, false);
         assert!(result.is_some(), "fresh cache should return Some");
         let data = result.unwrap();
         assert!((data.five_hour_pct - 23.4).abs() < f64::EPSILON);
@@ -318,7 +305,7 @@ mod tests {
     #[test]
     fn test_usage_limits_cache_miss_nonexistent_file() {
         let (_dir, transcript) = temp_transcript("s5_2_miss");
-        let result = read_usage_limits(&transcript);
+        let result = read_usage_limits(&transcript, false);
         assert!(
             result.is_none(),
             "nonexistent cache file should return None"
@@ -362,7 +349,7 @@ mod tests {
             "seven_day_resets_at": 9_999_999_999_u64
         });
         std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
-        let result = read_usage_limits(&transcript);
+        let result = read_usage_limits(&transcript, false);
         assert!(result.is_none(), "expired TTL should return None");
         drop(dir);
     }
@@ -379,7 +366,7 @@ mod tests {
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(), // future
         };
         write_usage_limits(&transcript, &data);
-        let result = read_usage_limits(&transcript);
+        let result = read_usage_limits(&transcript, false);
         assert!(
             result.is_none(),
             "past five_hour_resets_at should invalidate cache"
@@ -417,7 +404,7 @@ mod tests {
             seven_day_resets_at: "2000-01-01T00:00:00Z".into(), // past
         };
         write_usage_limits(&transcript, &data);
-        let result = read_usage_limits(&transcript);
+        let result = read_usage_limits(&transcript, false);
         assert!(
             result.is_none(),
             "past seven_day_resets_at should invalidate cache"
@@ -437,7 +424,7 @@ mod tests {
             seven_day_resets_at: String::new(),
         };
         write_usage_limits(&transcript, &data);
-        let result = read_usage_limits(&transcript);
+        let result = read_usage_limits(&transcript, false);
         assert!(
             result.is_some(),
             "empty resets_at should not trigger early invalidation"
@@ -446,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_usage_limits_stale_returns_expired_data() {
+    fn test_read_usage_limits_allow_stale_returns_expired_data() {
         let dir = tempfile::tempdir().expect("tempdir");
         let transcript = dir.path().join("transcript.jsonl");
         // Write a valid cache entry, then overwrite with expired TTL
@@ -466,32 +453,32 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
         // Normal read returns None (TTL expired)
         assert!(
-            read_usage_limits(&transcript).is_none(),
+            read_usage_limits(&transcript, false).is_none(),
             "normal read should be None"
         );
         // Stale read returns data regardless
-        let stale = read_usage_limits_stale(&transcript);
+        let stale = read_usage_limits(&transcript, true);
         assert!(stale.is_some(), "stale read should return data");
         assert!((stale.unwrap().five_hour_pct - 77.0).abs() < f64::EPSILON);
         drop(dir);
     }
 
     #[test]
-    fn test_read_usage_limits_stale_returns_none_when_no_file() {
+    fn test_read_usage_limits_allow_stale_returns_none_when_no_file() {
         let (_dir, transcript) = temp_transcript("stale_miss");
-        assert!(read_usage_limits_stale(&transcript).is_none());
+        assert!(read_usage_limits(&transcript, true).is_none());
     }
 
     #[test]
     fn test_iso8601_to_epoch_known_value() {
         // 2000-01-01T00:00:00Z = 946,684,800 seconds since epoch
-        assert_eq!(iso8601_to_epoch("2000-01-01T00:00:00Z"), 946_684_800);
+        assert_eq!(iso8601_to_epoch("2000-01-01T00:00:00Z"), Some(946_684_800));
     }
 
     #[test]
-    fn test_iso8601_to_epoch_invalid_returns_zero() {
-        assert_eq!(iso8601_to_epoch("not-a-date"), 0);
-        assert_eq!(iso8601_to_epoch(""), 0);
+    fn test_iso8601_to_epoch_invalid_returns_none() {
+        assert_eq!(iso8601_to_epoch("not-a-date"), None);
+        assert_eq!(iso8601_to_epoch(""), None);
     }
 
     #[test]
@@ -499,12 +486,12 @@ mod tests {
         // Anthropic API returns "+00:00" suffix, not "Z" — must parse to same epoch as Z form
         assert_eq!(
             iso8601_to_epoch("2000-01-01T00:00:00+00:00"),
-            946_684_800,
+            Some(946_684_800),
             "+00:00 format should parse to same epoch as Z form"
         );
         assert_eq!(
             iso8601_to_epoch("2000-01-01T00:00:01.943648+00:00"),
-            946_684_801,
+            Some(946_684_801),
             "fractional seconds with +00:00 should be truncated"
         );
     }
@@ -522,7 +509,7 @@ mod tests {
             seven_day_resets_at: "2099-01-01T00:00:00+00:00".into(), // future
         };
         write_usage_limits(&transcript, &data);
-        let result = read_usage_limits(&transcript);
+        let result = read_usage_limits(&transcript, false);
         assert!(
             result.is_none(),
             "past five_hour_resets_at (+00:00 format) should invalidate cache"
@@ -535,12 +522,12 @@ mod tests {
         // Sub-second precision must parse to the same epoch as the whole-second form
         assert_eq!(
             iso8601_to_epoch("2000-01-01T00:00:01.000Z"),
-            946_684_801,
+            Some(946_684_801),
             "fractional-second timestamp should parse correctly"
         );
         assert_eq!(
             iso8601_to_epoch("2000-01-01T00:00:01.999Z"),
-            946_684_801,
+            Some(946_684_801),
             "fractional seconds are truncated, not rounded"
         );
     }
