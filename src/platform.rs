@@ -9,6 +9,47 @@
 /// `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-...","refreshToken":"...","expiresAt":...}}`
 /// This function extracts `accessToken` from that blob.
 ///
+/// # Credential lookup by OS
+///
+/// - **macOS**: reads from the system Keychain using
+///   `security find-generic-password -s "Claude Code-credentials" -w`.
+///   The service name `"Claude Code-credentials"` is verified against a live
+///   Claude Code credential store.
+///
+/// - **Linux**: attempts `~/.claude/.credentials.json` first (the path Claude
+///   Code uses on Linux and WSL2, where gnome-keyring / D-Bus is typically
+///   unavailable). Falls back to
+///   `secret-tool lookup service "Claude Code-credentials"` when the file is
+///   absent.
+///
+/// # Error cases
+///
+/// The function returns `Err(String)` in these situations:
+///
+/// - **Credential tool not found**: the OS binary (`security` on macOS,
+///   `secret-tool` on Linux) was not found on `PATH` — returns a
+///   platform-specific install hint. On Linux this only triggers after
+///   `~/.claude/.credentials.json` is also absent.
+///
+/// - **Credential not found** (subprocess exits non-zero, or credentials
+///   file absent with no secret-tool fallback): returns
+///   `"Claude Code credentials not found — authenticate in Claude Code first"`.
+///
+/// - **Malformed credential**: subprocess exits 0 but the JSON blob does not
+///   contain `claudeAiOauth.accessToken` (or the token string is empty):
+///   returns `"Claude Code credentials found but access token could not be
+///   parsed — credential may be malformed"`.
+///
+/// # Token expiry
+///
+/// `get_oauth_token` cannot detect whether the returned token is expired or
+/// has been revoked by the API. It extracts whatever is stored in the OS
+/// credential store. Token expiry manifests as HTTP 401 from the Anthropic
+/// API. Callers that need to distinguish "no token" from "expired token"
+/// should probe the `Ok`/`Err` result: `Ok(_)` means a token was found (may
+/// still be expired); `Err` containing `"not found"` means no credential is
+/// stored.
+///
 /// Service name verified against live Claude Code credential store: "Claude Code-credentials"
 /// Reference: https://codelynx.dev/posts/claude-code-usage-limits-statusline
 #[cfg(target_os = "macos")]

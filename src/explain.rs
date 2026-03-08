@@ -220,10 +220,23 @@ fn error_hint_for(
             "workspace data absent from Claude Code context".into(),
             "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
         ),
-        "usage_limits" => (
-            "usage_limits returned no data — API fetch failed, timed out, or no cached data available".into(),
-            "Check RUST_LOG=warn output for the specific cause (e.g. HTTP 429 = rate limited, 401 = re-authenticate in Claude Code). The module works normally in a live session once the rate limit clears.".into(),
-        ),
+        "usage_limits" => {
+            // Probe credential state to distinguish missing token from expired token.
+            match crate::platform::get_oauth_token() {
+                Err(msg) if msg.contains("not found") => (
+                    "usage_limits returned no data — no Claude Code credential found".into(),
+                    "Authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
+                ),
+                Ok(_) => (
+                    "usage_limits returned no data — credential present but API fetch failed".into(),
+                    "Your Claude Code token may have expired. Re-authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
+                ),
+                Err(_) => (
+                    "usage_limits returned no data — credential appears malformed or tool unavailable".into(),
+                    "Re-authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
+                ),
+            }
+        }
         _ => (
             "module returned no value".into(),
             "Check cship configuration and ensure Claude Code is running.".into(),
@@ -450,5 +463,85 @@ mod tests {
             !is_disabled("cship.model", &cfg),
             "is_disabled should return false when model config is absent"
         );
+    }
+
+    // Tests for the usage_limits credential-aware hint branches (TD3).
+    // The exact branch taken depends on the test environment's credential state.
+    // In CI (no credential stored), the "not found" branch fires.
+    // All three tests verify the returned tuple is non-empty and well-formed.
+
+    #[test]
+    fn test_error_hint_usage_limits_returns_non_empty_tuple() {
+        let cfg = CshipConfig::default();
+        let ctx = crate::context::Context::default();
+        let (error, remediation) = error_hint_for("usage_limits", &ctx, &cfg);
+        assert!(
+            !error.is_empty(),
+            "usage_limits error hint must be non-empty"
+        );
+        assert!(
+            !remediation.is_empty(),
+            "usage_limits remediation hint must be non-empty"
+        );
+    }
+
+    #[test]
+    fn test_error_hint_usage_limits_contains_usage_limits_in_error() {
+        let cfg = CshipConfig::default();
+        let ctx = crate::context::Context::default();
+        let (error, _) = error_hint_for("usage_limits", &ctx, &cfg);
+        assert!(
+            error.contains("usage_limits"),
+            "error should mention 'usage_limits', got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_error_hint_usage_limits_no_credential_branch() {
+        // In CI and on a clean checkout there is no Claude Code credential.
+        // get_oauth_token() returns Err containing "not found", so the
+        // "no credential found" branch fires.
+        //
+        // If credentials ARE present on the dev machine, this test is skipped
+        // because the token-present branch fires instead — that's correct
+        // behaviour in that environment.
+        let cfg = CshipConfig::default();
+        let ctx = crate::context::Context::default();
+        let cred = crate::platform::get_oauth_token();
+        if let Err(ref msg) = cred {
+            if msg.contains("not found") {
+                let (error, remediation) = error_hint_for("usage_limits", &ctx, &cfg);
+                assert!(
+                    error.contains("no Claude Code credential found"),
+                    "expected 'no Claude Code credential found' branch, got: {error}"
+                );
+                assert!(
+                    remediation.contains("login flow"),
+                    "expected login flow instruction in remediation, got: {remediation}"
+                );
+            }
+        }
+        // If cred is Ok(_) or Err with different message, test passes vacuously —
+        // the environment has credentials present and the other branch is correct.
+    }
+
+    #[test]
+    fn test_error_hint_usage_limits_token_present_branch() {
+        // If a valid credential IS present, verify the expired-token hint fires.
+        let cfg = CshipConfig::default();
+        let ctx = crate::context::Context::default();
+        let cred = crate::platform::get_oauth_token();
+        if cred.is_ok() {
+            let (error, remediation) = error_hint_for("usage_limits", &ctx, &cfg);
+            assert!(
+                error.contains("credential present"),
+                "expected 'credential present' branch, got: {error}"
+            );
+            assert!(
+                remediation.contains("may have expired"),
+                "expected expired-token hint in remediation, got: {remediation}"
+            );
+        }
+        // Vacuously passes when no credential is present.
     }
 }
