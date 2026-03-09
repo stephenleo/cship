@@ -1,7 +1,15 @@
 [package]
-name    = "cship"
-version = "0.1.0"
-edition = "2024"
+name          = "cship"
+version       = "1.0.0"
+edition       = "2024"
+description   = "Beautiful, Blazing-fast, Customizable Claude Code Statusline"
+license       = "Apache-2.0"
+repository    = "https://github.com/stephenleo/cship"
+homepage      = "https://cship.dev"
+documentation = "https://cship.dev"
+keywords      = ["starship", "claude", "statusline", "terminal"]
+categories    = ["command-line-utilities"]
+readme        = "README.md"
 
 [dependencies]
 clap               = { version = "4.5", features = ["derive"] }

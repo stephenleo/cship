@@ -1,0 +1,37 @@
+[cship]
+lines = [
+"""
+$git_branch \
+$cship.model.display_name \
+$cship.context_bar \
+$cship.usage_limits \
+""",
+]
+
+[cship.model]
+symbol = " "
+style = "fg:#c792ea"
+format = "[$symbol$value]($style)"
+
+[cship.context_bar]
+symbol = " "
+width = 5
+style = "fg:#c3e88d"
+format = "[$symbol$value]($style)"
+warn_threshold = 50.0
+warn_style = "fg:#ffcb6b"
+critical_threshold = 70.0
+critical_style = "bold fg:#ff5370"
+
+# Output: 󰔟 XX%(XhXm) 󰃭 XX%(XdXh)
+[cship.usage_limits]
+symbol = " "
+style = "fg:#c3e88d"
+format = "[$symbol$value]($style)"
+five_hour_format = "󰔟 {pct}%({reset})"
+seven_day_format = "󰃭 {pct}%({reset})"
+separator = " "
+warn_threshold = 50
+warn_style = "fg:#ffcb6b"
+critical_threshold = 70
+critical_style = "bold fg:#ff5370"

@@ -1,10 +1,4 @@
-# Sample Starship configuration showing cship integration.
-#
-# This is an example of a full Starship config that uses cship as a native
-# module. Copy relevant sections into your own ~/.config/starship.toml.
-#
-# For cship-specific configuration options, see the [cship] sections below.
-# colors from https://www.color-hex.com/
+# Sample Starship configuration
 format = """
 [](#3d414a)\
 $os\
@@ -118,42 +112,3 @@ min_time = 1
 style = "bg:#ffc878"
 format = '[  $duration]($style)'
 show_milliseconds = true
-
-[cship]
-lines = [
-  """$git_branch $cship.model.display_name $cship.context_bar $cship.cost $cship.usage_limits""",
-]
-
-[cship.model]
-symbol = " "
-style = "fg:#c792ea"
-format = "[$symbol$value]($style)"
-
-[cship.context_bar]
-symbol = " "
-width = 5
-style = "fg:#c3e88d"
-format = "[$symbol$value]($style)"
-warn_threshold = 50.0
-warn_style = "fg:#ffcb6b"
-critical_threshold = 70.0
-critical_style = "bold fg:#ff5370"
-
-[cship.cost]
-symbol = " "
-style = "fg:#c3e88d"
-format = "[$symbol$value]($style)"
-warn_threshold = 0.30
-warn_style = "fg:#ffcb6b"
-critical_threshold = 0.35
-critical_style = "bold fg:#ff5370"
-
-# Output: 5h: XX% resets in Xh Xm | 7d: XX% resets in Xd Xh
-[cship.usage_limits]
-symbol = "󰔟 "
-style = "fg:#c3e88d"
-format = "[$symbol$value]($style)"
-warn_threshold = 50.0
-warn_style = "fg:#ffcb6b"
-critical_threshold = 70.0
-critical_style = "bold fg:#ff5370"
