@@ -5,10 +5,54 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to create and release (e.g. v1.2.3)'
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  tag:
+    name: Create and Push Tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate version format
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "ERROR: Version must match vX.Y.Z format (e.g. v1.2.3)"
+            exit 1
+          fi
+      - name: Verify tag does not already exist
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if git ls-remote --tags origin "refs/tags/$VERSION" | grep -qF "$VERSION"; then
+            echo "ERROR: Tag $VERSION already exists on remote. Aborting."
+            exit 1
+          fi
+      - name: Create and push tag
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+
   test:
     name: Test (${{ matrix.os }})
+    needs: [tag]
+    if: "!cancelled() && (needs.tag.result == 'success' || needs.tag.result == 'skipped')"
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -67,8 +111,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/')
     needs: build
+    if: "!cancelled() && needs.build.result == 'success'"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -76,4 +120,5 @@ jobs:
       - uses: actions/download-artifact@v4
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
           files: cship-*/cship-*
