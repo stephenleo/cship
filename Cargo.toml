@@ -1,6 +1,6 @@
 [package]
 name          = "cship"
-version       = "1.0.0"
+version       = "1.1.0"
 edition       = "2024"
 description   = "Beautiful, Blazing-fast, Customizable Claude Code Statusline"
 license       = "Apache-2.0"
