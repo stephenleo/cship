@@ -6,7 +6,7 @@ hero:
   text: "Beautiful, Blazing-fast, Customizable Claude Code Statusline"
   tagline: Bring Starship's power to Claude Code. Configure everything in TOML.
   image:
-    src: ./examples/08.png
+    src: /examples/08.png
     alt: CShip statusline with Nerd Fonts — git branch, language runtimes, model, cost, context bar, and usage limits
   actions:
     - theme: brand
@@ -79,14 +79,14 @@ CShip supports [Nerd Fonts](https://www.nerdfonts.com) — patched fonts that ad
 
 ```toml
 [cship.model]
-symbol = " "   # paste any Nerd Font glyph here, e.g. nf-md-robot
+symbol = "󰚩 "   # nf-md-robot
 
 [cship.context_bar]
-symbol = " "   # paste any Nerd Font glyph here, e.g. nf-oct-cpu
+symbol = " "   # nf-oct-cpu
 ```
 
-::: tip Finding glyphs
-Browse [nerdfonts.com/cheat-sheet](https://www.nerdfonts.com/cheat-sheet), click any icon to copy the glyph, then paste it directly into your `cship.toml`. The exact character renders in your terminal once a Nerd Font is set as your terminal font.
+::: tip Finding more glyphs
+Browse [nerdfonts.com/cheat-sheet](https://www.nerdfonts.com/cheat-sheet) to find any icon and paste it directly into your `cship.toml`.
 :::
 
 → The [Showcase](/showcase#_6-nerd-fonts) has a full Nerd Fonts config example.
@@ -127,3 +127,5 @@ cship explain
 ```
 
 This shows each module's current rendered value, the config file path in use, and any warnings about missing data or misconfiguration.
+
+## Inspired by [Starship](https://starship.rs)

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "docs:dev": "vitepress dev --host",
-    "docs:build": "node -e \"require('fs').copyFileSync('../install.sh', 'public/install.sh')\" && vitepress build",
+    "docs:build": "cp ../install.sh public/install.sh && cp -r examples public/examples && vitepress build",
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {
