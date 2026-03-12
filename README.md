@@ -16,7 +16,7 @@
 Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64), downloads the binary to `~/.local/bin/cship`, creates a starter config at `~/.config/cship.toml`, wires the `statusLine` entry in `~/.claude/settings.json`, and optionally installs [Starship](https://starship.rs) (needed for passthrough modules) and, on Linux, `libsecret-tools` (needed for usage limits).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/stephenleo/cship/main/install.sh | bash
+curl -fsSL https://cship.dev/install.sh | bash
 ```
 
 ### 📦 Method 2: cargo install
@@ -382,6 +382,13 @@ critical_style     = "bold fg:#f7768e"
 Complete configuration reference, format string syntax, all module options, and examples.
 
 ---
+
+If you found this project useful, please give us a star ⭐ on [GitHub](https://github.com/stephenleo/cship)!
+
+If you find bugs or have suggestions, open an issue or submit a pull request. Contributions are very welcome!
+
+## 💡 Inspiration
+- Inspired by [starship](https://starship.rs), built with Rust and the [Claude Code status line API](https://code.claude.com/docs/en/statusline).
 
 ## 📄 License
 
