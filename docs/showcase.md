@@ -97,6 +97,7 @@ critical_threshold = 70.0
 critical_style     = "bold red"
 
 [cship.usage_limits]
+ttl                = 60        # cache TTL in seconds; increase if running many concurrent sessions
 five_hour_format   = "5h {pct}%"
 seven_day_format   = "7d {pct}%"
 separator          = " "

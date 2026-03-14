@@ -75,8 +75,8 @@ The CShip `usage_limits` module fetches data from the Anthropic API using your C
 - Run `cship explain` to confirm cship is receiving a valid JSON context.
 
 **Usage limits** data is cached:
-- Cache TTL: **60 seconds**, or until the rate-limit reset window passes (whichever comes first).
-- The first call in a session always fetches fresh data; subsequent calls within 60s return the cached value.
+- Cache TTL: **configurable (default 60 seconds)**, or until the rate-limit reset window passes (whichever comes first). Set `[cship.usage_limits] ttl` to increase the cache interval if you run many concurrent sessions.
+- The first call in a session always fetches fresh data; subsequent calls within the configured TTL return the cached value.
 - If the cache seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
 
 You can see the current cache state by running `cship explain` — it shows the usage limits value being rendered and any warnings if the API call failed.
