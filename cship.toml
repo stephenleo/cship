@@ -1,6 +1,6 @@
 [cship]
 lines = [
-  "$directory$git_branch$git_status$python$nodejs$rust",
+  "$starship_prompt",
   "$cship.model $cship.cost $cship.context_bar $cship.usage_limits"
 ]
 

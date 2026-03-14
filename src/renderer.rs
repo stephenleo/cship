@@ -4,6 +4,7 @@ use crate::context::Context;
 enum Token {
     Native(String),
     Passthrough(String),
+    StarshipPrompt,
     Literal(String), // bare text preserved verbatim
     StyledSpan { content: String, style: String },
 }
@@ -72,6 +73,8 @@ fn parse_line(line: &str) -> Vec<Token> {
                             );
                         }
                         tokens.push(Token::Literal(String::new()));
+                    } else if name == "starship_prompt" {
+                        tokens.push(Token::StarshipPrompt);
                     } else if name.starts_with("cship.") {
                         tokens.push(Token::Native(name.to_string()));
                     } else {
@@ -105,6 +108,11 @@ fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
             }
             Token::Passthrough(name) => {
                 if let Some(rendered) = crate::passthrough::render_passthrough(&name, ctx) {
+                    parts.push(rendered);
+                }
+            }
+            Token::StarshipPrompt => {
+                if let Some(rendered) = crate::passthrough::render_starship_prompt(ctx, cfg) {
                     parts.push(rendered);
                 }
             }
@@ -341,5 +349,20 @@ mod tests {
         let cfg = CshipConfig::default();
         let result = render_line("$fill", &ctx, &cfg);
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_parse_line_recognizes_starship_prompt_token() {
+        let tokens = parse_line("$starship_prompt");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0], Token::StarshipPrompt));
+    }
+
+    #[test]
+    fn test_parse_line_starship_prompt_with_literal_text() {
+        let tokens = parse_line("prompt: $starship_prompt");
+        assert_eq!(tokens.len(), 2);
+        assert!(matches!(&tokens[0], Token::Literal(t) if t == "prompt: "));
+        assert!(matches!(&tokens[1], Token::StarshipPrompt));
     }
 }
