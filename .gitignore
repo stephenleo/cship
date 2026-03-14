@@ -1,12 +1,11 @@
 PRD/
 _bmad*
 .claude/
-
-# Added by cargo
-
+.agents/
+.vscode/
 /target
 starship.toml
-
-.vscode/
 install_private.sh
 .DS_Store
+marketing/
+skills-lock.json
