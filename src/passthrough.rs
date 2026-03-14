@@ -151,7 +151,10 @@ pub fn render_passthrough(name: &str, ctx: &crate::context::Context) -> Option<S
 /// - `STARSHIP_SHELL` is set to "unknown" to force plain ANSI output.
 /// - Injects all 9 CSHIP_* environment variables into the subprocess.
 /// - Trims trailing newlines from output.
-pub fn render_starship_prompt(ctx: &crate::context::Context, cfg: &crate::config::CshipConfig) -> Option<String> {
+pub fn render_starship_prompt(
+    ctx: &crate::context::Context,
+    cfg: &crate::config::CshipConfig,
+) -> Option<String> {
     // Check disabled flag — return silent None
     if let Some(sp_cfg) = &cfg.starship_prompt {
         if sp_cfg.disabled == Some(true) {
@@ -176,9 +179,7 @@ pub fn render_starship_prompt(ctx: &crate::context::Context, cfg: &crate::config
         .and_then(|w| w.current_dir.as_deref())
         .or(ctx.cwd.as_deref());
     if cwd.is_none() {
-        tracing::warn!(
-            "starship_prompt: no CWD available — subprocess inherits cship's cwd"
-        );
+        tracing::warn!("starship_prompt: no CWD available — subprocess inherits cship's cwd");
     }
 
     // Derive terminal width from $COLUMNS, fallback to 80
@@ -188,7 +189,13 @@ pub fn render_starship_prompt(ctx: &crate::context::Context, cfg: &crate::config
         .unwrap_or(80);
 
     let mut cmd = Command::new("starship");
-    cmd.args(["prompt", "--status", "0", "--terminal-width", &width.to_string()]);
+    cmd.args([
+        "prompt",
+        "--status",
+        "0",
+        "--terminal-width",
+        &width.to_string(),
+    ]);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
 
