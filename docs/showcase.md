@@ -263,6 +263,53 @@ critical_style     = "bold fg:#f7768e"
 
 ---
 
+## 7. Full Starship Prompt
+
+Two-row layout featuring the complete rendered Starship prompt on top and Claude Code session data on bottom. `$starship_prompt` invokes `starship prompt` to display your entire Starship configuration (directory, git status, language runtimes, and any custom modules) in a single call.
+
+![Full Starship Prompt cship statusline](./examples/09.png)
+
+```toml
+[cship]
+lines = [
+  "$starship_prompt",
+  "$cship.model $cship.cost $cship.context_bar $cship.usage_limits",
+]
+
+[cship.model]
+symbol = " " # nf-fa-microchip
+style  = "bold fg:#7aa2f7"
+
+[cship.cost]
+symbol             = "💰 "
+style              = "fg:#a9b1d6"
+warn_threshold     = 2.0
+warn_style         = "fg:#e0af68"
+critical_threshold = 5.0
+critical_style     = "bold fg:#f7768e"
+
+[cship.context_bar]
+symbol             = " " # nf-fa-database
+format             = "[$symbol$value]($style)"
+width              = 10
+style              = "fg:#7dcfff"
+warn_threshold     = 40.0
+warn_style         = "fg:#e0af68"
+critical_threshold = 70.0
+critical_style     = "bold fg:#f7768e"
+
+[cship.usage_limits]
+five_hour_format   = "⌛ 5h {pct}%"
+seven_day_format   = "📅 7d {pct}%"
+separator          = " "
+warn_threshold     = 70.0
+warn_style         = "fg:#e0af68"
+critical_threshold = 90.0
+critical_style     = "bold fg:#f7768e"
+```
+
+---
+
 ## Submit Your Config
 
 Have a beautiful CShip setup? Share it with the community!

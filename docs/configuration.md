@@ -326,3 +326,20 @@ warn_style         = "bold yellow"
 critical_threshold = 90.0
 critical_style     = "bold red"
 ```
+
+---
+
+## `[cship.starship_prompt]` — Full Starship Prompt
+
+Renders your entire Starship-configured prompt in a single call. Unlike per-module passthrough (e.g., `$directory`, `$git_branch`), this token invokes `starship prompt` to produce the complete rendered prompt with all configured modules.
+
+**Token:** `$starship_prompt`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | `bool` | `false` | Set to `true` to hide this token silently |
+
+```toml
+[cship.starship_prompt]
+disabled = false
+```

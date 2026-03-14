@@ -95,6 +95,62 @@ critical_style     = "bold fg:#f7768e"
 
 The first row uses a multi-line TOML string with `\` line continuations to combine several Starship passthrough modules without spaces between them (Starship handles its own spacing). The second and third rows are pure native cship modules.
 
+---
+
+## $starship_prompt — Full Prompt
+
+In addition to individual Starship module passthrough, CShip supports a special `$starship_prompt` token that renders the **entire configured Starship prompt** in a single call.
+
+**Key difference:** Per-module passthrough (e.g., `$directory`, `$git_branch`) calls `starship module <name>` for each token. The `$starship_prompt` token calls `starship prompt` once, producing the full rendered prompt as configured in your Starship config.
+
+This is useful when you want the complete Starship prompt on one statusline row, followed by CShip-native modules on subsequent rows.
+
+### How it works
+
+- `$starship_prompt` invokes `starship prompt` with `STARSHIP_CONFIG` set to your Starship config file
+- Terminal width is read from `$COLUMNS` environment variable (fallback: 80 characters)
+- Output is cached for **5 seconds per session** (same as per-module passthrough)
+- All `CSHIP_*` environment variables are injected before the subprocess runs, allowing Starship modules to consume Claude Code session data
+- If the subprocess fails or Starship is not found, the token renders empty (silent failure)
+
+### Configuration
+
+`$starship_prompt` can be disabled in the config:
+
+```toml
+[cship.starship_prompt]
+disabled = false  # Set to true to hide this token silently
+```
+
+### Example: Two-Row Layout
+
+```toml
+[cship]
+lines = [
+  "$starship_prompt",
+  "$cship.model $cship.cost $cship.context_bar $cship.usage_limits",
+]
+
+[cship.model]
+symbol = "🤖 "
+style  = "bold cyan"
+
+[cship.cost]
+warn_threshold     = 2.0
+warn_style         = "yellow"
+critical_threshold = 5.0
+critical_style     = "bold red"
+
+[cship.context_bar]
+width              = 10
+warn_threshold     = 40.0
+warn_style         = "yellow"
+critical_threshold = 70.0
+critical_style     = "bold red"
+```
+
+In this layout, row 1 displays your full Starship-configured prompt (directory, git status, language runtimes, etc.). Row 2 shows Claude Code session data (model, cost, context window usage, API limits).
+
 ## Caveats
 
 - Starship must be installed. The CShip curl installer can optionally install it for you.

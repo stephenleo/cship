@@ -19,6 +19,7 @@ pub struct CshipConfig {
     pub session: Option<SessionConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub usage_limits: Option<UsageLimitsConfig>,
+    pub starship_prompt: Option<StarshipPromptConfig>,
 }
 
 /// Per-module config fields shared by all native CShip modules.
@@ -194,6 +195,12 @@ pub struct UsageLimitsConfig {
     pub five_hour_format: Option<String>,
     pub seven_day_format: Option<String>,
     pub separator: Option<String>,
+}
+
+/// Configuration for `[cship.starship_prompt]` — renders full starship prompt as a token.
+#[derive(Debug, Deserialize, Default)]
+pub struct StarshipPromptConfig {
+    pub disabled: Option<bool>,
 }
 
 /// Result of a config load operation — includes the loaded config and its source.
