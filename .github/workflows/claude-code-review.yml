@@ -3,8 +3,6 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-  pull_request_target:
-    types: [opened, synchronize, ready_for_review, reopened]
     # Optional: Only run on specific file changes
     # paths:
     #   - "src/**/*.ts"
@@ -14,15 +12,13 @@ on:
 
 jobs:
   claude-review:
-    # Run on internal PRs via pull_request, external PRs via pull_request_target
-    if: |
-      (github.event_name == 'pull_request' && github.event.pull_request.author_association != 'FIRST_TIME_CONTRIBUTOR') ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR')
+    # Skip for first-time contributors
+    if: github.event.pull_request.author_association != 'FIRST_TIME_CONTRIBUTOR'
 
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
       issues: read
       id-token: write
 
