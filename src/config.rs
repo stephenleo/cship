@@ -289,10 +289,8 @@ pub fn load_with_source(
     }
 
     // Step 3: Global fallback — check ~/.config/cship.toml before ~/.config/starship.toml
-    if let Ok(home) = std::env::var("HOME") {
-        let cship_global = std::path::Path::new(&home)
-            .join(".config")
-            .join("cship.toml");
+    if let Some(home) = crate::platform::home_dir() {
+        let cship_global = home.join(".config").join("cship.toml");
         if cship_global.exists() {
             let config = load_cship_toml(&cship_global).unwrap_or_else(|e| {
                 tracing::warn!("cship: failed to load global dedicated config: {e}");
@@ -303,9 +301,7 @@ pub fn load_with_source(
                 source: ConfigSource::DedicatedFile(cship_global),
             };
         }
-        let global = std::path::Path::new(&home)
-            .join(".config")
-            .join("starship.toml");
+        let global = home.join(".config").join("starship.toml");
         if global.exists() {
             let config = load_from_path(&global).unwrap_or_else(|e| {
                 tracing::warn!("cship: failed to load global config: {e}");

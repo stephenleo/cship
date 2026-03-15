@@ -2,21 +2,27 @@
 //! Intentionally leaves `[cship.*]` sections in `starship.toml` intact (FR44).
 
 pub fn run() {
-    let home = match std::env::var("HOME") {
-        Ok(h) if !h.is_empty() => h,
-        _ => {
-            println!("HOME is not set — cannot determine paths. Aborting uninstall.");
+    let home = match crate::platform::home_dir() {
+        Some(h) => h,
+        None => {
+            println!("Cannot determine home directory — set CLAUDE_HOME. Aborting uninstall.");
             return;
         }
     };
-    let home = std::path::PathBuf::from(home);
     remove_binary(&home);
     remove_statusline_from_settings(&home);
     remove_cache_directories(&home);
 }
 
 fn remove_binary(home: &std::path::Path) {
-    for bin in [home.join(".local/bin/cship"), home.join(".cargo/bin/cship")] {
+    #[cfg(not(target_os = "windows"))]
+    let candidates = [home.join(".local/bin/cship"), home.join(".cargo/bin/cship")];
+    #[cfg(target_os = "windows")]
+    let candidates = [
+        home.join(".cargo/bin/cship.exe"),
+        home.join(r".local\bin\cship.exe"),
+    ];
+    for bin in candidates {
         if bin.exists() {
             match std::fs::remove_file(&bin) {
                 Ok(()) => println!("Removed: {}", bin.display()),
@@ -223,9 +229,15 @@ mod tests {
     #[test]
     fn test_run_with_empty_home_does_not_panic() {
         let _guard = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: guarded by HOME_MUTEX; no other threads read HOME concurrently.
-        unsafe { std::env::set_var("HOME", "") };
+        // SAFETY: guarded by HOME_MUTEX; no other threads read these env vars concurrently.
+        unsafe {
+            std::env::set_var("HOME", "");
+            std::env::set_var("USERPROFILE", "");
+            std::env::set_var("CLAUDE_HOME", "");
+        };
         // Should print message and return, not panic or touch root paths
         run();
+        // Restore to avoid poisoning other tests
+        unsafe { std::env::remove_var("CLAUDE_HOME") };
     }
 }

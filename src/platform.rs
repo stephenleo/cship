@@ -92,19 +92,47 @@ pub fn get_oauth_token() -> Result<String, String> {
 /// Returns `None` if the file is absent, unreadable, or malformed.
 #[cfg(target_os = "linux")]
 fn read_credentials_file() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let path = std::path::Path::new(&home)
-        .join(".claude")
-        .join(".credentials.json");
+    let home = home_dir()?;
+    let path = home.join(".claude").join(".credentials.json");
     let contents = std::fs::read_to_string(&path).ok()?;
     extract_access_token(contents.trim())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-compile_error!("cship: get_oauth_token() is only supported on macOS and Linux");
+/// Returns the user's effective home directory, checked in priority order:
+/// 1. `CLAUDE_HOME` env var (explicit override for non-standard installs, all platforms)
+/// 2. `HOME` env var (Unix standard; also set by Git Bash / WSL on Windows)
+/// 3. `USERPROFILE` env var (Windows native; Claude Code stores .claude here)
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
+    for var in ["CLAUDE_HOME", "HOME", "USERPROFILE"] {
+        if let Ok(h) = std::env::var(var) {
+            if !h.is_empty() {
+                return Some(std::path::PathBuf::from(h));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_oauth_token() -> Result<String, String> {
+    let home = home_dir().ok_or_else(|| {
+        "Cannot locate home directory — set CLAUDE_HOME to your .claude folder parent".to_string()
+    })?;
+    let path = home.join(".claude").join(".credentials.json");
+    let contents = std::fs::read_to_string(&path).map_err(|_| {
+        format!(
+            "Claude Code credentials not found at {} — authenticate in Claude Code first",
+            path.display()
+        )
+    })?;
+    extract_access_token(contents.trim()).ok_or_else(|| {
+        "Claude Code credentials found but access token could not be parsed — credential may be malformed".into()
+    })
+}
 
 /// Inner implementation with injectable command name for testability.
 /// `tool` is the binary; `args` are the arguments passed to it.
+#[cfg(not(target_os = "windows"))]
 fn get_oauth_token_with_cmd(tool: &str, args: &[&str]) -> Result<String, String> {
     use std::process::Command;
 
@@ -151,6 +179,7 @@ fn extract_access_token(json: &str) -> Option<String> {
 }
 
 /// Return the platform-specific install hint for a missing credential tool.
+#[cfg(not(target_os = "windows"))]
 fn install_hint(tool: &str) -> String {
     match tool {
         "secret-tool" => {
@@ -171,6 +200,7 @@ mod tests {
 
     // These tests exercise the Linux path only; macOS path is validated by code review.
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_tool_not_found_returns_install_hint() {
         // A non-existent binary triggers io::ErrorKind::NotFound on spawn.
@@ -184,6 +214,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_nonzero_exit_returns_credential_not_found_error() {
         // `/bin/sh -c "exit 1"` always exits with code 1 — simulates "credential not found".
@@ -197,6 +228,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_successful_token_extraction() {
         // Use `/bin/sh` (absolute path, present on both macOS and Linux) to emit a JSON blob.
@@ -255,12 +287,14 @@ mod tests {
         assert_eq!(result, Some("sk-ant-file-token".to_string()));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_install_hint_secret_tool() {
         let hint = install_hint("secret-tool");
         assert!(hint.contains("sudo apt install libsecret-tools"), "{hint}");
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_install_hint_security() {
         let hint = install_hint("security");
