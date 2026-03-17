@@ -2,16 +2,23 @@
 use crate::config::CostSubfieldConfig;
 /// Render the `[cship.cost]` family of modules.
 ///
-/// `$cship.cost` — convenience alias: formats total_cost_usd as "$X.XX" with threshold styling.
+/// `$cship.cost` — convenience alias: formats total_cost_usd with threshold styling.
+/// Display currency and conversion rate are configurable via `currency_symbol` and
+/// `conversion_rate`; the underlying context value is always `total_cost_usd` (USD).
+/// Threshold styling (`warn_threshold`, `critical_threshold`) is always evaluated
+/// against the raw USD value, regardless of any conversion rate applied for display.
 /// `$cship.cost.total_cost_usd` — raw USD value, 4 decimal places.
-/// `$cship.cost.total_duration_ms` / `total_api_duration_ms` — integer milliseconds.
-/// `$cship.cost.total_lines_added` / `total_lines_removed` — integer counts.
+/// `$cship.cost.total_duration_ms` / `$cship.cost.total_api_duration_ms` — integer milliseconds.
+/// `$cship.cost.total_lines_added` / `$cship.cost.total_lines_removed` — integer counts.
 ///
 /// [Source: epics.md#Story 2.1, architecture.md#Structure Patterns]
 use crate::config::{CostConfig, CshipConfig};
 use crate::context::Context;
 
-/// Renders `$cship.cost` — total cost as `$X.XX` with threshold color escalation.
+/// Renders `$cship.cost` — total cost with threshold color escalation.
+/// Display format is `{currency_symbol}{value:.2}` (default: `$X.XX`).
+/// `currency_symbol` and `conversion_rate` are configurable; thresholds are always
+/// evaluated against the raw USD value from context.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let cost_cfg = cfg.cost.as_ref();
 
@@ -31,7 +38,12 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 
     let symbol = cost_cfg.and_then(|c| c.symbol.as_deref());
     let style = cost_cfg.and_then(|c| c.style.as_deref());
-    let formatted = format!("${:.2}", val);
+    let currency_symbol = cost_cfg
+        .and_then(|c| c.currency_symbol.as_deref())
+        .unwrap_or("$");
+    let conversion_rate = cost_cfg.and_then(|c| c.conversion_rate).unwrap_or(1.0);
+    let converted_val = val * conversion_rate;
+    let formatted = format!("{}{:.2}", currency_symbol, converted_val);
 
     // Extract threshold variables FIRST (before format check)
     let warn_threshold = cost_cfg.and_then(|c| c.warn_threshold);
@@ -193,6 +205,56 @@ mod tests {
         let ctx = ctx_with_cost(0.01234);
         let result = render(&ctx, &CshipConfig::default());
         assert_eq!(result, Some("$0.01".to_string()));
+    }
+
+    #[test]
+    fn test_cost_renders_custom_currency_symbol() {
+        let ctx = ctx_with_cost(1.50);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                currency_symbol: Some("£".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg);
+        assert_eq!(result, Some("£1.50".to_string()));
+    }
+
+    #[test]
+    fn test_cost_renders_with_conversion_rate() {
+        let ctx = ctx_with_cost(1.00);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                currency_symbol: Some("£".to_string()),
+                conversion_rate: Some(0.79),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg);
+        assert_eq!(result, Some("£0.79".to_string()));
+    }
+
+    #[test]
+    fn test_cost_format_path_uses_converted_value() {
+        // Regression: conversion_rate and currency_symbol must flow into $value
+        // when a format string is configured (apply_module_format branch).
+        let ctx = ctx_with_cost(1.00);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                currency_symbol: Some("€".to_string()),
+                conversion_rate: Some(0.92),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains("€0.92"),
+            "expected converted value in format path: {result:?}"
+        );
     }
 
     #[test]

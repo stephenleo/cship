@@ -96,7 +96,7 @@ style  = "bold fg:#7aa2f7"
 
 ## `[cship.cost]` — Session Cost
 
-Displays total session cost in USD. Supports threshold-based colour escalation.
+Displays total session cost with threshold-based colour escalation. The display currency and conversion rate are configurable; the underlying value is always `total_cost_usd` (USD). Thresholds are always evaluated against the raw USD value.
 
 **Token:** `$cship.cost`
 
@@ -110,8 +110,10 @@ Displays total session cost in USD. Supports threshold-based colour escalation.
 | `warn_style` | `string` | `"yellow"` | Style applied when cost ≥ `warn_threshold` |
 | `critical_threshold` | `float` | — | USD amount at which style switches to `critical_style` |
 | `critical_style` | `string` | `"bold red"` | Style applied when cost ≥ `critical_threshold` |
+| `currency_symbol` | `string` | `"$"` | Symbol prepended to the displayed value (e.g. `"£"`, `"€"`) |
+| `conversion_rate` | `float` | `1.0` | Multiplier applied to `total_cost_usd` before display; thresholds are still evaluated in USD |
 
-**Variables:** `$value` (e.g. `$1.23`), `$symbol`, `$style`
+**Variables:** `$value` (e.g. `$1.23` or `£0.97` with a custom currency), `$symbol`, `$style`
 
 ```toml
 [cship.cost]

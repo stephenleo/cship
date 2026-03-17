@@ -111,7 +111,7 @@ Everything in the [Claude Code status line documentation](https://code.claude.co
 |-------|-------------|
 | `$starship_prompt` | Full rendered Starship prompt (all configured modules in one row) |
 | `$cship.model` | Claude model name |
-| `$cship.cost` | Session cost in USD ($X.XX) |
+| `$cship.cost` | Session cost (configurable currency; default `$X.XX`) |
 | `$cship.context_bar` | Visual progress bar of context window usage |
 | `$cship.context_window` | Context window tokens (used/total) |
 | `$cship.context_window.used_tokens` | Real token count in context with percentage (e.g. `8%(79k/1000k)`) |
