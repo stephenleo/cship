@@ -114,7 +114,8 @@ where
 /// Format usage data using configurable format strings.
 ///
 /// Placeholders in format strings (all occurrences are substituted):
-/// - `{pct}` — percentage as integer (e.g. `"23"`)
+/// - `{pct}` — percentage used as integer (e.g. `"23"`)
+/// - `{remaining}` — percentage remaining as integer (e.g. `"77"`)
 /// - `{reset}` — time-until-reset string (e.g. `"4h12m"`)
 ///
 /// Defaults (backwards compatible with pre-7.2 hardcoded output):
@@ -123,8 +124,10 @@ where
 /// - `separator`: `" | "`
 fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
     let five_h_pct = format!("{:.0}", data.five_hour_pct);
+    let five_h_remaining = format!("{:.0}", (100.0 - data.five_hour_pct).max(0.0));
     let five_h_reset = format_time_until(&data.five_hour_resets_at);
     let seven_d_pct = format!("{:.0}", data.seven_day_pct);
+    let seven_d_remaining = format!("{:.0}", (100.0 - data.seven_day_pct).max(0.0));
     let seven_d_reset = format_time_until(&data.seven_day_resets_at);
 
     let five_h_fmt = cfg
@@ -139,9 +142,11 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
 
     let five_h_part = five_h_fmt
         .replace("{pct}", &five_h_pct)
+        .replace("{remaining}", &five_h_remaining)
         .replace("{reset}", &five_h_reset);
     let seven_d_part = seven_d_fmt
         .replace("{pct}", &seven_d_pct)
+        .replace("{remaining}", &seven_d_remaining)
         .replace("{reset}", &seven_d_reset);
 
     format!("{five_h_part}{sep}{seven_d_part}")
