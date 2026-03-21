@@ -327,6 +327,26 @@ critical_threshold = 90.0
 critical_style     = "bold red"
 ```
 
+### Hiding a usage period
+
+To hide one of the two usage periods, set its format **and** the separator to empty strings. For example, to show only the 5-hour window:
+
+```toml
+[cship.usage_limits]
+seven_day_format = ""
+separator        = ""
+```
+
+To show only the 7-day window:
+
+```toml
+[cship.usage_limits]
+five_hour_format = ""
+separator        = ""
+```
+
+Setting both formats to `""` effectively hides the entire module.
+
 ---
 
 ## `[cship.starship_prompt]` — Full Starship Prompt
