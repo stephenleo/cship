@@ -32,14 +32,13 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let data = if let Some(from_stdin) = data_from_stdin_rate_limits(ctx) {
         from_stdin
     } else {
-        // Step 3: fall back to cache / API fetch
+        // Step 3: fall back to cache / OAuth API fetch
         let transcript_str = ctx.transcript_path.as_deref()?;
         let transcript_path = std::path::Path::new(transcript_str);
 
         if let Some(cached) = cache::read_usage_limits(transcript_path, false) {
             cached
         } else {
-            // Step 4a: get OAuth token
             let token = match crate::platform::get_oauth_token() {
                 Ok(t) => t,
                 Err(e) => {
@@ -48,7 +47,6 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
                 }
             };
 
-            // Step 4b: dispatch fetch with 2s timeout
             let ttl_secs = ul_cfg.and_then(|c| c.ttl).unwrap_or(60);
 
             match fetch_with_timeout(move || crate::usage_limits::fetch_usage_limits(&token)) {
@@ -109,9 +107,9 @@ where
     }
 }
 
-/// Extract usage limits from the `rate_limits` field that Claude Code sends via stdin.
-/// This avoids the need for a separate OAuth API call.
-/// `resets_at` is a Unix epoch; we convert it to ISO 8601 for compatibility with `format_time_until`.
+/// Extract usage limits from the `rate_limits` field Claude Code sends via stdin.
+/// This avoids the OAuth API call entirely when the data is available.
+/// `resets_at` is a Unix epoch in the stdin payload; convert to ISO 8601 for `format_time_until`.
 fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     let rl = ctx.rate_limits.as_ref()?;
     let five = rl.five_hour.as_ref()?;

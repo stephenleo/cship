@@ -296,7 +296,12 @@ Displays the current working directory or project directory.
 
 ## `[cship.usage_limits]` — API Usage Limits
 
-Displays 5-hour and 7-day API utilization percentages with time-to-reset. Fetches from the Anthropic API using your OAuth token (stored in the OS credential store). Results are cached for the configured TTL (default 60s) or until the reset window passes.
+Displays 5-hour and 7-day API utilization percentages with time-to-reset.
+
+**Data sources (in priority order):**
+
+1. **stdin `rate_limits`** — Claude Code (v2.1+) sends `rate_limits` directly in the session JSON for Pro/Max subscribers. When present, cship uses this data immediately with zero latency and no credential setup required.
+2. **OAuth API fetch** — Falls back to fetching from `https://api.anthropic.com/api/oauth/usage` using your OAuth token (stored in the OS credential store). Results are cached for the configured TTL (default 60s).
 
 **Token:** `$cship.usage_limits`
 
@@ -314,7 +319,7 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset. Fetche
 | `critical_style` | `string` | `"bold red"` | Style at critical level |
 | `ttl` | `integer` | `60` | Cache refresh interval in seconds. Increase to reduce API pressure when running multiple concurrent sessions. |
 
-**Prerequisites:** On Linux/WSL2, install `libsecret-tools` and store your OAuth token with `secret-tool`. See [FAQ](/faq#usage-limits-linux) for setup instructions.
+**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed. Otherwise, on Linux/WSL2 install `libsecret-tools` and store your OAuth token with `secret-tool`. See [FAQ](/faq#usage-limits-linux) for setup instructions.
 
 ```toml
 [cship.usage_limits]
@@ -327,6 +332,26 @@ warn_style         = "bold yellow"
 critical_threshold = 90.0
 critical_style     = "bold red"
 ```
+
+### Hiding a usage period
+
+To hide one of the two usage periods, set its format **and** the separator to empty strings. For example, to show only the 5-hour window:
+
+```toml
+[cship.usage_limits]
+seven_day_format = ""
+separator        = ""
+```
+
+To show only the 7-day window:
+
+```toml
+[cship.usage_limits]
+five_hour_format = ""
+separator        = ""
+```
+
+Setting both formats to `""` effectively hides the entire module.
 
 ---
 

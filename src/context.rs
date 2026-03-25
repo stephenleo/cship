@@ -23,8 +23,8 @@ pub struct Context {
     pub vim: Option<Vim>,
     /// Absent unless --agent flag or agent settings are active.
     pub agent: Option<Agent>,
-    /// Rate limits sent directly by Claude Code (available for Pro/Max subscribers).
-    /// When present, avoids the need for a separate OAuth API call.
+    /// Rate limits sent directly by Claude Code via stdin (Pro/Max subscribers).
+    /// When present, the usage_limits module uses this instead of making an OAuth API call.
     pub rate_limits: Option<RateLimits>,
 }
 
