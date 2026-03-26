@@ -287,6 +287,8 @@ mod tests {
             seven_day_pct: 45.1,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            five_hour_resets_at_epoch: None,
+            seven_day_resets_at_epoch: None,
         }
     }
 
@@ -364,6 +366,8 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2000-01-01T00:00:00Z".into(), // past
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(), // future
+            five_hour_resets_at_epoch: None,
+            seven_day_resets_at_epoch: None,
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);
@@ -402,6 +406,8 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(), // future
             seven_day_resets_at: "2000-01-01T00:00:00Z".into(), // past
+            five_hour_resets_at_epoch: None,
+            seven_day_resets_at_epoch: None,
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);
@@ -422,6 +428,8 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: String::new(),
             seven_day_resets_at: String::new(),
+            five_hour_resets_at_epoch: None,
+            seven_day_resets_at_epoch: None,
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);
@@ -507,6 +515,8 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2000-01-01T00:00:00+00:00".into(), // past, +00:00 format
             seven_day_resets_at: "2099-01-01T00:00:00+00:00".into(), // future
+            five_hour_resets_at_epoch: None,
+            seven_day_resets_at_epoch: None,
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);

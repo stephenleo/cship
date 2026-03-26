@@ -9,12 +9,23 @@
 /// Parsed usage limits returned by the Anthropic API.
 /// Field names use the project's flat convention; serde mapping is handled via
 /// an intermediate [`ApiResponse`] struct during deserialization.
+///
+/// The `*_epoch` fields are set only on the stdin path (Claude Code sends `resets_at` as a
+/// Unix epoch directly). On the OAuth/cache path these fields are `None` and the ISO 8601
+/// string fields are used instead. Serde serialises `None` as `null`, which is ignored by
+/// old cache readers (backward-compatible).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UsageLimitsData {
     pub five_hour_pct: f64,
     pub seven_day_pct: f64,
     pub five_hour_resets_at: String, // ISO 8601; empty string when API returns null
     pub seven_day_resets_at: String, // ISO 8601; empty string when API returns null
+    /// Unix epoch seconds for the five-hour window reset; `Some` only on the stdin path.
+    #[serde(default)]
+    pub five_hour_resets_at_epoch: Option<u64>,
+    /// Unix epoch seconds for the seven-day window reset; `Some` only on the stdin path.
+    #[serde(default)]
+    pub seven_day_resets_at_epoch: Option<u64>,
 }
 
 /// Intermediate struct matching the raw API response structure.
@@ -64,5 +75,8 @@ pub fn fetch_usage_limits(token: &str) -> Result<UsageLimitsData, String> {
         seven_day_pct: api.seven_day.utilization,
         five_hour_resets_at: api.five_hour.resets_at.unwrap_or_default(),
         seven_day_resets_at: api.seven_day.resets_at.unwrap_or_default(),
+        // Epoch fields are only populated on the stdin path; OAuth path uses ISO strings.
+        five_hour_resets_at_epoch: None,
+        seven_day_resets_at_epoch: None,
     })
 }
