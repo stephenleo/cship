@@ -107,6 +107,35 @@ where
     }
 }
 
+/// Convert a Unix epoch to ISO 8601 UTC string: "YYYY-MM-DDTHH:MM:SSZ".
+/// Returns an empty string for `None` input.
+fn epoch_to_iso(epoch: Option<u64>) -> String {
+    match epoch {
+        Some(e) => {
+            let days_since_epoch = (e / 86400) as i64;
+            let remaining = e % 86400;
+            let hour = remaining / 3600;
+            let min = (remaining % 3600) / 60;
+            let sec = remaining % 60;
+            let z = days_since_epoch + 719468;
+            let era = z.div_euclid(146097);
+            let doe = z - era * 146097;
+            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            let y = yoe + era * 400;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            let y = if m <= 2 { y + 1 } else { y };
+            format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                y, m, d, hour, min, sec
+            )
+        }
+        None => String::new(),
+    }
+}
+
 /// Extract usage limits from the `rate_limits` field Claude Code sends via stdin.
 /// This avoids the OAuth API call entirely when the data is available.
 /// `resets_at` is a Unix epoch in the stdin payload; convert to ISO 8601 for `format_time_until`.
@@ -116,33 +145,6 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     let seven = rl.seven_day.as_ref()?;
     let five_pct = five.used_percentage?;
     let seven_pct = seven.used_percentage?;
-
-    fn epoch_to_iso(epoch: Option<u64>) -> String {
-        match epoch {
-            Some(e) => {
-                let days_since_epoch = (e / 86400) as i64;
-                let remaining = e % 86400;
-                let hour = remaining / 3600;
-                let min = (remaining % 3600) / 60;
-                let sec = remaining % 60;
-                let z = days_since_epoch + 719468;
-                let era = z.div_euclid(146097);
-                let doe = z - era * 146097;
-                let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-                let y = yoe + era * 400;
-                let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-                let mp = (5 * doy + 2) / 153;
-                let d = doy - (153 * mp + 2) / 5 + 1;
-                let m = if mp < 10 { mp + 3 } else { mp - 9 };
-                let y = if m <= 2 { y + 1 } else { y };
-                format!(
-                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                    y, m, d, hour, min, sec
-                )
-            }
-            None => String::new(),
-        }
-    }
 
     Some(UsageLimitsData {
         five_hour_pct: five_pct,
@@ -234,35 +236,6 @@ mod tests {
     use super::*;
     use crate::config::{CshipConfig, UsageLimitsConfig};
     use crate::context::Context;
-
-    // ── Helper ────────────────────────────────────────────────────────────────
-
-    /// Convert Unix epoch seconds to an approximate ISO 8601 string (UTC, no fractional seconds).
-    /// Used only in tests to construct future timestamps for `format_time_until`.
-    fn epoch_to_iso8601_approx(secs: u64) -> String {
-        // Use Howard Hinnant days-to-civil algorithm (inverse of iso8601_to_epoch)
-        let days_since_epoch = (secs / 86400) as i64;
-        let remaining = secs % 86400;
-        let hour = remaining / 3600;
-        let min = (remaining % 3600) / 60;
-        let sec = remaining % 60;
-
-        let z = days_since_epoch + 719468;
-        let era = z.div_euclid(146097);
-        let doe = z - era * 146097;
-        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-        let y = yoe + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = doy - (153 * mp + 2) / 5 + 1;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 };
-        let y = if m <= 2 { y + 1 } else { y };
-
-        format!(
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-            y, m, d, hour, min, sec
-        )
-    }
 
     // ── render() tests ────────────────────────────────────────────────────────
 
@@ -470,6 +443,30 @@ mod tests {
         assert!(result.is_none());
     }
 
+    // ── epoch_to_iso() tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_epoch_to_iso_zero() {
+        assert_eq!(epoch_to_iso(Some(0)), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_epoch_to_iso_none() {
+        assert_eq!(epoch_to_iso(None), "");
+    }
+
+    #[test]
+    fn test_epoch_to_iso_known_value() {
+        // 2000-01-01T00:00:00Z = 946684800
+        assert_eq!(epoch_to_iso(Some(946_684_800)), "2000-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_epoch_to_iso_far_future() {
+        // 2099-12-31T00:00:00Z = 4102358400
+        assert_eq!(epoch_to_iso(Some(4_102_358_400)), "2099-12-31T00:00:00Z");
+    }
+
     // ── format_time_until() tests ─────────────────────────────────────────────
 
     #[test]
@@ -489,7 +486,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let future_epoch = now + 4 * 3600 + 12 * 60 + 30; // ~4h12m from now
-        let future_str = epoch_to_iso8601_approx(future_epoch);
+        let future_str = epoch_to_iso(Some(future_epoch));
         let result = format_time_until(&future_str);
         assert!(
             result.contains('h') && result.contains('m'),
@@ -504,7 +501,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let future_epoch = now + 3 * 86400 + 2 * 3600 + 30; // ~3d2h from now
-        let future_str = epoch_to_iso8601_approx(future_epoch);
+        let future_str = epoch_to_iso(Some(future_epoch));
         let result = format_time_until(&future_str);
         assert!(
             result.contains('d') && result.contains('h'),
@@ -519,7 +516,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let future_epoch = now + 45 * 60 + 30; // ~45m from now
-        let future_str = epoch_to_iso8601_approx(future_epoch);
+        let future_str = epoch_to_iso(Some(future_epoch));
         let result = format_time_until(&future_str);
         assert!(
             result.ends_with('m') && !result.contains('h'),
