@@ -203,7 +203,7 @@ Displays detailed context window token counts. The parent token shows used/total
 | `$cship.context_window.current_usage_output_tokens` | Current turn output tokens |
 | `$cship.context_window.current_usage_cache_creation_input_tokens` | Cache creation tokens |
 | `$cship.context_window.current_usage_cache_read_input_tokens` | Cache read tokens |
-| `$cship.context_window.used_tokens` | Real token count in context with percentage — computed from `current_usage` (`input_tokens + cache_creation + cache_read`) and `context_window_size`. Renders as e.g. `8%(79k/1000k)`. Returns nothing before first API call. **Note:** the displayed percentage comes from the API's `used_percentage` field and may not equal `used/total × 100`; the API value can include overhead (e.g. system prompt, tool schemas) beyond the three counted fields — this is expected behavior, not a bug. |
+| `$cship.context_window.used_tokens` | Token counts computed from `current_usage` (`input_tokens + cache_creation + cache_read`) and `context_window_size`; percentage sourced from the API's `used_percentage` field (may not equal `used/total × 100` due to API overhead such as system prompt and tool schemas). Renders as e.g. `8%(79k/1000k)`. Returns nothing before first API call. |
 
 Each sub-field supports `style`, `symbol`, `format`, `warn_threshold`, `warn_style`, `critical_threshold`, `critical_style`, `disabled`, and `invert_threshold`.
 
