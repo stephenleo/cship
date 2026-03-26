@@ -207,7 +207,7 @@ pub fn render_used_tokens(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         }
     };
     let pct = cw.used_percentage.unwrap_or(0.0);
-    let val_str = format!("{:.0}%({}k/{}k)", pct, used / 1000, size / 1000);
+    let val_str = format!("{:.0}%({}k/{}k)", pct, (used + 500) / 1000, (size + 500) / 1000);
     let style = sub_cfg
         .and_then(|c| c.style.as_deref())
         .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
@@ -1507,5 +1507,49 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(render_used_tokens(&ctx, &CshipConfig::default()), None);
+    }
+
+    #[test]
+    fn test_used_tokens_rounding_500_shows_1k() {
+        // 500 tokens: (500 + 500) / 1000 = 1 → displays "1k"
+        // size 200000: (200000 + 500) / 1000 = 200 → displays "200k"
+        let ctx = Context {
+            context_window: Some(ContextWindow {
+                used_percentage: Some(0.25),
+                context_window_size: Some(200000),
+                current_usage: Some(CurrentUsage {
+                    input_tokens: Some(500),
+                    cache_creation_input_tokens: Some(0),
+                    cache_read_input_tokens: Some(0),
+                    output_tokens: Some(0),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render_used_tokens(&ctx, &CshipConfig::default()).unwrap();
+        assert!(result.contains("1k/200k"), "expected '1k/200k' in: {result:?}");
+    }
+
+    #[test]
+    fn test_used_tokens_rounding_499_shows_0k() {
+        // 499 tokens: (499 + 500) / 1000 = 0 → displays "0k" (below 0.5k threshold)
+        // size 200000: (200000 + 500) / 1000 = 200 → displays "200k"
+        let ctx = Context {
+            context_window: Some(ContextWindow {
+                used_percentage: Some(0.25),
+                context_window_size: Some(200000),
+                current_usage: Some(CurrentUsage {
+                    input_tokens: Some(499),
+                    cache_creation_input_tokens: Some(0),
+                    cache_read_input_tokens: Some(0),
+                    output_tokens: Some(0),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render_used_tokens(&ctx, &CshipConfig::default()).unwrap();
+        assert!(result.contains("0k/200k"), "expected '0k/200k' in: {result:?}");
     }
 }
