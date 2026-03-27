@@ -404,7 +404,7 @@ pub fn render_current_usage_cache_read_input_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ContextWindowConfig, SubfieldConfig, CshipConfig};
+    use crate::config::{ContextWindowConfig, CshipConfig, SubfieldConfig};
     use crate::context::{Context, ContextWindow, CurrentUsage};
 
     fn ctx_full() -> Context {
