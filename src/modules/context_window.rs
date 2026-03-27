@@ -83,6 +83,17 @@ pub fn render_used_percentage(ctx: &Context, cfg: &CshipConfig) -> Option<String
 }
 
 /// Renders `$cship.context_window.remaining_percentage` — integer percentage, no `%` sign.
+///
+/// ## `invert_threshold` contract
+///
+/// When [`ContextWindowSubfieldConfig::invert_threshold`] is `true`:
+/// - `warn_threshold`, `warn_style`, `critical_threshold`, and `critical_style` are resolved
+///   from the **sub-field config only** (`[cship.context_window.remaining_percentage]`).
+///   Parent [`ContextWindowConfig`] threshold values are **not** inherited — they live in the
+///   non-inverted domain (high = bad), whereas this sub-field treats low values as bad.
+///   Inheriting parent thresholds would incorrectly invert the semantics.
+/// - Base `style` **still falls back to the parent** [`ContextWindowConfig`]`.style` when not
+///   set on the sub-field. Style inheritance is domain-independent and safe.
 pub fn render_remaining_percentage(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     if is_disabled(cfg) {
         return None;

@@ -85,7 +85,15 @@ pub struct ContextWindowSubfieldConfig {
     pub format: Option<String>,
     /// When `true`, fires threshold styles when value is BELOW the threshold.
     /// Use for decreasing-health indicators like `remaining_percentage` (low = bad).
-    /// When set, parent-level thresholds are NOT inherited (they are in the non-inverted domain).
+    ///
+    /// **Threshold resolution when `invert_threshold = true`:**
+    /// - `warn_threshold`, `warn_style`, `critical_threshold`, and `critical_style` are resolved
+    ///   from **this sub-field config only** — parent [`ContextWindowConfig`] values are NOT
+    ///   inherited. Rationale: parent thresholds live in the non-inverted domain (high = bad),
+    ///   while this sub-field treats low as bad. Inheriting parent thresholds would invert the
+    ///   semantics incorrectly.
+    /// - Base `style` **still falls back to the parent** [`ContextWindowConfig`]`.style` when not
+    ///   set on the sub-field. The style fallback is domain-independent and safe to inherit.
     pub invert_threshold: Option<bool>,
 }
 
