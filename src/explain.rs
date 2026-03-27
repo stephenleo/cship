@@ -5,8 +5,18 @@ const SAMPLE_CONTEXT_PATH: &str = ".config/cship/sample-context.json";
 
 /// Run the explain subcommand and return the formatted output as a String.
 /// `main.rs` is the sole stdout writer — this function only builds the string.
+/// Reads from real stdin; uses `run_with_reader` for testable injection.
 pub fn run(config_override: Option<&std::path::Path>) -> String {
-    let (ctx, creation_notes) = load_context();
+    run_with_reader(config_override, std::io::stdin())
+}
+
+/// Testable entry point — accepts an injected reader instead of real stdin.
+/// `main.rs` is the sole stdout writer; this function only builds the string.
+pub fn run_with_reader(
+    config_override: Option<&std::path::Path>,
+    reader: impl std::io::Read,
+) -> String {
+    let (ctx, creation_notes) = load_context(reader);
     let workspace_dir = ctx
         .workspace
         .as_ref()
@@ -94,13 +104,13 @@ pub fn run(config_override: Option<&std::path::Path>) -> String {
     lines.join("\n")
 }
 
-fn load_context() -> (crate::context::Context, Vec<String>) {
+fn load_context(reader: impl std::io::Read) -> (crate::context::Context, Vec<String>) {
     use std::io::IsTerminal;
     let mut notes = Vec::new();
 
-    // 1. If stdin is not a TTY, read from stdin (same path as main render pipeline)
+    // 1. If stdin is not a TTY, read from the injected reader
     if !std::io::stdin().is_terminal() {
-        match crate::context::from_reader(std::io::stdin()) {
+        match crate::context::from_reader(reader) {
             Ok(ctx) => return (ctx, notes),
             Err(e) => {
                 tracing::warn!(
@@ -274,9 +284,15 @@ mod tests {
     use crate::config::{CshipConfig, ModelConfig};
     use crate::context::{Context, Model};
 
+    /// Test helper — calls `run_with_reader` with empty stdin to avoid hanging in non-TTY
+    /// environments (CI, Bash tool, piped `cargo test`).
+    fn run_test(config_override: Option<&std::path::Path>) -> String {
+        run_with_reader(config_override, std::io::Cursor::new(b""))
+    }
+
     #[test]
     fn test_run_returns_header_with_using_config() {
-        let output = run(None);
+        let output = run_test(None);
         assert!(
             output.contains("using config:"),
             "expected 'using config:' in output: {output}"
@@ -285,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_run_contains_all_module_names() {
-        let output = run(None);
+        let output = run_test(None);
         assert!(
             output.contains("cship.model"),
             "expected 'cship.model' in output"
@@ -340,7 +356,7 @@ mod tests {
     #[test]
     fn test_run_with_config_override_does_not_panic() {
         let bad_path = Some(std::path::PathBuf::from("/nonexistent/path.toml"));
-        let output = run(bad_path.as_deref());
+        let output = run_test(bad_path.as_deref());
         assert!(output.contains("using config:"));
     }
 
@@ -391,9 +407,9 @@ mod tests {
 
     #[test]
     fn test_run_shows_warning_indicator_for_none_module() {
-        // run() loads the embedded sample context — cship.context_window.exceeds_200k
+        // run_test() loads the embedded sample context — cship.context_window.exceeds_200k
         // returns None because sample context value is below 200k threshold.
-        let output = run(None);
+        let output = run_test(None);
         assert!(
             output.contains("⚠ cship.context_window.exceeds_200k"),
             "expected '⚠ cship.context_window.exceeds_200k' in output: {output}"
@@ -402,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_run_shows_hint_section_for_none_module() {
-        let output = run(None);
+        let output = run_test(None);
         assert!(
             output.contains("Hints for modules"),
             "expected hints section in output: {output}"
@@ -411,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_run_shows_error_reason_in_hint() {
-        let output = run(None);
+        let output = run_test(None);
         // model data absent hint should appear since sample context has model data,
         // but other modules like vim will be absent
         assert!(
