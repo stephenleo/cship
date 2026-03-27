@@ -81,12 +81,6 @@ pub struct SubfieldConfig {
     pub invert_threshold: Option<bool>,
 }
 
-/// Backwards-compatible type aliases (used by test code).
-#[cfg(test)]
-pub type CostSubfieldConfig = SubfieldConfig;
-#[cfg(test)]
-pub type ContextWindowSubfieldConfig = SubfieldConfig;
-
 /// Trait for uniform access to style/threshold fields shared by config types.
 /// Used by `render_styled_value()` to resolve sub-field → parent fallback.
 ///
@@ -105,29 +99,6 @@ pub trait HasThresholdStyle {
     fn symbol_str(&self) -> Option<&str> {
         None
     }
-}
-
-#[allow(unused_macros)]
-macro_rules! impl_has_threshold_style {
-    ($t:ty) => {
-        impl HasThresholdStyle for $t {
-            fn style(&self) -> Option<&str> {
-                self.style.as_deref()
-            }
-            fn warn_threshold(&self) -> Option<f64> {
-                self.warn_threshold
-            }
-            fn warn_style(&self) -> Option<&str> {
-                self.warn_style.as_deref()
-            }
-            fn critical_threshold(&self) -> Option<f64> {
-                self.critical_threshold
-            }
-            fn critical_style(&self) -> Option<&str> {
-                self.critical_style.as_deref()
-            }
-        }
-    };
 }
 
 /// Configuration for `[cship.context_bar]` — visual progress bar with thresholds.

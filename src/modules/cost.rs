@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::config::CostSubfieldConfig;
 /// Render the `[cship.cost]` family of modules.
 ///
 /// `$cship.cost` — convenience alias: formats total_cost_usd as "$X.XX" with threshold styling.
@@ -172,7 +170,7 @@ fn is_subfield_disabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CostConfig, CshipConfig};
+    use crate::config::{CostConfig, CshipConfig, SubfieldConfig};
     use crate::context::{Context, Cost};
 
     fn ctx_with_cost(usd: f64) -> Context {
@@ -450,7 +448,7 @@ mod tests {
         let ctx = ctx_with_cost(5.0); // total_cost_usd = 5.0
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_cost_usd: Some(CostSubfieldConfig {
+                total_cost_usd: Some(SubfieldConfig {
                     warn_threshold: Some(3.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(10.0),
@@ -475,7 +473,7 @@ mod tests {
         let ctx = ctx_with_cost(12.0); // total_cost_usd = 12.0
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_cost_usd: Some(CostSubfieldConfig {
+                total_cost_usd: Some(SubfieldConfig {
                     warn_threshold: Some(3.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(10.0),
@@ -500,7 +498,7 @@ mod tests {
         let ctx = ctx_with_cost(1.0); // below warn_threshold of 3.0
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_cost_usd: Some(CostSubfieldConfig {
+                total_cost_usd: Some(SubfieldConfig {
                     warn_threshold: Some(3.0),
                     warn_style: Some("yellow".to_string()),
                     ..Default::default()
@@ -523,7 +521,7 @@ mod tests {
         let ctx = ctx_with_cost(0.01); // ctx_with_cost sets total_duration_ms = 45000
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_duration_ms: Some(CostSubfieldConfig {
+                total_duration_ms: Some(SubfieldConfig {
                     warn_threshold: Some(30000.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(60000.0),
@@ -545,7 +543,7 @@ mod tests {
         let ctx = ctx_with_cost(0.01); // total_duration_ms = 45000 > 30000
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_duration_ms: Some(CostSubfieldConfig {
+                total_duration_ms: Some(SubfieldConfig {
                     format: Some("[$value ms]($style)".to_string()),
                     warn_threshold: Some(30000.0),
                     warn_style: Some("yellow".to_string()),
@@ -574,7 +572,7 @@ mod tests {
         let ctx = ctx_with_cost(0.01); // ctx_with_cost sets total_api_duration_ms = 2300
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_api_duration_ms: Some(CostSubfieldConfig {
+                total_api_duration_ms: Some(SubfieldConfig {
                     warn_threshold: Some(2000.0),
                     warn_style: Some("yellow".to_string()),
                     ..Default::default()
@@ -594,7 +592,7 @@ mod tests {
         let ctx = ctx_with_cost(0.01); // ctx_with_cost sets total_lines_added = 156
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_lines_added: Some(CostSubfieldConfig {
+                total_lines_added: Some(SubfieldConfig {
                     warn_threshold: Some(100.0),
                     warn_style: Some("yellow".to_string()),
                     ..Default::default()
@@ -614,7 +612,7 @@ mod tests {
         let ctx = ctx_with_cost(0.01); // ctx_with_cost sets total_lines_removed = 23
         let cfg = CshipConfig {
             cost: Some(CostConfig {
-                total_lines_removed: Some(CostSubfieldConfig {
+                total_lines_removed: Some(SubfieldConfig {
                     warn_threshold: Some(10.0),
                     warn_style: Some("yellow".to_string()),
                     ..Default::default()
@@ -635,7 +633,7 @@ mod tests {
         let result_default = render_total_cost_usd(&ctx, &CshipConfig::default());
         let cfg_no_thresh = CshipConfig {
             cost: Some(CostConfig {
-                total_cost_usd: Some(CostSubfieldConfig {
+                total_cost_usd: Some(SubfieldConfig {
                     ..Default::default() // all None
                 }),
                 ..Default::default()
