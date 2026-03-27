@@ -70,7 +70,14 @@ pub fn render_styled_value(
             effective_val, style, warn_threshold, warn_style,
             critical_threshold, critical_style,
         );
-        return apply_module_format(fmt, Some(val_str), symbol, effective_style);
+        let result = apply_module_format(fmt, Some(val_str), symbol, effective_style);
+        if result.is_none() {
+            tracing::warn!(
+                "render_styled_value: format path returned None (empty conditional group — \
+                 $value absent from context)"
+            );
+        }
+        return result;
     }
 
     // Default path: apply_style_with_threshold handles no-threshold gracefully
@@ -431,5 +438,18 @@ mod tests {
         assert!(s.contains("bar"), "value present: {s:?}");
         assert!(s.contains("🧠"), "symbol present: {s:?}");
         assert!(s.contains('\x1b'), "ANSI codes present: {s:?}");
+    }
+
+    #[test]
+    fn test_render_styled_value_format_path_none_returns_none() {
+        // AC: When apply_module_format returns None on the format path, render_styled_value
+        // must return None. The tracing::warn! guard is exercised (best-effort in tests).
+        // An empty format string causes apply_module_format to return None.
+        let sub_empty_fmt = crate::config::SubfieldConfig {
+            format: Some(String::new()),
+            ..Default::default()
+        };
+        let result = render_styled_value("x", None, Some(&sub_empty_fmt), None);
+        assert_eq!(result, None, "empty format string should cause format path to return None");
     }
 }
