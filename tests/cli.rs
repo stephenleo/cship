@@ -967,6 +967,24 @@ fn test_literal_text_in_lines_preserved() {
         .stdout(predicate::str::contains("in: 15234"));
 }
 
+// ── Story 2.4: stdin rate_limits CLI integration test ─────────────────────
+
+#[test]
+fn test_usage_limits_stdin_renders_without_transcript_path() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_rate_limits.json").unwrap();
+    let output = cship()
+        .args(["--config", "tests/fixtures/usage_limits_stdin.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("5h:"), "expected 5h prefix: {stdout:?}");
+    assert!(stdout.contains("7d:"), "expected 7d prefix: {stdout:?}");
+    assert!(stdout.contains("42%"), "expected five_hour_pct 42%: {stdout:?}");
+    assert!(stdout.contains("75%"), "expected seven_day_pct 75%: {stdout:?}");
+}
+
 // ── Story 7.6: Starship-compatible format field integration tests ──────────
 
 #[test]

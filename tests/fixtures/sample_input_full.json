@@ -40,5 +40,15 @@
   },
   "agent": {
     "name": "security-reviewer"
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 23.5,
+      "resets_at": 9999999999
+    },
+    "seven_day": {
+      "used_percentage": 67.8,
+      "resets_at": 9999999999
+    }
   }
 }

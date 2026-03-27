@@ -1,0 +1,5 @@
+[cship]
+lines = ["$cship.usage_limits"]
+
+[cship.usage_limits]
+# No disabled = true → enabled

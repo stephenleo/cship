@@ -934,6 +934,134 @@ mod tests {
         assert_eq!(data.seven_day_resets_at_epoch, Some(9_999_999_999));
     }
 
+    // ── additional stdin unit tests (story 2-4) ───────────────────────────────
+
+    #[test]
+    fn test_stdin_period_with_resets_at_none_uses_none_epoch() {
+        // AC1: present period with resets_at: None → five_hour_resets_at_epoch is None
+        let ctx = Context {
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(30.0),
+                    resets_at: None, // ← absent resets_at
+                }),
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(50.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
+            ..Default::default()
+        };
+        let data = data_from_stdin_rate_limits(&ctx).unwrap();
+        assert_eq!(
+            data.five_hour_resets_at_epoch, None,
+            "absent resets_at → None epoch"
+        );
+        assert_eq!(data.seven_day_resets_at_epoch, Some(9_999_999_999));
+    }
+
+    #[test]
+    fn test_stdin_only_seven_day_present_five_hour_absent() {
+        // AC1: only seven_day present — mirror of existing only_five_hour test
+        let ctx = Context {
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: None, // ← absent period
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(75.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
+            ..Default::default()
+        };
+        let result = data_from_stdin_rate_limits(&ctx);
+        assert!(result.is_some());
+        let data = result.unwrap();
+        assert!(
+            (data.five_hour_pct - 0.0).abs() < f64::EPSILON,
+            "absent five_hour → 0.0 placeholder"
+        );
+        assert!((data.seven_day_pct - 75.0).abs() < f64::EPSILON);
+        assert_eq!(data.five_hour_resets_at_epoch, None);
+    }
+
+    // ── render() stdin integration tests (story 2-4, AC2 & AC4) ──────────────
+
+    #[test]
+    fn test_render_stdin_path_no_transcript_needed() {
+        // AC4: transcript_path: None + valid rate_limits → render() returns Some
+        // Proves stdin path bypasses the transcript_path requirement
+        let ctx = Context {
+            transcript_path: None, // ← no transcript
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(40.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(60.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &CshipConfig::default());
+        assert!(result.is_some(), "stdin path must not need transcript_path");
+        let output = result.unwrap();
+        assert!(output.contains("40%"), "expected five_hour_pct 40%: {output:?}");
+        assert!(output.contains("60%"), "expected seven_day_pct 60%: {output:?}");
+    }
+
+    #[test]
+    fn test_render_stdin_takes_priority_over_cache() {
+        // AC2: stdin rate_limits present + cache present → stdin wins
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("test.jsonl");
+        let cache_data = UsageLimitsData {
+            five_hour_pct: 99.0, // ← cache has high value
+            seven_day_pct: 99.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            five_hour_resets_at_epoch: None,
+            seven_day_resets_at_epoch: None,
+        };
+        crate::cache::write_usage_limits(&transcript, &cache_data, 60);
+
+        let ctx = Context {
+            transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: Some(crate::context::RateLimits {
+                // ← stdin has different value
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(23.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(45.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &CshipConfig::default()).unwrap();
+        // Stdin value (23%) must win over cache value (99%)
+        assert!(result.contains("23%"), "stdin must override cache: {result:?}");
+        assert!(!result.contains("99%"), "cache value must not appear: {result:?}");
+    }
+
+    #[test]
+    fn test_render_falls_back_to_oauth_path_when_rate_limits_absent() {
+        // AC2: rate_limits: None, transcript_path: None → render() returns None
+        // Proves OAuth path is triggered when stdin data is absent
+        let ctx = Context {
+            transcript_path: None,
+            rate_limits: None,
+            ..Default::default()
+        };
+        assert!(
+            render(&ctx, &CshipConfig::default()).is_none(),
+            "absent rate_limits with no transcript → None (OAuth path triggered, no token available)"
+        );
+    }
+
     #[test]
     fn test_format_time_until_epoch_past_returns_now() {
         // A past epoch (e.g., Unix epoch 0) should return "now"

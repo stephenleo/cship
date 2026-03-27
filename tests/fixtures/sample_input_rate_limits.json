@@ -1,0 +1,20 @@
+{
+  "session_id": "test-session-id",
+  "cwd": "/tmp",
+  "version": "1.0.0",
+  "exceeds_200k_tokens": false,
+  "model": {"id": "claude-test", "display_name": "Test"},
+  "workspace": {"current_dir": "/tmp", "project_dir": "/tmp"},
+  "output_style": {"name": "default"},
+  "cost": {"total_cost_usd": 0.0},
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 42.0,
+      "resets_at": 9999999999
+    },
+    "seven_day": {
+      "used_percentage": 75.0,
+      "resets_at": 9999999999
+    }
+  }
+}

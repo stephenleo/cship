@@ -178,6 +178,14 @@ mod tests {
             ctx.agent.as_ref().unwrap().name.as_deref(),
             Some("security-reviewer")
         );
+        // Rate limits
+        let rl = ctx.rate_limits.as_ref().unwrap();
+        let five = rl.five_hour.as_ref().unwrap();
+        assert_eq!(five.used_percentage, Some(23.5));
+        assert_eq!(five.resets_at, Some(9_999_999_999u64));
+        let seven = rl.seven_day.as_ref().unwrap();
+        assert_eq!(seven.used_percentage, Some(67.8));
+        assert_eq!(seven.resets_at, Some(9_999_999_999u64));
     }
 
     #[test]
