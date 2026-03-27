@@ -10,6 +10,85 @@
 //!
 //! Source: architecture.md#Core Architectural Decisions, epics.md#Story 2.5
 
+/// Centralized style/threshold/format rendering for sub-field render functions.
+///
+/// Resolves style, thresholds, and format strings using sub-field → parent fallback,
+/// handling `invert_threshold` for decreasing-health indicators (e.g. remaining_percentage).
+///
+/// # Arguments
+/// - `val_str`: Already-formatted display string (e.g. `"85"`, `"0.0123"`)
+/// - `threshold_val`: Numeric value for threshold comparison; `None` for non-threshold fields
+/// - `sub_cfg`: The sub-field's own `SubfieldConfig` (may be `None`)
+/// - `parent`: Parent config implementing `HasThresholdStyle` for fallback (may be `None`)
+///
+/// # Returns
+/// `None` when the format path renders empty (conditional group with absent `$value`).
+/// `Some(styled_string)` otherwise.
+pub fn render_styled_value(
+    val_str: &str,
+    threshold_val: Option<f64>,
+    sub_cfg: Option<&crate::config::SubfieldConfig>,
+    parent: Option<&dyn crate::config::HasThresholdStyle>,
+) -> Option<String> {
+    // Resolve all fields with sub → parent fallback
+    let style = sub_cfg
+        .and_then(|c| c.style.as_deref())
+        .or_else(|| parent.and_then(|p| p.style()));
+    let mut effective_val = threshold_val;
+    let mut warn_threshold = sub_cfg
+        .and_then(|c| c.warn_threshold)
+        .or_else(|| parent.and_then(|p| p.warn_threshold()));
+    let mut warn_style = sub_cfg
+        .and_then(|c| c.warn_style.as_deref())
+        .or_else(|| parent.and_then(|p| p.warn_style()));
+    let mut critical_threshold = sub_cfg
+        .and_then(|c| c.critical_threshold)
+        .or_else(|| parent.and_then(|p| p.critical_threshold()));
+    let mut critical_style = sub_cfg
+        .and_then(|c| c.critical_style.as_deref())
+        .or_else(|| parent.and_then(|p| p.critical_style()));
+
+    // Inverted thresholds: use sub-only values (negated) and negate the comparison value.
+    // Parent thresholds are in the non-inverted domain and must not be inherited.
+    if sub_cfg.and_then(|c| c.invert_threshold).unwrap_or(false) {
+        effective_val = threshold_val.map(|v| -v);
+        warn_threshold = sub_cfg.and_then(|c| c.warn_threshold).map(|t| -t);
+        warn_style = sub_cfg.and_then(|c| c.warn_style.as_deref());
+        critical_threshold = sub_cfg.and_then(|c| c.critical_threshold).map(|t| -t);
+        critical_style = sub_cfg.and_then(|c| c.critical_style.as_deref());
+    }
+
+    // Format path: resolve symbol, threshold style, then apply format
+    let fmt = sub_cfg
+        .and_then(|c| c.format.as_deref())
+        .or_else(|| parent.and_then(|p| p.format_str()));
+    if let Some(fmt) = fmt {
+        let symbol = sub_cfg
+            .and_then(|c| c.symbol.as_deref())
+            .or_else(|| parent.and_then(|p| p.symbol_str()));
+        let effective_style = crate::ansi::resolve_threshold_style(
+            effective_val,
+            style,
+            warn_threshold,
+            warn_style,
+            critical_threshold,
+            critical_style,
+        );
+        return apply_module_format(fmt, Some(val_str), symbol, effective_style);
+    }
+
+    // Default path: apply_style_with_threshold handles no-threshold gracefully
+    Some(crate::ansi::apply_style_with_threshold(
+        val_str,
+        effective_val,
+        style,
+        warn_threshold,
+        warn_style,
+        critical_threshold,
+        critical_style,
+    ))
+}
+
 /// Apply a per-module format string.
 ///
 /// # Arguments
@@ -149,6 +228,91 @@ fn find_matching_close(s: &str, start: usize, open: char, close: char) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- render_styled_value tests ---
+
+    #[test]
+    fn test_render_styled_value_with_format_string() {
+        let sub = crate::config::SubfieldConfig {
+            format: Some("[$value]($style)".to_string()),
+            style: Some("bold green".to_string()),
+            ..Default::default()
+        };
+        let result = render_styled_value("85", Some(85.0), Some(&sub), None);
+        let s = result.unwrap();
+        assert!(s.contains("85"), "value present: {s:?}");
+        assert!(s.contains('\x1b'), "ANSI codes present: {s:?}");
+    }
+
+    #[test]
+    fn test_render_styled_value_no_format_threshold_above_warn() {
+        let sub = crate::config::SubfieldConfig {
+            warn_threshold: Some(50.0),
+            warn_style: Some("yellow".to_string()),
+            critical_threshold: Some(90.0),
+            critical_style: Some("bold red".to_string()),
+            ..Default::default()
+        };
+        let result = render_styled_value("75", Some(75.0), Some(&sub), None);
+        let s = result.unwrap();
+        assert!(s.contains("75"), "value present: {s:?}");
+        assert!(s.contains('\x1b'), "ANSI codes for warn style: {s:?}");
+    }
+
+    #[test]
+    fn test_render_styled_value_no_format_no_threshold() {
+        let sub = crate::config::SubfieldConfig {
+            style: Some("cyan".to_string()),
+            ..Default::default()
+        };
+        let result = render_styled_value("hello", None, Some(&sub), None);
+        let s = result.unwrap();
+        assert!(s.contains("hello"), "value present: {s:?}");
+        assert!(s.contains('\x1b'), "ANSI codes for base style: {s:?}");
+    }
+
+    #[test]
+    fn test_render_styled_value_invert_threshold() {
+        // invert_threshold: value 20 with warn_threshold 30 → inverted: -20 >= -30 → warn fires
+        let sub = crate::config::SubfieldConfig {
+            invert_threshold: Some(true),
+            warn_threshold: Some(30.0),
+            warn_style: Some("yellow".to_string()),
+            critical_threshold: Some(10.0),
+            critical_style: Some("bold red".to_string()),
+            ..Default::default()
+        };
+        let result = render_styled_value("20", Some(20.0), Some(&sub), None);
+        let s = result.unwrap();
+        assert!(s.contains("20"), "value present: {s:?}");
+        assert!(s.contains('\x1b'), "ANSI codes for inverted warn: {s:?}");
+    }
+
+    #[test]
+    fn test_render_styled_value_parent_fallback_style() {
+        let sub = crate::config::SubfieldConfig {
+            ..Default::default()
+        };
+        let parent = crate::config::ContextWindowConfig {
+            style: Some("bold magenta".to_string()),
+            ..Default::default()
+        };
+        let result = render_styled_value(
+            "42",
+            None,
+            Some(&sub),
+            Some(&parent as &dyn crate::config::HasThresholdStyle),
+        );
+        let s = result.unwrap();
+        assert!(s.contains("42"), "value present: {s:?}");
+        assert!(s.contains('\x1b'), "ANSI codes from parent style: {s:?}");
+    }
+
+    #[test]
+    fn test_render_styled_value_no_sub_no_parent() {
+        let result = render_styled_value("plain", None, None, None);
+        assert_eq!(result, Some("plain".to_string()));
+    }
 
     #[test]
     fn test_dollar_value_substituted() {

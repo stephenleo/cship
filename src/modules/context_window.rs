@@ -39,54 +39,19 @@ pub fn render_used_percentage(ctx: &Context, cfg: &CshipConfig) -> Option<String
         }
     };
     let val_str = format!("{:.0}", val);
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.remaining_percentage` — integer percentage, no `%` sign.
 ///
 /// ## `invert_threshold` contract
 ///
-/// When [`crate::config::ContextWindowSubfieldConfig::invert_threshold`] is `true`:
+/// When [`crate::config::SubfieldConfig::invert_threshold`] is `true`:
 /// - `warn_threshold`, `warn_style`, `critical_threshold`, and `critical_style` are resolved
 ///   from the **sub-field config only** (`[cship.context_window.remaining_percentage]`).
 ///   Parent [`crate::config::ContextWindowConfig`] threshold values are **not** inherited — they live in the
@@ -115,60 +80,12 @@ pub fn render_remaining_percentage(ctx: &Context, cfg: &CshipConfig) -> Option<S
         }
     };
     let val_str = format!("{:.0}", val);
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let invert = sub_cfg.and_then(|c| c.invert_threshold).unwrap_or(false);
-    // When inverted, don't inherit parent thresholds — they live in the non-inverted domain.
-    // Negate both value and thresholds so `val >= thresh` becomes `val <= original_thresh`.
-    let (effective_val, warn_threshold, warn_style, critical_threshold, critical_style) = if invert
-    {
-        let w_thresh = sub_cfg.and_then(|c| c.warn_threshold).map(|t| -t);
-        let c_thresh = sub_cfg.and_then(|c| c.critical_threshold).map(|t| -t);
-        let w_style = sub_cfg.and_then(|c| c.warn_style.as_deref());
-        let c_style = sub_cfg.and_then(|c| c.critical_style.as_deref());
-        (Some(-val), w_thresh, w_style, c_thresh, c_style)
-    } else {
-        let w_thresh = sub_cfg
-            .and_then(|c| c.warn_threshold)
-            .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-        let c_thresh = sub_cfg
-            .and_then(|c| c.critical_threshold)
-            .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-        let w_style = sub_cfg
-            .and_then(|c| c.warn_style.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-        let c_style = sub_cfg
-            .and_then(|c| c.critical_style.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-        (Some(val), w_thresh, w_style, c_thresh, c_style)
-    };
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            effective_val,
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
-        effective_val,
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        Some(val),
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.used_tokens` — real token count from `current_usage`.
@@ -224,47 +141,12 @@ pub fn render_used_tokens(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         (used + 500) / 1000,
         (size + 500) / 1000
     );
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(pct),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(pct),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.size` — reads `context_window_size` field (not `size`).
@@ -289,47 +171,12 @@ pub fn render_size(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.total_input_tokens`.
@@ -354,47 +201,12 @@ pub fn render_total_input_tokens(ctx: &Context, cfg: &CshipConfig) -> Option<Str
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.total_output_tokens`.
@@ -419,47 +231,12 @@ pub fn render_total_output_tokens(ctx: &Context, cfg: &CshipConfig) -> Option<St
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.exceeds_200k`.
@@ -511,47 +288,12 @@ pub fn render_current_usage_input_tokens(ctx: &Context, cfg: &CshipConfig) -> Op
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.current_usage.output_tokens`.
@@ -579,47 +321,12 @@ pub fn render_current_usage_output_tokens(ctx: &Context, cfg: &CshipConfig) -> O
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.current_usage.cache_creation_input_tokens`.
@@ -650,47 +357,12 @@ pub fn render_current_usage_cache_creation_input_tokens(
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 /// Renders `$cship.context_window.current_usage.cache_read_input_tokens`.
@@ -721,53 +393,18 @@ pub fn render_current_usage_cache_read_input_tokens(
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg
-        .and_then(|c| c.style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.style.as_deref()));
-    let warn_threshold = sub_cfg
-        .and_then(|c| c.warn_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.warn_threshold));
-    let warn_style = sub_cfg
-        .and_then(|c| c.warn_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.warn_style.as_deref()));
-    let critical_threshold = sub_cfg
-        .and_then(|c| c.critical_threshold)
-        .or_else(|| cw_cfg.and_then(|c| c.critical_threshold));
-    let critical_style = sub_cfg
-        .and_then(|c| c.critical_style.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.critical_style.as_deref()));
-    if let Some(fmt) = sub_cfg
-        .and_then(|c| c.format.as_deref())
-        .or_else(|| cw_cfg.and_then(|c| c.format.as_deref()))
-    {
-        let symbol = sub_cfg
-            .and_then(|c| c.symbol.as_deref())
-            .or_else(|| cw_cfg.and_then(|c| c.symbol.as_deref()));
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
+    crate::format::render_styled_value(
         &val_str,
         Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        sub_cfg,
+        cw_cfg.map(|c| c as &dyn crate::config::HasThresholdStyle),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ContextWindowConfig, ContextWindowSubfieldConfig, CshipConfig};
+    use crate::config::{ContextWindowConfig, CshipConfig, SubfieldConfig};
     use crate::context::{Context, ContextWindow, CurrentUsage};
 
     fn ctx_full() -> Context {
@@ -952,7 +589,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_percentage: Some(ContextWindowSubfieldConfig {
+                used_percentage: Some(SubfieldConfig {
                     warn_threshold: Some(80.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(95.0),
@@ -987,7 +624,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_percentage: Some(ContextWindowSubfieldConfig {
+                used_percentage: Some(SubfieldConfig {
                     warn_threshold: Some(80.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(95.0),
@@ -1022,7 +659,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_percentage: Some(ContextWindowSubfieldConfig {
+                used_percentage: Some(SubfieldConfig {
                     warn_threshold: Some(80.0),
                     warn_style: Some("yellow".to_string()),
                     ..Default::default()
@@ -1071,7 +708,7 @@ mod tests {
         let ctx = ctx_full(); // used_percentage=35, remaining_percentage=65
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_percentage: Some(ContextWindowSubfieldConfig {
+                used_percentage: Some(SubfieldConfig {
                     disabled: Some(true),
                     ..Default::default()
                 }),
@@ -1100,7 +737,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_percentage: Some(ContextWindowSubfieldConfig {
+                used_percentage: Some(SubfieldConfig {
                     format: Some("[$value%]($style)".to_string()),
                     warn_threshold: Some(80.0),
                     warn_style: Some("yellow".to_string()),
@@ -1135,7 +772,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                size: Some(ContextWindowSubfieldConfig {
+                size: Some(SubfieldConfig {
                     warn_threshold: Some(150000.0),
                     warn_style: Some("yellow".to_string()),
                     ..Default::default()
@@ -1164,7 +801,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                total_input_tokens: Some(ContextWindowSubfieldConfig {
+                total_input_tokens: Some(SubfieldConfig {
                     warn_threshold: Some(150000.0),
                     warn_style: Some("yellow".to_string()),
                     ..Default::default()
@@ -1191,7 +828,7 @@ mod tests {
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
                 style: Some("green".to_string()),
-                used_percentage: Some(ContextWindowSubfieldConfig {
+                used_percentage: Some(SubfieldConfig {
                     style: Some("blue".to_string()),
                     ..Default::default()
                 }),
@@ -1223,7 +860,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                remaining_percentage: Some(ContextWindowSubfieldConfig {
+                remaining_percentage: Some(SubfieldConfig {
                     invert_threshold: Some(true),
                     warn_threshold: Some(20.0),
                     warn_style: Some("yellow".to_string()),
@@ -1255,7 +892,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                remaining_percentage: Some(ContextWindowSubfieldConfig {
+                remaining_percentage: Some(SubfieldConfig {
                     invert_threshold: Some(true),
                     warn_threshold: Some(20.0),
                     warn_style: Some("yellow".to_string()),
@@ -1284,7 +921,7 @@ mod tests {
         };
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                remaining_percentage: Some(ContextWindowSubfieldConfig {
+                remaining_percentage: Some(SubfieldConfig {
                     invert_threshold: Some(true),
                     warn_threshold: Some(20.0),
                     warn_style: Some("yellow".to_string()),
@@ -1318,7 +955,7 @@ mod tests {
             context_window: Some(ContextWindowConfig {
                 warn_threshold: Some(80.0), // parent: warn when 80% USED
                 warn_style: Some("yellow".to_string()),
-                remaining_percentage: Some(ContextWindowSubfieldConfig {
+                remaining_percentage: Some(SubfieldConfig {
                     invert_threshold: Some(true),
                     // no subfield thresholds set → nothing fires
                     ..Default::default()
@@ -1341,7 +978,7 @@ mod tests {
         let result_default = render_used_percentage(&ctx, &CshipConfig::default());
         let cfg_no_thresh = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_percentage: Some(ContextWindowSubfieldConfig {
+                used_percentage: Some(SubfieldConfig {
                     ..Default::default() // all None
                 }),
                 ..Default::default()
@@ -1380,7 +1017,7 @@ mod tests {
         let ctx = ctx_used_tokens(85.0);
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_tokens: Some(ContextWindowSubfieldConfig {
+                used_tokens: Some(SubfieldConfig {
                     warn_threshold: Some(80.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(95.0),
@@ -1412,7 +1049,7 @@ mod tests {
         let ctx = ctx_used_tokens(97.0);
         let cfg = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_tokens: Some(ContextWindowSubfieldConfig {
+                used_tokens: Some(SubfieldConfig {
                     warn_threshold: Some(80.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(95.0),
@@ -1445,7 +1082,7 @@ mod tests {
         let result_default = render_used_tokens(&ctx, &CshipConfig::default()).unwrap();
         let cfg_no_thresh = CshipConfig {
             context_window: Some(ContextWindowConfig {
-                used_tokens: Some(ContextWindowSubfieldConfig {
+                used_tokens: Some(SubfieldConfig {
                     ..Default::default() // all None
                 }),
                 ..Default::default()
