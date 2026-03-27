@@ -161,6 +161,7 @@ Renders a visual ASCII progress bar showing context window usage.
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
 | `critical_style` | `string` | `"bold red"` | Style at critical level |
+| `empty_style` | `string` | — | Style for the bar when no context data is available (e.g., `"dim"`) |
 
 ```toml
 [cship.context_bar]

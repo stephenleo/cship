@@ -15,16 +15,13 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         return None;
     }
 
-    let used_pct = match ctx
+    let (used_pct, is_empty) = match ctx
         .context_window
         .as_ref()
         .and_then(|cw| cw.used_percentage)
     {
-        Some(v) => v,
-        None => {
-            tracing::warn!("cship.context_bar: used_percentage absent from context");
-            return None;
-        }
+        Some(v) => (v, false),
+        None => (0.0f64, true),
     };
 
     let width = bar_cfg.and_then(|c| c.width).unwrap_or(DEFAULT_BAR_WIDTH) as usize;
@@ -40,6 +37,15 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 
     let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
     let style = bar_cfg.and_then(|c| c.style.as_deref());
+
+    // Absent context: render 0% bar styled with empty_style (AC: 1, 2, 3)
+    if is_empty {
+        let empty_style = bar_cfg.and_then(|c| c.empty_style.as_deref());
+        if let Some(fmt) = bar_cfg.and_then(|c| c.format.as_deref()) {
+            return crate::format::apply_module_format(fmt, Some(&bar_content), symbol, empty_style);
+        }
+        return Some(crate::ansi::apply_style(&bar_content, empty_style));
+    }
 
     // Extract threshold variables FIRST (before format check)
     let warn_threshold = bar_cfg.and_then(|c| c.warn_threshold);
@@ -124,9 +130,57 @@ mod tests {
     }
 
     #[test]
-    fn test_context_bar_absent_context_window_returns_none() {
-        let ctx = Context::default();
-        assert_eq!(render(&ctx, &CshipConfig::default()), None);
+    fn test_context_bar_absent_context_window_renders_empty_bar() {
+        let ctx = Context::default(); // context_window is None
+        let result = render(&ctx, &CshipConfig::default()).unwrap();
+        let empty_count: usize = result.chars().filter(|&c| c == '░').count();
+        assert_eq!(
+            empty_count,
+            DEFAULT_BAR_WIDTH as usize,
+            "all chars should be empty: {result:?}"
+        );
+        assert!(result.contains("0%"), "should show 0%: {result:?}");
+        assert!(!result.contains('█'), "no filled chars: {result:?}");
+    }
+
+    #[test]
+    fn test_context_bar_absent_with_empty_style_applies_ansi() {
+        let ctx = Context::default(); // context_window is None
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                empty_style: Some("dimmed".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected ANSI codes for empty_style dimmed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_context_bar_absent_no_empty_style_no_ansi() {
+        let ctx = Context::default(); // context_window is None
+        let result = render(&ctx, &CshipConfig::default()).unwrap();
+        assert!(
+            !result.contains('\x1b'),
+            "expected no ANSI codes when no style configured: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_context_bar_disabled_absent_returns_none() {
+        let ctx = Context::default(); // context_window is None
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                disabled: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(render(&ctx, &cfg), None);
     }
 
     #[test]

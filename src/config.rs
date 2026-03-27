@@ -144,6 +144,9 @@ pub struct ContextBarConfig {
     pub critical_style: Option<String>,
     pub width: Option<u32>,
     pub format: Option<String>,
+    /// Style applied when rendering the bar at 0% due to absent context data.
+    /// Example: `"dim"` to visually distinguish the empty state.
+    pub empty_style: Option<String>,
 }
 
 /// Configuration for `[cship.context_window]` sub-field modules.
