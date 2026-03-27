@@ -111,12 +111,32 @@ where
 /// This avoids the OAuth API call entirely when the data is available.
 /// `resets_at` is a Unix epoch in the stdin payload; stored directly to avoid a
 /// round-trip through ISO 8601 formatting and re-parsing.
+///
+/// Only falls back to `None` (triggering the OAuth path) when `ctx.rate_limits` is absent.
+/// Partial data (absent `five_hour`, `seven_day`, or `used_percentage`) uses placeholder values:
+/// - absent period → pct `0.0` (renders as `"0%"`) and epoch `None` (renders as `"?"`)
+/// - absent `used_percentage` within a present period → pct `0.0`
 fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
-    let rl = ctx.rate_limits.as_ref()?;
-    let five = rl.five_hour.as_ref()?;
-    let seven = rl.seven_day.as_ref()?;
-    let five_pct = five.used_percentage?;
-    let seven_pct = seven.used_percentage?;
+    let rl = ctx.rate_limits.as_ref()?; // None here → use OAuth path
+
+    let (five_pct, five_epoch) = match rl.five_hour.as_ref() {
+        Some(five) => (five.used_percentage.unwrap_or(0.0), five.resets_at),
+        None => {
+            tracing::warn!(
+                "rate_limits.five_hour absent from stdin; rendering with placeholder values"
+            );
+            (0.0, None)
+        }
+    };
+    let (seven_pct, seven_epoch) = match rl.seven_day.as_ref() {
+        Some(seven) => (seven.used_percentage.unwrap_or(0.0), seven.resets_at),
+        None => {
+            tracing::warn!(
+                "rate_limits.seven_day absent from stdin; rendering with placeholder values"
+            );
+            (0.0, None)
+        }
+    };
 
     Some(UsageLimitsData {
         five_hour_pct: five_pct,
@@ -124,8 +144,8 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
         // ISO string fields unused on the stdin path — epoch fields carry the reset time.
         five_hour_resets_at: String::new(),
         seven_day_resets_at: String::new(),
-        five_hour_resets_at_epoch: five.resets_at,
-        seven_day_resets_at_epoch: seven.resets_at,
+        five_hour_resets_at_epoch: five_epoch,
+        seven_day_resets_at_epoch: seven_epoch,
     })
 }
 
@@ -805,6 +825,113 @@ mod tests {
         assert!(result.contains("7d:"), "expected 7d prefix: {result:?}");
         assert!(result.contains("23%"), "expected five_hour_pct: {result:?}");
         assert!(result.contains("45%"), "expected seven_day_pct: {result:?}");
+    }
+
+    // ── partial stdin data tests (story 2-3) ──────────────────────────────────
+
+    #[test]
+    fn test_stdin_only_five_hour_present_seven_day_absent() {
+        // AC1: absent seven_day → Some with placeholder values (0% / "?")
+        let ctx = Context {
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(42.0),
+                    resets_at: None,
+                }),
+                seven_day: None,
+            }),
+            ..Default::default()
+        };
+        let result = data_from_stdin_rate_limits(&ctx);
+        assert!(
+            result.is_some(),
+            "should return Some with only five_hour present"
+        );
+        let data = result.unwrap();
+        assert!(
+            (data.five_hour_pct - 42.0).abs() < f64::EPSILON,
+            "five_hour_pct should be 42.0"
+        );
+        assert!(
+            (data.seven_day_pct - 0.0).abs() < f64::EPSILON,
+            "seven_day_pct should be 0.0 placeholder"
+        );
+        assert_eq!(
+            data.seven_day_resets_at_epoch, None,
+            "absent seven_day epoch should be None"
+        );
+    }
+
+    #[test]
+    fn test_stdin_seven_day_used_percentage_absent_uses_zero() {
+        // AC5: absent used_percentage within a present period → 0.0 fallback
+        let ctx = Context {
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(10.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: None,
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
+            ..Default::default()
+        };
+        let result = data_from_stdin_rate_limits(&ctx);
+        assert!(
+            result.is_some(),
+            "should return Some when seven_day.used_percentage is None"
+        );
+        let data = result.unwrap();
+        assert!(
+            (data.seven_day_pct - 0.0).abs() < f64::EPSILON,
+            "absent used_percentage should fall back to 0.0"
+        );
+    }
+
+    #[test]
+    fn test_stdin_rate_limits_entirely_absent_returns_none() {
+        // AC3: entirely absent rate_limits → None (OAuth fallback)
+        let ctx = Context::default();
+        assert!(
+            data_from_stdin_rate_limits(&ctx).is_none(),
+            "absent rate_limits should return None"
+        );
+    }
+
+    #[test]
+    fn test_stdin_both_periods_present_full_data_happy_path() {
+        // AC4: regression guard — full data still works as before
+        let ctx = Context {
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(55.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(80.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
+            ..Default::default()
+        };
+        let result = data_from_stdin_rate_limits(&ctx);
+        assert!(
+            result.is_some(),
+            "both periods present → should return Some"
+        );
+        let data = result.unwrap();
+        assert!(
+            (data.five_hour_pct - 55.0).abs() < f64::EPSILON,
+            "five_hour_pct should be 55.0"
+        );
+        assert!(
+            (data.seven_day_pct - 80.0).abs() < f64::EPSILON,
+            "seven_day_pct should be 80.0"
+        );
+        assert_eq!(data.five_hour_resets_at_epoch, Some(9_999_999_999));
+        assert_eq!(data.seven_day_resets_at_epoch, Some(9_999_999_999));
     }
 
     #[test]
