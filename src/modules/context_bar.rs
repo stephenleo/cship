@@ -15,12 +15,14 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         return None;
     }
 
-    let (used_pct, is_empty) = match ctx
-        .context_window
-        .as_ref()
-        .and_then(|cw| cw.used_percentage)
-    {
-        Some(v) => (v, false),
+    let (used_pct, is_empty) = match ctx.context_window.as_ref() {
+        Some(cw) => match cw.used_percentage {
+            Some(v) => (v, false),
+            None => {
+                tracing::debug!("cship.context_bar: context_window present but used_percentage absent; rendering empty bar");
+                (0.0f64, true)
+            }
+        },
         None => (0.0f64, true),
     };
 
