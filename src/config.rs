@@ -81,12 +81,6 @@ pub struct SubfieldConfig {
     pub invert_threshold: Option<bool>,
 }
 
-/// Backwards-compatible type aliases (used by test code).
-#[cfg(test)]
-pub type CostSubfieldConfig = SubfieldConfig;
-#[cfg(test)]
-pub type ContextWindowSubfieldConfig = SubfieldConfig;
-
 /// Trait for uniform access to style/threshold fields shared by config types.
 /// Used by `render_styled_value()` to resolve sub-field → parent fallback.
 ///
