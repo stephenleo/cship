@@ -6,8 +6,10 @@
 /// `$cship.cost.total_lines_added` / `total_lines_removed` — integer counts.
 ///
 /// [Source: epics.md#Story 2.1, architecture.md#Structure Patterns]
-use crate::config::{CostConfig, CostSubfieldConfig, CshipConfig};
+use crate::config::{CostConfig, CshipConfig};
 use crate::context::Context;
+#[cfg(test)]
+use crate::config::CostSubfieldConfig;
 
 /// Renders `$cship.cost` — total cost as `$X.XX` with threshold color escalation.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
@@ -80,33 +82,7 @@ pub fn render_total_cost_usd(ctx: &Context, cfg: &CshipConfig) -> Option<String>
         }
     };
     let val_str = format!("{:.4}", val);
-    let style = sub_cfg.and_then(|c| c.style.as_deref());
-    // Extract threshold variables FIRST (before format check)
-    let warn_threshold = sub_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = sub_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = sub_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = sub_cfg.and_then(|c| c.critical_style.as_deref());
-    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
-        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
-        &val_str,
-        Some(val),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+    crate::format::render_styled_value(&val_str, Some(val), sub_cfg, None)
 }
 
 /// Renders `$cship.cost.total_duration_ms` — total wall time in milliseconds.
@@ -124,33 +100,7 @@ pub fn render_total_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<Stri
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg.and_then(|c| c.style.as_deref());
-    // Extract threshold variables FIRST (before format check)
-    let warn_threshold = sub_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = sub_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = sub_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = sub_cfg.and_then(|c| c.critical_style.as_deref());
-    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
-        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
-        &val_str,
-        Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+    crate::format::render_styled_value(&val_str, Some(val as f64), sub_cfg, None)
 }
 
 /// Renders `$cship.cost.total_api_duration_ms` — API-only duration in milliseconds.
@@ -168,33 +118,7 @@ pub fn render_total_api_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg.and_then(|c| c.style.as_deref());
-    // Extract threshold variables FIRST (before format check)
-    let warn_threshold = sub_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = sub_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = sub_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = sub_cfg.and_then(|c| c.critical_style.as_deref());
-    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
-        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
-        &val_str,
-        Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+    crate::format::render_styled_value(&val_str, Some(val as f64), sub_cfg, None)
 }
 
 /// Renders `$cship.cost.total_lines_added` — cumulative lines added this session.
@@ -212,33 +136,7 @@ pub fn render_total_lines_added(ctx: &Context, cfg: &CshipConfig) -> Option<Stri
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg.and_then(|c| c.style.as_deref());
-    // Extract threshold variables FIRST (before format check)
-    let warn_threshold = sub_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = sub_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = sub_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = sub_cfg.and_then(|c| c.critical_style.as_deref());
-    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
-        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
-        &val_str,
-        Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+    crate::format::render_styled_value(&val_str, Some(val as f64), sub_cfg, None)
 }
 
 /// Renders `$cship.cost.total_lines_removed` — cumulative lines removed this session.
@@ -256,37 +154,11 @@ pub fn render_total_lines_removed(ctx: &Context, cfg: &CshipConfig) -> Option<St
         }
     };
     let val_str = val.to_string();
-    let style = sub_cfg.and_then(|c| c.style.as_deref());
-    // Extract threshold variables FIRST (before format check)
-    let warn_threshold = sub_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = sub_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = sub_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = sub_cfg.and_then(|c| c.critical_style.as_deref());
-    if let Some(fmt) = sub_cfg.and_then(|c| c.format.as_deref()) {
-        let symbol = sub_cfg.and_then(|c| c.symbol.as_deref());
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val as f64),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
-        return crate::format::apply_module_format(fmt, Some(&val_str), symbol, effective_style);
-    }
-    Some(crate::ansi::apply_style_with_threshold(
-        &val_str,
-        Some(val as f64),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+    crate::format::render_styled_value(&val_str, Some(val as f64), sub_cfg, None)
 }
 
 fn is_subfield_disabled(
-    sub_cfg: Option<&CostSubfieldConfig>,
+    sub_cfg: Option<&crate::config::SubfieldConfig>,
     cost_cfg: Option<&CostConfig>,
 ) -> bool {
     // Sub-field explicit disabled takes precedence
