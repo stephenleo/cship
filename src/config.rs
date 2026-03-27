@@ -48,34 +48,18 @@ pub struct CostConfig {
     pub critical_style: Option<String>,
     pub format: Option<String>,
     // Sub-field per-display configs (map to [cship.cost.total_cost_usd] etc.)
-    pub total_cost_usd: Option<CostSubfieldConfig>,
-    pub total_duration_ms: Option<CostSubfieldConfig>,
-    pub total_api_duration_ms: Option<CostSubfieldConfig>,
-    pub total_lines_added: Option<CostSubfieldConfig>,
-    pub total_lines_removed: Option<CostSubfieldConfig>,
+    pub total_cost_usd: Option<SubfieldConfig>,
+    pub total_duration_ms: Option<SubfieldConfig>,
+    pub total_api_duration_ms: Option<SubfieldConfig>,
+    pub total_lines_added: Option<SubfieldConfig>,
+    pub total_lines_removed: Option<SubfieldConfig>,
 }
 
-/// Configuration for individual `[cship.cost.*]` sub-field modules.
+/// Unified configuration for individual sub-field modules
+/// (e.g. `[cship.cost.total_cost_usd]`, `[cship.context_window.used_percentage]`).
 #[derive(Debug, Deserialize, Default)]
-pub struct CostSubfieldConfig {
+pub struct SubfieldConfig {
     pub style: Option<String>,
-    /// Reserved — not yet rendered; included for config schema consistency.
-    pub symbol: Option<String>,
-    pub disabled: Option<bool>,
-    /// Reserved — not yet rendered; included for config schema consistency.
-    pub label: Option<String>,
-    pub warn_threshold: Option<f64>,
-    pub warn_style: Option<String>,
-    pub critical_threshold: Option<f64>,
-    pub critical_style: Option<String>,
-    pub format: Option<String>,
-}
-
-/// Configuration for individual `[cship.context_window.*]` sub-field modules.
-#[derive(Debug, Deserialize, Default)]
-pub struct ContextWindowSubfieldConfig {
-    pub style: Option<String>,
-    /// Used only in the format path (via `$symbol`); ignored in the default render path.
     pub symbol: Option<String>,
     pub disabled: Option<bool>,
     pub warn_threshold: Option<f64>,
@@ -95,6 +79,55 @@ pub struct ContextWindowSubfieldConfig {
     /// - Base `style` **still falls back to the parent** [`ContextWindowConfig`]`.style` when not
     ///   set on the sub-field. The style fallback is domain-independent and safe to inherit.
     pub invert_threshold: Option<bool>,
+}
+
+/// Backwards-compatible type aliases (used by test code).
+#[cfg(test)]
+pub type CostSubfieldConfig = SubfieldConfig;
+#[cfg(test)]
+pub type ContextWindowSubfieldConfig = SubfieldConfig;
+
+/// Trait for uniform access to style/threshold fields shared by config types.
+/// Used by `render_styled_value()` to resolve sub-field → parent fallback.
+///
+/// `format_str()` and `symbol_str()` default to `None`. Only parent configs
+/// whose sub-fields should inherit format/symbol (i.e., `ContextWindowConfig`)
+/// override these.
+pub trait HasThresholdStyle {
+    fn style(&self) -> Option<&str>;
+    fn warn_threshold(&self) -> Option<f64>;
+    fn warn_style(&self) -> Option<&str>;
+    fn critical_threshold(&self) -> Option<f64>;
+    fn critical_style(&self) -> Option<&str>;
+    fn format_str(&self) -> Option<&str> {
+        None
+    }
+    fn symbol_str(&self) -> Option<&str> {
+        None
+    }
+}
+
+#[allow(unused_macros)]
+macro_rules! impl_has_threshold_style {
+    ($t:ty) => {
+        impl HasThresholdStyle for $t {
+            fn style(&self) -> Option<&str> {
+                self.style.as_deref()
+            }
+            fn warn_threshold(&self) -> Option<f64> {
+                self.warn_threshold
+            }
+            fn warn_style(&self) -> Option<&str> {
+                self.warn_style.as_deref()
+            }
+            fn critical_threshold(&self) -> Option<f64> {
+                self.critical_threshold
+            }
+            fn critical_style(&self) -> Option<&str> {
+                self.critical_style.as_deref()
+            }
+        }
+    };
 }
 
 /// Configuration for `[cship.context_bar]` — visual progress bar with thresholds.
@@ -127,16 +160,40 @@ pub struct ContextWindowConfig {
     pub critical_style: Option<String>,
     pub format: Option<String>,
     // Per-sub-field configs (map to [cship.context_window.used_percentage] etc.)
-    pub used_percentage: Option<ContextWindowSubfieldConfig>,
-    pub remaining_percentage: Option<ContextWindowSubfieldConfig>,
-    pub size: Option<ContextWindowSubfieldConfig>,
-    pub total_input_tokens: Option<ContextWindowSubfieldConfig>,
-    pub total_output_tokens: Option<ContextWindowSubfieldConfig>,
-    pub current_usage_input_tokens: Option<ContextWindowSubfieldConfig>,
-    pub current_usage_output_tokens: Option<ContextWindowSubfieldConfig>,
-    pub current_usage_cache_creation_input_tokens: Option<ContextWindowSubfieldConfig>,
-    pub current_usage_cache_read_input_tokens: Option<ContextWindowSubfieldConfig>,
-    pub used_tokens: Option<ContextWindowSubfieldConfig>,
+    pub used_percentage: Option<SubfieldConfig>,
+    pub remaining_percentage: Option<SubfieldConfig>,
+    pub size: Option<SubfieldConfig>,
+    pub total_input_tokens: Option<SubfieldConfig>,
+    pub total_output_tokens: Option<SubfieldConfig>,
+    pub current_usage_input_tokens: Option<SubfieldConfig>,
+    pub current_usage_output_tokens: Option<SubfieldConfig>,
+    pub current_usage_cache_creation_input_tokens: Option<SubfieldConfig>,
+    pub current_usage_cache_read_input_tokens: Option<SubfieldConfig>,
+    pub used_tokens: Option<SubfieldConfig>,
+}
+
+impl HasThresholdStyle for ContextWindowConfig {
+    fn style(&self) -> Option<&str> {
+        self.style.as_deref()
+    }
+    fn warn_threshold(&self) -> Option<f64> {
+        self.warn_threshold
+    }
+    fn warn_style(&self) -> Option<&str> {
+        self.warn_style.as_deref()
+    }
+    fn critical_threshold(&self) -> Option<f64> {
+        self.critical_threshold
+    }
+    fn critical_style(&self) -> Option<&str> {
+        self.critical_style.as_deref()
+    }
+    fn format_str(&self) -> Option<&str> {
+        self.format.as_deref()
+    }
+    fn symbol_str(&self) -> Option<&str> {
+        self.symbol.as_deref()
+    }
 }
 
 /// Configuration for `[cship.vim]` — vim mode display.
