@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::config::CostSubfieldConfig;
 /// Render the `[cship.cost]` family of modules.
 ///
 /// `$cship.cost` — convenience alias: formats total_cost_usd as "$X.XX" with threshold styling.
@@ -8,8 +10,6 @@
 /// [Source: epics.md#Story 2.1, architecture.md#Structure Patterns]
 use crate::config::{CostConfig, CshipConfig};
 use crate::context::Context;
-#[cfg(test)]
-use crate::config::CostSubfieldConfig;
 
 /// Renders `$cship.cost` — total cost as `$X.XX` with threshold color escalation.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {

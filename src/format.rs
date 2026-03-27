@@ -67,16 +67,25 @@ pub fn render_styled_value(
             .and_then(|c| c.symbol.as_deref())
             .or_else(|| parent.and_then(|p| p.symbol_str()));
         let effective_style = crate::ansi::resolve_threshold_style(
-            effective_val, style, warn_threshold, warn_style,
-            critical_threshold, critical_style,
+            effective_val,
+            style,
+            warn_threshold,
+            warn_style,
+            critical_threshold,
+            critical_style,
         );
         return apply_module_format(fmt, Some(val_str), symbol, effective_style);
     }
 
     // Default path: apply_style_with_threshold handles no-threshold gracefully
     Some(crate::ansi::apply_style_with_threshold(
-        val_str, effective_val, style, warn_threshold, warn_style,
-        critical_threshold, critical_style,
+        val_str,
+        effective_val,
+        style,
+        warn_threshold,
+        warn_style,
+        critical_threshold,
+        critical_style,
     ))
 }
 
