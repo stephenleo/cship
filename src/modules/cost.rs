@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::config::SubfieldConfig;
 /// Render the `[cship.cost]` family of modules.
 ///
 /// `$cship.cost` — convenience alias: formats total_cost_usd as "$X.XX" with threshold styling.
@@ -172,7 +170,7 @@ fn is_subfield_disabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CostConfig, CshipConfig};
+    use crate::config::{CostConfig, CshipConfig, SubfieldConfig};
     use crate::context::{Context, Cost};
 
     fn ctx_with_cost(usd: f64) -> Context {

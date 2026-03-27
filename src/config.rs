@@ -101,29 +101,6 @@ pub trait HasThresholdStyle {
     }
 }
 
-#[allow(unused_macros)]
-macro_rules! impl_has_threshold_style {
-    ($t:ty) => {
-        impl HasThresholdStyle for $t {
-            fn style(&self) -> Option<&str> {
-                self.style.as_deref()
-            }
-            fn warn_threshold(&self) -> Option<f64> {
-                self.warn_threshold
-            }
-            fn warn_style(&self) -> Option<&str> {
-                self.warn_style.as_deref()
-            }
-            fn critical_threshold(&self) -> Option<f64> {
-                self.critical_threshold
-            }
-            fn critical_style(&self) -> Option<&str> {
-                self.critical_style.as_deref()
-            }
-        }
-    };
-}
-
 /// Configuration for `[cship.context_bar]` — visual progress bar with thresholds.
 /// Implemented in Story 2.2. Defined here so all Epic 2 config is available.
 #[derive(Debug, Deserialize, Default)]
