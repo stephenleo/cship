@@ -38,13 +38,25 @@ If you've already invested in Starship customization, CShip slots right in: add 
 
 ## Install {#install-curl}
 
-### Quick Install (recommended)
+### macOS / Linux {#install-macos-linux}
 
 ```sh
 curl -fsSL https://cship.dev/install.sh | bash
 ```
 
 Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64), downloads the binary to `~/.local/bin/cship`, creates a starter config at `~/.config/cship.toml`, wires the `statusLine` entry in `~/.claude/settings.json`, and optionally installs [Starship](https://starship.rs) and `libsecret-tools` (Linux only, needed for usage limits).
+
+### Windows {#install-windows}
+
+Run this one-liner in PowerShell (5.1 or later):
+
+```powershell
+irm https://raw.githubusercontent.com/stephenleo/cship/main/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\\Programs\\cship\\cship.exe`, writes config to `%USERPROFILE%\\.config\\cship.toml`, and registers the statusline in `%APPDATA%\\Claude\\settings.json`.
+
+> You can inspect the script before running: [install.ps1](https://raw.githubusercontent.com/stephenleo/cship/main/install.ps1)
 
 ### Cargo Install {#install-cargo}
 
@@ -54,7 +66,15 @@ Requires the Rust toolchain.
 cargo install cship
 ```
 
-After installing with `cargo`, wire the statusline manually in `~/.claude/settings.json`:
+After installing with `cargo` on **macOS / Linux**, wire the statusline manually in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": { "type": "command", "command": "cship" }
+}
+```
+
+After installing with `cargo` on **Windows**, wire the statusline manually in `%APPDATA%\\Claude\\settings.json`:
 
 ```json
 {
