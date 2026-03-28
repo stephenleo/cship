@@ -7,14 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.4.0] - 2026-03-28
 
 ### Added
-- Windows support: x86_64 and aarch64-pc-windows-msvc release targets
-- Windows installer (`install.ps1`) with WOW64 arch detection and JSON depth hardening
-- Windows uninstaller aligned with installer paths
-- Windows documentation in README and docs site
+- Added Windows support — native builds for x86_64 and arm64, PowerShell installer/uninstaller, and Windows docs ([@tkm3d1a](https://github.com/tkm3d1a))
+- Added `context_window.used_tokens` module ([@0xRaduan](https://github.com/0xRaduan))
+- Added `{remaining}` placeholder to usage limits format strings ([@tkm3d1a](https://github.com/tkm3d1a))
+- Added ability to read `rate_limits` from Claude Code stdin before falling back to the OAuth API ([@0xRaduan](https://github.com/0xRaduan))
+- Added ability to hide individual usage limit periods via empty format strings
+
+### Fixed
+- Fixed context bar showing blank at the start of a fresh session — now renders an empty 0% bar
+- Fixed token counts being truncated instead of rounded in display
+- Fixed crash when stdin contains partial rate_limits data
 
 ### Changed
-- PowerShell installer one-liner URL updated to `cship.dev` domain
-- CI test `test_remove_statusline_present` guarded as non-Windows only
+- Updated PowerShell installer URL to `cship.dev` domain
 
 ## [1.3.0] - 2026-03-14
 
