@@ -204,11 +204,11 @@ fn error_hint_for(
     match segment {
         "model" => (
             "model data absent from Claude Code context".into(),
-            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+            "Ensure Claude Code is running and cship is wired via \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} in ~/.claude/settings.json.".into(),
         ),
         "cost" => (
             "cost data absent from Claude Code context".into(),
-            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+            "Ensure Claude Code is running and cship is wired via \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} in ~/.claude/settings.json.".into(),
         ),
         "context_bar" | "context_window" => (
             "context_window data absent from Claude Code context (may be absent early in a session)".into(),
@@ -224,11 +224,11 @@ fn error_hint_for(
         ),
         "cwd" | "session_id" | "transcript_path" | "version" | "output_style" => (
             "session field absent from Claude Code context".into(),
-            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+            "Ensure Claude Code is running and cship is wired via \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} in ~/.claude/settings.json.".into(),
         ),
         "workspace" => (
             "workspace data absent from Claude Code context".into(),
-            "Ensure Claude Code is running and cship is invoked via the \"statusline\" key in ~/.claude/settings.json.".into(),
+            "Ensure Claude Code is running and cship is wired via \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} in ~/.claude/settings.json.".into(),
         ),
         "usage_limits" => {
             // Probe credential state to distinguish missing token from expired token.

@@ -116,7 +116,7 @@ fi
 SETTINGS="$ROOT/.claude/settings.json"
 if ! command -v python3 >/dev/null 2>&1; then
   echo "Warning: python3 not found. Skipping settings.json update."
-  echo "To wire cship manually, add \"statusline\": \"cship\" to $SETTINGS"
+  echo "To wire cship manually, add \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} to $SETTINGS"
 elif [ -f "$SETTINGS" ]; then
   python3 - "$SETTINGS" <<'PYEOF' || echo "Warning: failed to update settings.json — add statusLine manually."
 import json, sys

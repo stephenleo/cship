@@ -52,53 +52,40 @@ fn remove_binary(home: &std::path::Path) {
 }
 
 fn remove_statusline_from_settings(home: &std::path::Path) {
-    #[cfg(target_os = "windows")]
-    let path = match std::env::var("APPDATA") {
-        Ok(app_data) => std::path::Path::new(&app_data)
-            .join("Claude")
-            .join("settings.json"),
-        Err(_) => {
-            tracing::warn!(
-                "APPDATA env var not set; falling back to ~/.claude/settings.json for settings path"
-            );
-            home.join(".claude/settings.json")
-        }
-    };
-    #[cfg(not(target_os = "windows"))]
     let path = home.join(".claude/settings.json");
 
     if !path.exists() {
-        println!("settings.json not found — skipping.");
+        println!("settings.json not found at {} — skipping.", path.display());
         return;
     }
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) => {
-            println!("Could not read settings.json: {e}");
+            println!("Could not read {}: {e}", path.display());
             return;
         }
     };
     let mut map: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(&raw) {
         Ok(m) => m,
         Err(e) => {
-            println!("Could not parse settings.json: {e}");
+            println!("Could not parse {}: {e}", path.display());
             return;
         }
     };
-    if map.remove("statusline").is_some() {
+    if map.remove("statusLine").is_some() {
         let updated = match serde_json::to_string_pretty(&map) {
             Ok(s) => s,
             Err(e) => {
-                println!("Could not serialize settings.json: {e}");
+                println!("Could not serialize {}: {e}", path.display());
                 return;
             }
         };
         match std::fs::write(&path, updated + "\n") {
-            Ok(()) => println!("Removed \"statusline\" from settings.json"),
-            Err(e) => println!("Could not write settings.json: {e}"),
+            Ok(()) => println!("Removed \"statusLine\" from {}", path.display()),
+            Err(e) => println!("Could not write {}: {e}", path.display()),
         }
     } else {
-        println!("\"statusline\" not found in settings.json — skipping.");
+        println!("\"statusLine\" not found in {} — skipping.", path.display());
     }
 }
 
@@ -211,58 +198,21 @@ mod tests {
             let settings_path = claude_dir.join("settings.json");
             std::fs::write(
                 &settings_path,
-                r#"{"statusline":"cship","otherKey":"value"}"#,
+                r#"{"statusLine":{"type":"command","command":"cship"},"otherKey":"value"}"#,
             )
             .unwrap();
             remove_statusline_from_settings(home);
             let content = std::fs::read_to_string(&settings_path).unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
             assert!(
-                parsed.get("statusline").is_none(),
-                "statusline key should be removed"
+                parsed.get("statusLine").is_none(),
+                "statusLine key should be removed"
             );
             assert_eq!(
                 parsed.get("otherKey").and_then(|v| v.as_str()),
                 Some("value"),
                 "other keys should be preserved"
             );
-        });
-    }
-
-    #[test]
-    #[cfg(target_os = "windows")]
-    fn test_remove_statusline_uses_appdata_on_windows() {
-        with_tempdir(|home| {
-            // Create a temp APPDATA directory with Claude/settings.json
-            let tmp_appdata = tempfile::tempdir().unwrap();
-            let claude_dir = tmp_appdata.path().join("Claude");
-            std::fs::create_dir_all(&claude_dir).unwrap();
-            let settings_path = claude_dir.join("settings.json");
-            std::fs::write(
-                &settings_path,
-                r#"{"statusline":"cship","otherKey":"value"}"#,
-            )
-            .unwrap();
-
-            // SAFETY: guarded by HOME_MUTEX; no other threads read APPDATA concurrently.
-            unsafe { std::env::set_var("APPDATA", tmp_appdata.path()) };
-
-            remove_statusline_from_settings(home);
-
-            let content = std::fs::read_to_string(&settings_path).unwrap();
-            let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-            assert!(
-                parsed.get("statusline").is_none(),
-                "statusline key should be removed from APPDATA path on Windows"
-            );
-            assert_eq!(
-                parsed.get("otherKey").and_then(|v| v.as_str()),
-                Some("value"),
-                "other keys should be preserved"
-            );
-
-            // SAFETY: guarded by HOME_MUTEX; no other threads read APPDATA concurrently.
-            unsafe { std::env::remove_var("APPDATA") };
         });
     }
 
@@ -278,7 +228,7 @@ mod tests {
             // File should still be parseable and unchanged in content
             let content = std::fs::read_to_string(&settings_path).unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-            assert!(parsed.get("statusline").is_none());
+            assert!(parsed.get("statusLine").is_none());
             assert_eq!(
                 parsed.get("otherKey").and_then(|v| v.as_str()),
                 Some("value")

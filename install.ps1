@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Install cship — Claude Code statusline tool for Windows.
+    Install cship - Claude Code statusline tool for Windows.
 .DESCRIPTION
     Downloads the cship binary from GitHub Releases, installs it to
     %LOCALAPPDATA%\Programs\cship\, writes a default cship.toml, and
@@ -11,11 +11,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $REPO    = "stephenleo/cship"
-$INSTALL_DIR = Join-Path $env:LOCALAPPDATA "Programs\cship"
+$INSTALL_DIR = Join-Path $env:USERPROFILE ".local\bin"
 $BIN     = Join-Path $INSTALL_DIR "cship.exe"
 $CONFIG_DIR  = Join-Path $env:USERPROFILE ".config"
 $CONFIG_FILE = Join-Path $CONFIG_DIR "cship.toml"
-$SETTINGS    = Join-Path $env:APPDATA "Claude\settings.json"
+$SETTINGS    = Join-Path $env:USERPROFILE ".claude\settings.json"
 
 # --- Arch detection ---
 $arch = $env:PROCESSOR_ARCHITECTURE
@@ -53,19 +53,16 @@ New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 Invoke-WebRequest -Uri $downloadUrl -OutFile $BIN -UseBasicParsing
 Write-Host "Installed to: $BIN"
 
-# --- Add to PATH (offer) ---
+# --- Ensure ~/.local/bin is on PATH ---
 $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($currentPath -notlike "*$INSTALL_DIR*") {
-    $add = Read-Host "Add $INSTALL_DIR to your PATH? [Y/n]"
-    if ($add -ne "n" -and $add -ne "N") {
-        [Environment]::SetEnvironmentVariable(
-            "PATH",
-            "$currentPath;$INSTALL_DIR",
-            "User"
-        )
-        $env:PATH += ";$INSTALL_DIR"
-        Write-Host "Added to PATH (effective in new shells)."
-    }
+    [Environment]::SetEnvironmentVariable(
+        "PATH",
+        "$currentPath;$INSTALL_DIR",
+        "User"
+    )
+    $env:PATH += ";$INSTALL_DIR"
+    Write-Host "Added $INSTALL_DIR to your user PATH (effective in new shells)."
 }
 
 # --- Write default cship.toml ---
@@ -83,28 +80,29 @@ disabled = false
 '@ | Set-Content -Path $CONFIG_FILE -Encoding UTF8
     Write-Host "Config written to: $CONFIG_FILE"
 } else {
-    Write-Host "Config already exists at $CONFIG_FILE — skipping."
+    Write-Host "Config already exists at $CONFIG_FILE - skipping."
 }
 
 # --- Register statusline in Claude Code settings.json ---
 $claudeDir = Split-Path $SETTINGS
 if (-not (Test-Path $claudeDir)) {
-    Write-Host "Claude Code settings directory not found at $claudeDir — skipping settings update."
+    Write-Host "Claude Code settings directory not found at $claudeDir - skipping settings update."
     Write-Host "Authenticate in Claude Code first, then re-run this script."
 } elseif (-not (Test-Path $SETTINGS)) {
     # Create minimal settings.json
     New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
-    '{"statusline": "cship"}' | Set-Content -Path $SETTINGS -Encoding UTF8
-    Write-Host "Created settings.json with statusline entry."
+    '{"statusLine": {"type": "command", "command": "cship"}}' | Set-Content -Path $SETTINGS -Encoding UTF8
+    Write-Host "Created settings.json with statusLine entry: $SETTINGS"
 } else {
     $json = Get-Content $SETTINGS -Raw | ConvertFrom-Json
-    if (-not $json.PSObject.Properties["statusline"]) {
-        $json | Add-Member -NotePropertyName "statusline" -NotePropertyValue "cship"
+    $statusLineValue = [PSCustomObject]@{ type = "command"; command = "cship" }
+    if (-not $json.PSObject.Properties["statusLine"]) {
+        $json | Add-Member -NotePropertyName "statusLine" -NotePropertyValue $statusLineValue
     } else {
-        $json.statusline = "cship"
+        $json.statusLine = $statusLineValue
     }
     $json | ConvertTo-Json -Depth 100 | Set-Content -Path $SETTINGS -Encoding UTF8
-    Write-Host "Updated settings.json with statusline entry."
+    Write-Host "Updated settings.json with statusLine entry: $SETTINGS"
 }
 
 # --- First-run preview ---

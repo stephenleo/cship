@@ -54,7 +54,7 @@ Run this one-liner in PowerShell (5.1 or later):
 irm https://cship.dev/install.ps1 | iex
 ```
 
-Installs to `%LOCALAPPDATA%\Programs\cship\cship.exe`, writes config to `%USERPROFILE%\.config\cship.toml`, and registers the statusline in `%APPDATA%\Claude\settings.json`.
+Installs to `%USERPROFILE%\.local\bin\cship.exe`, writes config to `%USERPROFILE%\.config\cship.toml`, and registers the statusline in `%USERPROFILE%\.claude\settings.json`.
 
 > You can inspect the script before running: [install.ps1](https://cship.dev/install.ps1)
 
