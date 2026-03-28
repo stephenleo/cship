@@ -38,6 +38,11 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
+      - name: Copy installer scripts to public
+        run: |
+          cp install.ps1 docs/public/install.ps1
+          cp install.sh docs/public/install.sh
+
       - name: Build with VitePress
         run: npm run docs:build
         working-directory: docs

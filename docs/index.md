@@ -51,12 +51,12 @@ Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64)
 Run this one-liner in PowerShell (5.1 or later):
 
 ```powershell
-irm https://raw.githubusercontent.com/stephenleo/cship/main/install.ps1 | iex
+irm https://cship.dev/install.ps1 | iex
 ```
 
 Installs to `%LOCALAPPDATA%\Programs\cship\cship.exe`, writes config to `%USERPROFILE%\.config\cship.toml`, and registers the statusline in `%APPDATA%\Claude\settings.json`.
 
-> You can inspect the script before running: [install.ps1](https://raw.githubusercontent.com/stephenleo/cship/main/install.ps1)
+> You can inspect the script before running: [install.ps1](https://cship.dev/install.ps1)
 
 ### Cargo Install {#install-cargo}
 
