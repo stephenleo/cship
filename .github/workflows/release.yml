@@ -128,11 +128,33 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.version || github.ref_name }}
       - uses: actions/download-artifact@v4
+      - name: Extract changelog for this release
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "ERROR: Invalid version format: $TAG" >&2; exit 1
+          fi
+          awk -v ver="[$VERSION]" '
+            p && /^## \[/ { exit }
+            /^## / && index($0, ver) { p=1; next }
+            p { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "See commit history for changes in this release." > /tmp/release-notes.md
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version || github.ref_name }}
           files: cship-*/cship-*
+          body_path: /tmp/release-notes.md
+          generate_release_notes: true
 
   publish:
     name: Publish to crates.io
