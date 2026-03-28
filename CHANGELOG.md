@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [1.4.0] - 2026-03-28
+## [1.4.1] - 2026-03-28
 
 ### Added
 - Added Windows support — native builds for x86_64 and arm64, PowerShell installer/uninstaller, and Windows docs ([@tkm3d1a](https://github.com/tkm3d1a))
