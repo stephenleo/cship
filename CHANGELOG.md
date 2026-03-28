@@ -11,7 +11,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added `context_window.used_tokens` module ([@0xRaduan](https://github.com/0xRaduan))
 - Added `{remaining}` placeholder to usage limits format strings ([@tkm3d1a](https://github.com/tkm3d1a))
 - Added ability to read `rate_limits` from Claude Code stdin before falling back to the OAuth API ([@0xRaduan](https://github.com/0xRaduan))
-- Added ability to hide individual usage limit periods via empty format strings
 
 ### Fixed
 - Fixed context bar showing blank at the start of a fresh session — now renders an empty 0% bar
@@ -24,8 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.3.0] - 2026-03-14
 
 ### Added
-- `$starship_prompt` token support in format strings with `STARSHIP_SHELL` fix
-- Full Starship prompt showcase example in docs
+- Added `$starship_prompt` token to format strings — embed your full Starship prompt inside a cship layout
 
 ## [1.2.0] - 2026-03-14
 
