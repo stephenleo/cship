@@ -248,7 +248,7 @@ critical_style     = "bold red"
 
 Every style value is a `fg:#rrggbb` hex colour — no named colours anywhere. Amber warns, coral criticals.
 
-`<img src="./docs/examples/06.png" alt="Material Hex cship statusline example" width="600">
+<img src="./docs/examples/06.png" alt="Material Hex cship statusline example" width="600">
 
 <details>
 <summary>View config</summary>
@@ -476,6 +476,14 @@ Complete configuration reference, format string syntax, all module options, and 
 If you found this project useful, please give us a star ⭐ on [GitHub](https://github.com/stephenleo/cship)!
 
 If you find bugs or have suggestions, open an issue or submit a pull request. Contributions are very welcome!
+
+Before submitting a PR, run the following to match what CI checks:
+
+```sh
+cargo fmt && cargo clippy -- -D warnings && cargo test && cargo build --release
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full details.
 
 ## 💡 Inspiration
 - Inspired by [starship](https://starship.rs), built with Rust and the [Claude Code status line API](https://code.claude.com/docs/en/statusline).

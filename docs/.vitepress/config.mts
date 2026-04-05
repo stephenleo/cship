@@ -21,6 +21,7 @@ export default defineConfig({
       { text: 'Passthrough', link: '/passthrough' },
       { text: 'Showcase', link: '/showcase' },
       { text: 'FAQ', link: '/faq' },
+      { text: 'Contributing', link: '/contributing' },
       {
         text: 'GitHub',
         link: 'https://github.com/stephenleo/cship',
@@ -46,6 +47,7 @@ export default defineConfig({
         items: [
           { text: 'Showcase', link: '/showcase' },
           { text: 'FAQ', link: '/faq' },
+          { text: 'Contributing', link: '/contributing' },
         ],
       },
     ],
