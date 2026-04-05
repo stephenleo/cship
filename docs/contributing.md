@@ -26,14 +26,16 @@ cargo build --release
 
 If any of these fail locally, they will fail in CI. Fix them before opening a PR.
 
-## Adding a new module — recommended: BMAD method
+## Adding a new module
+
+### BMAD (Recommended)
 
 This project is built with [BMAD](https://github.com/bmad-code-org/BMAD-METHOD).
 
 1. Install BMAD in this repo.
 2. Run `/bmad-quick-dev` with a GitHub issue URL or a description of your change — it guides you from intent through spec, implementation, and review.
 
-## Adding a new module — manual (not recommended)
+### Manual (Not recommended)
 
 - Create `src/modules/{name}.rs` and update `src/modules/mod.rs` — no other files required.
 - Module signature must be exactly: `pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String>`
