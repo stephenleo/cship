@@ -64,6 +64,24 @@ The CShip `usage_limits` module fetches data from the Anthropic API using your C
 
 ---
 
+## How does the peak-time indicator handle time zones and DST?
+
+The `peak_usage` module checks whether the current time falls within the configured peak window in **US Pacific time**. It computes the UTC→Pacific offset internally — PDT (UTC−7) from the second Sunday of March through the first Sunday of November, PST (UTC−8) the rest of the year.
+
+There are no dependencies on system locale or `TZ` environment variable; the DST boundaries are calculated from the UTC date using Tomohiko Sakamoto's day-of-week algorithm.
+
+**Defaults:** Mon–Fri, 07:00–17:00 Pacific. To customise:
+
+```toml
+[cship.peak_usage]
+start_hour = 9   # 9 AM Pacific
+end_hour   = 18  # 6 PM Pacific (exclusive)
+```
+
+Set `end_hour = 24` to mean "through end of day". Weekends always return nothing.
+
+---
+
 ## Why is my cost or context not updating?
 
 **Cost and context window** data comes from Claude Code's JSON feed, which is updated on every statusline render (every time Claude Code calls `cship`). If these values appear stuck, check:

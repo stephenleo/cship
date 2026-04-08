@@ -107,6 +107,7 @@ Everything in the [Claude Code status line documentation](https://code.claude.co
 | `$cship.context_window` | Context window tokens (used/total) |
 | `$cship.context_window.used_tokens` | Real token count in context with percentage (e.g. `8%(79k/1000k)`) |
 | `$cship.usage_limits` | API usage limits (5hr / 7-day) |
+| `$cship.peak_usage` | Peak-time indicator (US Pacific business hours) |
 | `$cship.agent` | Sub-agent name |
 | `$cship.session` | Session identity info |
 | `$cship.workspace` | Workspace/project directory |
@@ -199,7 +200,7 @@ critical_style     = "bold red"
 
 ### 3. 💰 Cost Guardian
 
-Shows cost, lines changed, and rolling API usage limits all at once. Colour escalates as budgets fill.
+Shows cost, lines changed, rolling API usage limits, and a peak-time indicator. Colour escalates as budgets fill.
 
 <img src="./docs/examples/05.png" alt="Cost guardian cship statusline example" width="600">
 
@@ -210,7 +211,7 @@ Shows cost, lines changed, and rolling API usage limits all at once. Colour esca
 [cship]
 lines = [
   "$cship.model $cship.cost +$cship.cost.total_lines_added -$cship.cost.total_lines_removed",
-  "$cship.context_bar $cship.usage_limits",
+  "$cship.context_bar $cship.usage_limits $cship.peak_usage",
 ]
 
 [cship.model]
@@ -238,6 +239,9 @@ warn_threshold     = 70.0
 warn_style         = "bold yellow"
 critical_threshold = 90.0
 critical_style     = "bold red"
+
+[cship.peak_usage]
+style = "bold yellow"
 ```
 
 </details>

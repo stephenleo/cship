@@ -356,6 +356,37 @@ Setting both formats to `""` effectively hides the entire module.
 
 ---
 
+## `[cship.peak_usage]` — Peak-Time Indicator
+
+Shows when Anthropic's peak-time rate limiting is likely active, based on current time relative to US Pacific business hours. Returns nothing outside peak hours so the indicator disappears entirely.
+
+The check is purely time-based (Mon–Fri, default 07:00–17:00 Pacific) — no network calls.
+
+**Token:** `$cship.peak_usage`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | `bool` | `false` | Hide this module |
+| `style` | `string` | — | ANSI style |
+| `symbol` | `string` | `"⏰ "` | Prefix symbol |
+| `format` | `string` | `"[$symbol$value]($style)"` | Format string; `$value` = `Peak` |
+| `start_hour` | `integer` | `7` | Start of peak window in US Pacific time (0–23) |
+| `end_hour` | `integer` | `17` | End of peak window in US Pacific time, exclusive (0–24). Use `24` to mean through end of day |
+
+**Variables:** `$value` (`Peak`), `$symbol`, `$style`
+
+US Pacific DST is handled automatically — PDT (UTC−7) from the second Sunday of March to the first Sunday of November, PST (UTC−8) otherwise.
+
+```toml
+[cship.peak_usage]
+symbol     = "⏰ "
+style      = "fg:#e0af68"
+start_hour = 7
+end_hour   = 17
+```
+
+---
+
 ## `[cship.starship_prompt]` — Full Starship Prompt
 
 Renders your entire Starship-configured prompt in a single call. Unlike per-module passthrough (e.g., `$directory`, `$git_branch`), this token invokes `starship prompt` to produce the complete rendered prompt with all configured modules.
