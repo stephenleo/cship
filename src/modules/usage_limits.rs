@@ -246,10 +246,14 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
         if let Some(pct) = pct_opt {
             let pct_str = format!("{:.0}", pct);
             let remaining_str = format!("{:.0}", (100.0 - pct).max(0.0));
-            let reset_str = match resets_at_opt {
-                Some(s) => format_reset(crate::cache::iso8601_to_epoch(s), now),
+            let model_epoch = resets_at_opt
+                .as_ref()
+                .and_then(|s| crate::cache::iso8601_to_epoch(s));
+            let reset_str = match model_epoch {
+                Some(_) => format_reset(model_epoch, now),
                 None => "?".to_string(),
             };
+            let pace_str = format_pace(calculate_pace(*pct, model_epoch, SEVEN_DAY_SECS, now));
             let default_fmt;
             let fmt: &str = match fmt_opt {
                 Some(f) => f,
@@ -261,7 +265,8 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
             let rendered = fmt
                 .replace("{pct}", &pct_str)
                 .replace("{remaining}", &remaining_str)
-                .replace("{reset}", &reset_str);
+                .replace("{reset}", &reset_str)
+                .replace("{pace}", &pace_str);
             parts.push(rendered);
         }
     }
@@ -648,30 +653,23 @@ mod tests {
         assert_eq!(epoch_to_iso(Some(4_102_358_400)), "2099-12-31T00:00:00Z");
     }
 
-    fn now_secs() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    }
-
     // ── format_reset() tests ─────────────────────────────────────────────────
 
     #[test]
     fn test_format_reset_none_returns_question_mark() {
-        assert_eq!(format_reset(None, now_secs()), "?");
+        assert_eq!(format_reset(None, now_epoch()), "?");
     }
 
     #[test]
     fn test_format_reset_past_returns_now() {
-        let now = now_secs();
+        let now = now_epoch();
         assert_eq!(format_reset(Some(0), now), "now");
         assert_eq!(format_reset(Some(now.saturating_sub(1)), now), "now");
     }
 
     #[test]
     fn test_format_reset_hours_minutes() {
-        let now = now_secs();
+        let now = now_epoch();
         let result = format_reset(Some(now + 4 * 3600 + 12 * 60 + 30), now);
         assert!(
             result.contains('h') && result.contains('m'),
@@ -681,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_format_reset_days_hours() {
-        let now = now_secs();
+        let now = now_epoch();
         let result = format_reset(Some(now + 3 * 86400 + 2 * 3600 + 30), now);
         assert!(
             result.contains('d') && result.contains('h'),
@@ -691,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_format_reset_minutes_only() {
-        let now = now_secs();
+        let now = now_epoch();
         let result = format_reset(Some(now + 45 * 60 + 30), now);
         assert!(
             result.ends_with('m') && !result.contains('h'),
@@ -704,7 +702,7 @@ mod tests {
         // Anthropic API returns "+00:00" not "Z" — resolve_epoch must handle it
         let epoch = resolve_epoch(None, "2099-01-01T00:00:00+00:00");
         assert!(epoch.is_some(), "should parse +00:00 format");
-        let now = now_secs();
+        let now = now_epoch();
         let result = format_reset(epoch, now);
         assert_ne!(result, "?");
         assert_ne!(result, "now");
@@ -1162,14 +1160,14 @@ mod tests {
 
     #[test]
     fn test_format_reset_epoch_past_returns_now() {
-        let now = now_secs();
+        let now = now_epoch();
         assert_eq!(format_reset(Some(0), now), "now");
         assert_eq!(format_reset(Some(1), now), "now");
     }
 
     #[test]
     fn test_format_reset_epoch_hours_minutes() {
-        let now = now_secs();
+        let now = now_epoch();
         let result = format_reset(Some(now + 4 * 3600 + 12 * 60 + 30), now);
         assert!(
             result.contains('h') && result.contains('m'),
@@ -1179,7 +1177,7 @@ mod tests {
 
     #[test]
     fn test_format_reset_epoch_days_hours() {
-        let now = now_secs();
+        let now = now_epoch();
         let result = format_reset(Some(now + 3 * 86400 + 2 * 3600 + 30), now);
         assert!(
             result.contains('d') && result.contains('h'),
@@ -1189,7 +1187,7 @@ mod tests {
 
     #[test]
     fn test_format_reset_epoch_minutes_only() {
-        let now = now_secs();
+        let now = now_epoch();
         let result = format_reset(Some(now + 45 * 60 + 30), now);
         assert!(
             result.ends_with('m') && !result.contains('h'),
@@ -1201,7 +1199,7 @@ mod tests {
 
     #[test]
     fn test_calculate_pace_headroom() {
-        let now = now_secs();
+        let now = now_epoch();
         let pace = calculate_pace(30.0, Some(now + 9000), 18000, now);
         let p = pace.unwrap();
         assert!(p > 15.0 && p < 25.0, "expected ~+20 headroom, got {p}");
@@ -1209,7 +1207,7 @@ mod tests {
 
     #[test]
     fn test_calculate_pace_over_pace() {
-        let now = now_secs();
+        let now = now_epoch();
         let pace = calculate_pace(70.0, Some(now + 9000), 18000, now);
         let p = pace.unwrap();
         assert!(p < -15.0 && p > -25.0, "expected ~-20 over-pace, got {p}");
@@ -1217,13 +1215,13 @@ mod tests {
 
     #[test]
     fn test_calculate_pace_no_reset_returns_none() {
-        let pace = calculate_pace(50.0, None, 18000, now_secs());
+        let pace = calculate_pace(50.0, None, 18000, now_epoch());
         assert!(pace.is_none());
     }
 
     #[test]
     fn test_calculate_pace_zero_elapsed() {
-        let now = now_secs();
+        let now = now_epoch();
         let pace = calculate_pace(10.0, Some(now + 18000), 18000, now);
         let p = pace.unwrap();
         assert!(
@@ -1234,7 +1232,7 @@ mod tests {
 
     #[test]
     fn test_calculate_pace_reset_in_past() {
-        let now = now_secs();
+        let now = now_epoch();
         let pace = calculate_pace(30.0, Some(now.saturating_sub(100)), 18000, now);
         let p = pace.unwrap();
         assert!(p > 65.0 && p < 75.0, "expected ~+70 headroom, got {p}");
@@ -1463,6 +1461,38 @@ mod tests {
         assert!(
             result.contains("OP:12%/88%"),
             "custom opus format: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_per_model_pace_placeholder() {
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some(epoch_to_iso(Some(now_epoch + 302_400))),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            opus_format: Some("opus {pct}% pace:{pace}".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            !result.contains("{pace}"),
+            "literal {{pace}} should be substituted: {result:?}"
+        );
+        assert!(
+            result.contains("pace:+"),
+            "opus pace should show headroom: {result:?}"
         );
     }
 
