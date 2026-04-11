@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `cship.account` module for displaying the currently authenticated Anthropic account (work vs personal) — sources organization and account info from the `/api/oauth/profile` endpoint, with opt-in label mapping so org names / emails can be hidden behind user-defined labels ([@nh13](https://github.com/nh13), [#153](https://github.com/stephenleo/cship/pull/153))
+
 ## [1.7.1] - 2026-05-12
 
 ### Changed
