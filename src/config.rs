@@ -20,6 +20,7 @@ pub struct CshipConfig {
     pub workspace: Option<WorkspaceConfig>,
     pub usage_limits: Option<UsageLimitsConfig>,
     pub starship_prompt: Option<StarshipPromptConfig>,
+    pub account: Option<AccountConfig>,
 }
 
 /// Per-module config fields shared by all native CShip modules.
@@ -270,6 +271,35 @@ pub struct UsageLimitsConfig {
 #[derive(Debug, Deserialize, Default)]
 pub struct StarshipPromptConfig {
     pub disabled: Option<bool>,
+}
+
+/// Configuration for `[cship.account]` — displays the currently authenticated Anthropic account.
+///
+/// Sources account + organization metadata from the `/api/oauth/profile` endpoint so users
+/// can see whether they're on their work or personal Claude account at a glance. Opt-in
+/// label mapping lets users hide raw org names / emails behind friendly labels.
+///
+/// ## Format placeholders
+/// - `{label}` — resolved user label (from `labels` map, keyed by organization name).
+///   Falls back to `{organization}` when no mapping matches.
+/// - `{organization}` — raw organization `name` from the API (e.g. `"Fulcrum Genomics"`).
+/// - `{display_name}` — account `display_name` (e.g. `"Nils"`).
+/// - `{email}` — account `email` (PII; opt in explicitly).
+/// - `{tier}` — organization `rate_limit_tier` (e.g. `"default_claude_max_5x"`).
+/// - `{type}` — organization `organization_type` (e.g. `"claude_team"`, `"personal"`).
+#[derive(Debug, Deserialize, Default)]
+pub struct AccountConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub format: Option<String>,
+    /// Cache TTL in seconds. Default: 86400 (24 hours). Profile data rarely changes.
+    pub ttl: Option<u64>,
+    /// Opt-in mapping from raw organization name → user-friendly label.
+    /// Example: `{ "Fulcrum Genomics" = "work", "Personal Workspace" = "personal" }`
+    /// When a rendered value uses `{label}` and this map is absent or doesn't contain
+    /// the organization, the raw organization name is used instead.
+    pub labels: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// Result of a config load operation — includes the loaded config and its source.

@@ -13,6 +13,7 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::account::AccountProfile;
 use crate::usage_limits::UsageLimitsData;
 
 const PASSTHROUGH_TTL: Duration = Duration::from_secs(5);
@@ -164,6 +165,67 @@ pub fn write_usage_limits(transcript_path: &Path, data: &UsageLimitsData, ttl_se
         expires_at: now + ttl_secs,
         five_hour_resets_at: epoch_or_never(&data.five_hour_resets_at),
         seven_day_resets_at: epoch_or_never(&data.seven_day_resets_at),
+    };
+    if let Ok(json) = serde_json::to_string(&envelope) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+// ── Account profile cache ────────────────────────────────────────────────────
+//
+// The `/api/oauth/profile` endpoint returns static-ish data (organization name,
+// account display name, tier). It only changes when the user switches orgs, so
+// we cache much more aggressively than usage_limits — default TTL is 24h.
+//
+// Cache layout mirrors `usage_limits`: a JSON envelope keyed by transcript_path,
+// stored alongside other cship caches in `{dirname}/cship/{stem}-account-profile`.
+// The OAuth token is NEVER written to the cache (NFR-S3).
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AccountProfileCacheEnvelope {
+    data: AccountProfile,
+    expires_at: u64,
+}
+
+/// Derive the cache file path for an account profile.
+/// Example: `.../session.jsonl` → `.../cship/session-account-profile`
+fn account_profile_cache_path(transcript_path: &Path) -> Option<std::path::PathBuf> {
+    let dir = transcript_path.parent()?;
+    let stem = transcript_path.file_stem()?.to_str()?;
+    Some(dir.join("cship").join(format!("{stem}-account-profile")))
+}
+
+/// Read a cached account profile.
+///
+/// When `allow_stale` is `false`, returns `None` if the envelope's `expires_at`
+/// has passed. When `allow_stale` is `true`, returns the most recent cached data
+/// regardless of TTL — used as a fallback when a live fetch times out.
+pub fn read_account_profile(transcript_path: &Path, allow_stale: bool) -> Option<AccountProfile> {
+    let path = account_profile_cache_path(transcript_path)?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let envelope: AccountProfileCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    if allow_stale {
+        return Some(envelope.data);
+    }
+    if now_epoch() >= envelope.expires_at {
+        return None;
+    }
+    Some(envelope.data)
+}
+
+/// Write account profile data to the cache file.
+/// Sets `expires_at` to now + `ttl_secs`. Silently no-ops on any I/O error —
+/// cache write failure must never surface to the user.
+pub fn write_account_profile(transcript_path: &Path, data: &AccountProfile, ttl_secs: u64) {
+    let Some(path) = account_profile_cache_path(transcript_path) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let envelope = AccountProfileCacheEnvelope {
+        data: data.clone(),
+        expires_at: now_epoch() + ttl_secs,
     };
     if let Ok(json) = serde_json::to_string(&envelope) {
         let _ = std::fs::write(path, json);
@@ -562,6 +624,88 @@ mod tests {
         // Cache should still be valid (not expired within the custom window)
         let result = read_usage_limits(&transcript, false);
         assert!(result.is_some(), "cache with 300s TTL should be valid");
+        drop(dir);
+    }
+
+    // ── Account profile cache tests ───────────────────────────────────────────
+
+    fn sample_profile() -> AccountProfile {
+        AccountProfile {
+            account_display_name: Some("Nils".into()),
+            account_email: Some("nils@example.com".into()),
+            organization_name: Some("Example Team".into()),
+            organization_tier: Some("default_claude_max_5x".into()),
+            organization_type: Some("claude_team".into()),
+        }
+    }
+
+    #[test]
+    fn test_account_profile_cache_hit_within_ttl() {
+        let (dir, transcript) = temp_transcript("acct_hit");
+        write_account_profile(&transcript, &sample_profile(), 86_400);
+        let result = read_account_profile(&transcript, false);
+        assert_eq!(result, Some(sample_profile()));
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_cache_miss_nonexistent_file() {
+        let (_dir, transcript) = temp_transcript("acct_miss");
+        assert!(read_account_profile(&transcript, false).is_none());
+    }
+
+    #[test]
+    fn test_account_profile_cache_file_path_and_json_structure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400);
+        let expected = dir.path().join("cship").join("transcript-account-profile");
+        assert!(expected.exists(), "cache file at: {expected:?}");
+        let raw = std::fs::read_to_string(&expected).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["data"]["account_display_name"], "Nils");
+        assert_eq!(v["data"]["organization_name"], "Example Team");
+        assert!(v["expires_at"].is_number());
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_ttl_invalidation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400);
+        // Overwrite with expired envelope
+        let path = dir.path().join("cship").join("transcript-account-profile");
+        let expired = serde_json::json!({
+            "data": {
+                "account_display_name": "Nils",
+                "account_email": null,
+                "organization_name": "Example Team",
+                "organization_tier": null,
+                "organization_type": null
+            },
+            "expires_at": 0_u64
+        });
+        std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
+        assert!(read_account_profile(&transcript, false).is_none());
+        // Allow stale recovers data regardless
+        let stale = read_account_profile(&transcript, true).unwrap();
+        assert_eq!(stale.organization_name.as_deref(), Some("Example Team"));
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_write_creates_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("deep").join("nested").join("t.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400);
+        let cache_file = dir
+            .path()
+            .join("deep")
+            .join("nested")
+            .join("cship")
+            .join("t-account-profile");
+        assert!(cache_file.exists(), "dir should be created: {cache_file:?}");
         drop(dir);
     }
 }

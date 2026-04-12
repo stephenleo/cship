@@ -1,3 +1,4 @@
+pub mod account;
 pub mod ansi;
 pub mod cache;
 pub mod config;

@@ -182,6 +182,11 @@ fn is_disabled(name: &str, cfg: &crate::config::CshipConfig) -> bool {
             .as_ref()
             .and_then(|m| m.disabled)
             .unwrap_or(false),
+        "account" => cfg
+            .account
+            .as_ref()
+            .and_then(|m| m.disabled)
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -274,6 +279,7 @@ fn config_section_for(module_name: &str, cfg: &crate::config::CshipConfig) -> &'
         }
         "workspace" if cfg.workspace.is_some() => "[cship.workspace]",
         "usage_limits" if cfg.usage_limits.is_some() => "[cship.usage_limits]",
+        "account" if cfg.account.is_some() => "[cship.account]",
         _ => "(default)",
     }
 }
