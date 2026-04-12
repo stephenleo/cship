@@ -1,3 +1,4 @@
+pub mod account;
 pub mod agent;
 pub mod context_bar;
 pub mod context_window;
@@ -52,6 +53,7 @@ pub const ALL_NATIVE_MODULES: &[&str] = &[
     "cship.usage_limits.oauth_apps",
     "cship.usage_limits.extra_usage",
     "cship.peak_usage",
+    "cship.account",
 ];
 
 /// Static dispatch registry — the ONLY file modified when adding a new native module.
@@ -123,10 +125,42 @@ pub fn render_module(
         "cship.usage_limits.cowork" => usage_limits::render_cowork(ctx, cfg),
         "cship.usage_limits.oauth_apps" => usage_limits::render_oauth_apps(ctx, cfg),
         "cship.usage_limits.extra_usage" => usage_limits::render_extra_usage(ctx, cfg),
-        // Peak usage indicator — time-based peak-hour check
         "cship.peak_usage" => peak_usage::render(ctx, cfg),
+        "cship.account" => account::render(ctx, cfg),
         other => {
             tracing::warn!("cship: unknown native module '{other}' — skipping");
+            None
+        }
+    }
+}
+
+/// Spawn `fetch_fn` on a new thread and wait up to 2 seconds for the result.
+///
+/// Returns `None` on API error or timeout, logging a warning in both cases.
+/// `module_name` is used as the log prefix (e.g. `"cship.account"`).
+///
+/// Shared by modules that perform non-blocking network fetches with a cache-miss
+/// fallback. Currently used by `account`; `usage_limits` has its own copy that
+/// should be migrated in a follow-up.
+const FETCH_TIMEOUT_SECS: u64 = 2;
+
+pub(crate) fn fetch_with_timeout<T, F>(module_name: &str, fetch_fn: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        tx.send(fetch_fn()).ok();
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS)) {
+        Ok(Ok(data)) => Some(data),
+        Ok(Err(e)) => {
+            tracing::warn!("{module_name}: API fetch failed: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("{module_name}: API fetch timed out after {FETCH_TIMEOUT_SECS}s");
             None
         }
     }
