@@ -13,6 +13,7 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::account::AccountProfile;
 use crate::usage_limits::UsageLimitsData;
 
 const PASSTHROUGH_TTL: Duration = Duration::from_secs(5);
@@ -64,6 +65,8 @@ struct UsageLimitsCacheEnvelope {
     expires_at: u64,
     five_hour_resets_at: u64,
     seven_day_resets_at: u64,
+    #[serde(default)]
+    token_fingerprint: Option<String>,
 }
 
 /// Derive the cache file path for usage limits.
@@ -130,10 +133,20 @@ fn epoch_or_never(s: &str) -> u64 {
 /// When `allow_stale` is `true`, returns the most recently written data regardless
 /// of TTL or reset timestamps — used as a fallback when a live API fetch times out
 /// so the statusline shows something meaningful rather than going blank.
-pub fn read_usage_limits(transcript_path: &Path, allow_stale: bool) -> Option<UsageLimitsData> {
+pub fn read_usage_limits(
+    transcript_path: &Path,
+    allow_stale: bool,
+    expected_fingerprint: Option<&str>,
+) -> Option<UsageLimitsData> {
     let path = usage_limits_cache_path(transcript_path)?;
     let raw = std::fs::read_to_string(&path).ok()?;
     let envelope: UsageLimitsCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    // Fingerprint mismatch always invalidates — stale data from wrong account is harmful
+    if let Some(expected) = expected_fingerprint
+        && envelope.token_fingerprint.as_deref() != Some(expected)
+    {
+        return None;
+    }
     if allow_stale {
         return Some(envelope.data);
     }
@@ -151,7 +164,12 @@ pub fn read_usage_limits(transcript_path: &Path, allow_stale: bool) -> Option<Us
 /// Sets `expires_at` to now + `ttl_secs` seconds (default 60).
 /// Silently no-ops on any I/O error — cache write failure must never surface to the user.
 /// The OAuth token is never present in the written data (NFR-S3).
-pub fn write_usage_limits(transcript_path: &Path, data: &UsageLimitsData, ttl_secs: u64) {
+pub fn write_usage_limits(
+    transcript_path: &Path,
+    data: &UsageLimitsData,
+    ttl_secs: u64,
+    token_fingerprint: Option<&str>,
+) {
     let Some(path) = usage_limits_cache_path(transcript_path) else {
         return;
     };
@@ -164,6 +182,85 @@ pub fn write_usage_limits(transcript_path: &Path, data: &UsageLimitsData, ttl_se
         expires_at: now + ttl_secs,
         five_hour_resets_at: epoch_or_never(&data.five_hour_resets_at),
         seven_day_resets_at: epoch_or_never(&data.seven_day_resets_at),
+        token_fingerprint: token_fingerprint.map(String::from),
+    };
+    if let Ok(json) = serde_json::to_string(&envelope) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+// ── Account profile cache ────────────────────────────────────────────────────
+//
+// The `/api/oauth/profile` endpoint returns static-ish data (organization name,
+// account display name, tier). It only changes when the user switches orgs, so
+// we cache much more aggressively than usage_limits — default TTL is 24h.
+//
+// Cache layout mirrors `usage_limits`: a JSON envelope keyed by transcript_path,
+// stored alongside other cship caches in `{dirname}/cship/{stem}-account-profile`.
+// The OAuth token is NEVER written to the cache (NFR-S3).
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AccountProfileCacheEnvelope {
+    data: AccountProfile,
+    expires_at: u64,
+    #[serde(default)]
+    token_fingerprint: Option<String>,
+}
+
+/// Derive the cache file path for an account profile.
+/// Example: `.../session.jsonl` → `.../cship/session-account-profile`
+fn account_profile_cache_path(transcript_path: &Path) -> Option<std::path::PathBuf> {
+    let dir = transcript_path.parent()?;
+    let stem = transcript_path.file_stem()?.to_str()?;
+    Some(dir.join("cship").join(format!("{stem}-account-profile")))
+}
+
+/// Read a cached account profile.
+///
+/// When `allow_stale` is `false`, returns `None` if the envelope's `expires_at`
+/// has passed. When `allow_stale` is `true`, returns the most recent cached data
+/// regardless of TTL — used as a fallback when a live fetch times out.
+pub fn read_account_profile(
+    transcript_path: &Path,
+    allow_stale: bool,
+    expected_fingerprint: Option<&str>,
+) -> Option<AccountProfile> {
+    let path = account_profile_cache_path(transcript_path)?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let envelope: AccountProfileCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    if let Some(expected) = expected_fingerprint
+        && envelope.token_fingerprint.as_deref() != Some(expected)
+    {
+        return None;
+    }
+    if allow_stale {
+        return Some(envelope.data);
+    }
+    if now_epoch() >= envelope.expires_at {
+        return None;
+    }
+    Some(envelope.data)
+}
+
+/// Write account profile data to the cache file.
+/// Sets `expires_at` to now + `ttl_secs`. Silently no-ops on any I/O error —
+/// cache write failure must never surface to the user.
+pub fn write_account_profile(
+    transcript_path: &Path,
+    data: &AccountProfile,
+    ttl_secs: u64,
+    token_fingerprint: Option<&str>,
+) {
+    let Some(path) = account_profile_cache_path(transcript_path) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let envelope = AccountProfileCacheEnvelope {
+        data: data.clone(),
+        expires_at: now_epoch() + ttl_secs,
+        token_fingerprint: token_fingerprint.map(String::from),
     };
     if let Ok(json) = serde_json::to_string(&envelope) {
         let _ = std::fs::write(path, json);
@@ -295,8 +392,8 @@ mod tests {
     #[test]
     fn test_usage_limits_cache_hit_within_ttl() {
         let (dir, transcript) = temp_transcript("s5_2_hit");
-        write_usage_limits(&transcript, &sample_data(), 60);
-        let result = read_usage_limits(&transcript, false);
+        write_usage_limits(&transcript, &sample_data(), 60, None);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(result.is_some(), "fresh cache should return Some");
         let data = result.unwrap();
         assert!((data.five_hour_pct - 23.4).abs() < f64::EPSILON);
@@ -307,7 +404,7 @@ mod tests {
     #[test]
     fn test_usage_limits_cache_miss_nonexistent_file() {
         let (_dir, transcript) = temp_transcript("s5_2_miss");
-        let result = read_usage_limits(&transcript, false);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(
             result.is_none(),
             "nonexistent cache file should return None"
@@ -318,7 +415,7 @@ mod tests {
     fn test_usage_limits_cache_file_path_and_json_structure() {
         let dir = tempfile::tempdir().expect("tempdir");
         let transcript = dir.path().join("transcript.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 60);
+        write_usage_limits(&transcript, &sample_data(), 60, None);
         let expected_path = dir.path().join("cship").join("transcript-usage-limits");
         assert!(expected_path.exists(), "cache file at: {expected_path:?}");
         let raw = std::fs::read_to_string(&expected_path).unwrap();
@@ -336,7 +433,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let transcript = dir.path().join("transcript.jsonl");
         // Write a valid cache entry first
-        write_usage_limits(&transcript, &sample_data(), 60);
+        write_usage_limits(&transcript, &sample_data(), 60, None);
         // Overwrite with an expired envelope (expires_at = 0, resets_at far future)
         let path = dir.path().join("cship").join("transcript-usage-limits");
         let expired = serde_json::json!({
@@ -351,7 +448,7 @@ mod tests {
             "seven_day_resets_at": 9_999_999_999_u64
         });
         std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
-        let result = read_usage_limits(&transcript, false);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(result.is_none(), "expired TTL should return None");
         drop(dir);
     }
@@ -369,8 +466,8 @@ mod tests {
             five_hour_resets_at_epoch: None,
             seven_day_resets_at_epoch: None,
         };
-        write_usage_limits(&transcript, &data, 60);
-        let result = read_usage_limits(&transcript, false);
+        write_usage_limits(&transcript, &data, 60, None);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(
             result.is_none(),
             "past five_hour_resets_at should invalidate cache"
@@ -382,7 +479,7 @@ mod tests {
     fn test_usage_limits_write_creates_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let transcript = dir.path().join("deep").join("nested").join("t.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 60);
+        write_usage_limits(&transcript, &sample_data(), 60, None);
         let cache_file = dir
             .path()
             .join("deep")
@@ -409,8 +506,8 @@ mod tests {
             five_hour_resets_at_epoch: None,
             seven_day_resets_at_epoch: None,
         };
-        write_usage_limits(&transcript, &data, 60);
-        let result = read_usage_limits(&transcript, false);
+        write_usage_limits(&transcript, &data, 60, None);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(
             result.is_none(),
             "past seven_day_resets_at should invalidate cache"
@@ -431,8 +528,8 @@ mod tests {
             five_hour_resets_at_epoch: None,
             seven_day_resets_at_epoch: None,
         };
-        write_usage_limits(&transcript, &data, 60);
-        let result = read_usage_limits(&transcript, false);
+        write_usage_limits(&transcript, &data, 60, None);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(
             result.is_some(),
             "empty resets_at should not trigger early invalidation"
@@ -445,7 +542,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let transcript = dir.path().join("transcript.jsonl");
         // Write a valid cache entry, then overwrite with expired TTL
-        write_usage_limits(&transcript, &sample_data(), 60);
+        write_usage_limits(&transcript, &sample_data(), 60, None);
         let path = dir.path().join("cship").join("transcript-usage-limits");
         let expired = serde_json::json!({
             "data": {
@@ -461,11 +558,11 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
         // Normal read returns None (TTL expired)
         assert!(
-            read_usage_limits(&transcript, false).is_none(),
+            read_usage_limits(&transcript, false, None).is_none(),
             "normal read should be None"
         );
         // Stale read returns data regardless
-        let stale = read_usage_limits(&transcript, true);
+        let stale = read_usage_limits(&transcript, true, None);
         assert!(stale.is_some(), "stale read should return data");
         assert!((stale.unwrap().five_hour_pct - 77.0).abs() < f64::EPSILON);
         drop(dir);
@@ -474,7 +571,7 @@ mod tests {
     #[test]
     fn test_read_usage_limits_allow_stale_returns_none_when_no_file() {
         let (_dir, transcript) = temp_transcript("stale_miss");
-        assert!(read_usage_limits(&transcript, true).is_none());
+        assert!(read_usage_limits(&transcript, true, None).is_none());
     }
 
     #[test]
@@ -518,8 +615,8 @@ mod tests {
             five_hour_resets_at_epoch: None,
             seven_day_resets_at_epoch: None,
         };
-        write_usage_limits(&transcript, &data, 60);
-        let result = read_usage_limits(&transcript, false);
+        write_usage_limits(&transcript, &data, 60, None);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(
             result.is_none(),
             "past five_hour_resets_at (+00:00 format) should invalidate cache"
@@ -547,7 +644,7 @@ mod tests {
         // Issue #95: configurable TTL — verify custom TTL is respected in cache envelope
         let dir = tempfile::tempdir().expect("tempdir");
         let transcript = dir.path().join("transcript.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 300);
+        write_usage_limits(&transcript, &sample_data(), 300, None);
         let path = dir.path().join("cship").join("transcript-usage-limits");
         let raw = std::fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -560,8 +657,197 @@ mod tests {
             expires_at.saturating_sub(now)
         );
         // Cache should still be valid (not expired within the custom window)
-        let result = read_usage_limits(&transcript, false);
+        let result = read_usage_limits(&transcript, false, None);
         assert!(result.is_some(), "cache with 300s TTL should be valid");
+        drop(dir);
+    }
+
+    // ── Account profile cache tests ───────────────────────────────────────────
+
+    fn sample_profile() -> AccountProfile {
+        AccountProfile {
+            account_display_name: Some("Nils".into()),
+            account_email: Some("nils@example.com".into()),
+            organization_name: Some("Example Team".into()),
+            organization_tier: Some("default_claude_max_5x".into()),
+            organization_type: Some("claude_team".into()),
+        }
+    }
+
+    #[test]
+    fn test_account_profile_cache_hit_within_ttl() {
+        let (dir, transcript) = temp_transcript("acct_hit");
+        write_account_profile(&transcript, &sample_profile(), 86_400, None);
+        let result = read_account_profile(&transcript, false, None);
+        assert_eq!(result, Some(sample_profile()));
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_cache_miss_nonexistent_file() {
+        let (_dir, transcript) = temp_transcript("acct_miss");
+        assert!(read_account_profile(&transcript, false, None).is_none());
+    }
+
+    #[test]
+    fn test_account_profile_cache_file_path_and_json_structure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400, None);
+        let expected = dir.path().join("cship").join("transcript-account-profile");
+        assert!(expected.exists(), "cache file at: {expected:?}");
+        let raw = std::fs::read_to_string(&expected).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["data"]["account_display_name"], "Nils");
+        assert_eq!(v["data"]["organization_name"], "Example Team");
+        assert!(v["expires_at"].is_number());
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_ttl_invalidation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400, None);
+        // Overwrite with expired envelope
+        let path = dir.path().join("cship").join("transcript-account-profile");
+        let expired = serde_json::json!({
+            "data": {
+                "account_display_name": "Nils",
+                "account_email": null,
+                "organization_name": "Example Team",
+                "organization_tier": null,
+                "organization_type": null
+            },
+            "expires_at": 0_u64
+        });
+        std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
+        assert!(read_account_profile(&transcript, false, None).is_none());
+        // Allow stale recovers data regardless
+        let stale = read_account_profile(&transcript, true, None).unwrap();
+        assert_eq!(stale.organization_name.as_deref(), Some("Example Team"));
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_write_creates_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("deep").join("nested").join("t.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400, None);
+        let cache_file = dir
+            .path()
+            .join("deep")
+            .join("nested")
+            .join("cship")
+            .join("t-account-profile");
+        assert!(cache_file.exists(), "dir should be created: {cache_file:?}");
+        drop(dir);
+    }
+
+    // ── Token fingerprint tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_usage_limits_fingerprint_match_returns_data() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_usage_limits(&transcript, &sample_data(), 60, Some("fp_work_account"));
+        let result = read_usage_limits(&transcript, false, Some("fp_work_account"));
+        assert!(result.is_some(), "matching fingerprint should return data");
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_fingerprint_mismatch_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_usage_limits(&transcript, &sample_data(), 60, Some("fp_work_account"));
+        let result = read_usage_limits(&transcript, false, Some("fp_personal_acct"));
+        assert!(
+            result.is_none(),
+            "mismatched fingerprint should return None"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_fingerprint_mismatch_even_when_stale_allowed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_usage_limits(&transcript, &sample_data(), 60, Some("fp_work_account"));
+        let result = read_usage_limits(&transcript, true, Some("fp_personal_acct"));
+        assert!(
+            result.is_none(),
+            "fingerprint mismatch should invalidate even with allow_stale"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_usage_limits_old_cache_no_fingerprint_treated_as_miss() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        let path = dir.path().join("cship").join("transcript-usage-limits");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let now = now_epoch();
+        let old_cache = serde_json::json!({
+            "data": {
+                "five_hour_pct": 42.0,
+                "seven_day_pct": 18.0,
+                "five_hour_resets_at": "2099-01-01T00:00:00Z",
+                "seven_day_resets_at": "2099-01-01T00:00:00Z"
+            },
+            "expires_at": now + 300,
+            "five_hour_resets_at": 9_999_999_999_u64,
+            "seven_day_resets_at": 9_999_999_999_u64
+        });
+        std::fs::write(&path, serde_json::to_string(&old_cache).unwrap()).unwrap();
+        // Old cache without fingerprint must be a miss when caller provides a fingerprint
+        let result = read_usage_limits(&transcript, false, Some("fp_any"));
+        assert!(
+            result.is_none(),
+            "old cache without fingerprint should be treated as miss"
+        );
+        let result = read_usage_limits(&transcript, false, None);
+        assert!(
+            result.is_some(),
+            "old cache should still work when no fingerprint expected"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_fingerprint_match_returns_data() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400, Some("fp_work"));
+        let result = read_account_profile(&transcript, false, Some("fp_work"));
+        assert!(result.is_some(), "matching fingerprint should return data");
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_fingerprint_mismatch_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400, Some("fp_work"));
+        let result = read_account_profile(&transcript, false, Some("fp_personal"));
+        assert!(
+            result.is_none(),
+            "mismatched fingerprint should return None"
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_account_profile_fingerprint_mismatch_even_when_stale_allowed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        write_account_profile(&transcript, &sample_profile(), 86_400, Some("fp_work"));
+        let result = read_account_profile(&transcript, true, Some("fp_personal"));
+        assert!(
+            result.is_none(),
+            "fingerprint mismatch should invalidate even with allow_stale"
+        );
         drop(dir);
     }
 }

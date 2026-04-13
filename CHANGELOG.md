@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+- `cship.account` module for displaying the currently authenticated Anthropic account (work vs personal) — sources organization and account info from the `/api/oauth/profile` endpoint, with opt-in label mapping so org names can be replaced with user-defined labels (e.g. `"Fulcrum Genomics" = "work"`). Supports format string placeholders: `{label}`, `{organization}`, `{display_name}`, `{email}`, `{tier}`, `{type}`. Cached for 24 hours (configurable via `ttl`).
+
 ## [1.4.1] - 2026-03-28
 
 ### Added
