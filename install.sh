@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── 0. Argument parsing ───────────────────────────────────────────────────────
+YES=false
+for arg in "$@"; do
+  case "$arg" in
+    --yes|-y) YES=true ;;
+    *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+  esac
+done
+
+# ── 0b. Interactive detection ─────────────────────────────────────────────────
+# Non-interactive when /dev/tty is unavailable (Docker, CI pipelines, etc.)
+INTERACTIVE=false
+if { exec 3</dev/tty && exec 3<&-; } 2>/dev/null; then
+  INTERACTIVE=true
+fi
+
 # Allow CSHIP_TEST_ROOT to override HOME for all path resolution (testability)
 ROOT="${CSHIP_TEST_ROOT:-$HOME}"
 INSTALL_DIR="$ROOT/.local/bin"
@@ -51,22 +67,34 @@ echo "Installed cship to ${INSTALL_DIR}/cship"
 
 # ── 4. Linux: libsecret-tools check (usage limits dependency) ─────────────────
 if [ "$OS" = "Linux" ] && ! command -v secret-tool >/dev/null 2>&1; then
-  printf "Install libsecret-tools? (required for usage limits on Linux) [Y/n] "
-  read -r answer </dev/tty
-  case "$answer" in
-    [Nn]*) echo "Skipping — usage limits module unavailable until installed manually." ;;
-    *)     sudo apt-get install -y libsecret-tools ;;
-  esac
+  if [ "$YES" = "true" ]; then
+    sudo apt-get install -y libsecret-tools
+  elif [ "$INTERACTIVE" = "true" ]; then
+    printf "Install libsecret-tools? (required for usage limits on Linux) [Y/n] "
+    read -r answer </dev/tty
+    case "$answer" in
+      [Nn]*) echo "Skipping — usage limits module unavailable until installed manually." ;;
+      *)     sudo apt-get install -y libsecret-tools ;;
+    esac
+  else
+    echo "Skipping libsecret-tools (non-interactive). Re-run with --yes or install manually: sudo apt-get install -y libsecret-tools"
+  fi
 fi
 
 # ── 5. Starship detection and optional install ────────────────────────────────
 if ! command -v starship >/dev/null 2>&1; then
-  printf "Starship not found. Install Starship? (required for passthrough modules) [Y/n] "
-  read -r answer </dev/tty
-  case "$answer" in
-    [Nn]*) echo "Skipping Starship install. Native cship modules will still work." ;;
-    *)     curl -sS https://starship.rs/install.sh | sh ;;
-  esac
+  if [ "$YES" = "true" ]; then
+    curl -sS https://starship.rs/install.sh | sh -s -- --yes
+  elif [ "$INTERACTIVE" = "true" ]; then
+    printf "Starship not found. Install Starship? (required for passthrough modules) [Y/n] "
+    read -r answer </dev/tty
+    case "$answer" in
+      [Nn]*) echo "Skipping Starship install. Native cship modules will still work." ;;
+      *)     curl -sS https://starship.rs/install.sh | sh ;;
+    esac
+  else
+    echo "Skipping Starship install (non-interactive). Re-run with --yes or install manually: curl -sS https://starship.rs/install.sh | sh"
+  fi
 fi
 
 # ── 6. cship.toml — create minimal config (idempotent) ───────────────────────

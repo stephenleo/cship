@@ -44,7 +44,16 @@ If you've already invested in Starship customization, CShip slots right in: add 
 curl -fsSL https://cship.dev/install.sh | bash
 ```
 
-Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64), downloads the binary to `~/.local/bin/cship`, creates a starter config at `~/.config/cship.toml`, wires the `statusLine` entry in `~/.claude/settings.json`, and optionally installs [Starship](https://starship.rs) and `libsecret-tools` (Linux only, needed for usage limits).
+Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64), downloads the binary to `~/.local/bin/cship`, creates a starter config at `~/.config/cship.toml`, and wires the `statusLine` entry in `~/.claude/settings.json`.
+
+Optional dependencies ([Starship](https://starship.rs) for passthrough modules, and `libsecret-tools` on Linux for usage limits) are handled as follows:
+
+- **Interactive terminal** — the installer prompts you for each.
+- **`--yes` / `-y`** — auto-installs all optional deps without prompting:
+  ```sh
+  curl -fsSL https://cship.dev/install.sh | bash -s -- --yes
+  ```
+- **Non-interactive** (Docker `RUN`, CI pipelines, no TTY) — optional deps are skipped automatically; the installer prints instructions for manual installation.
 
 ### Windows {#install-windows}
 
