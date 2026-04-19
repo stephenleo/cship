@@ -31,7 +31,10 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 
     let symbol = cost_cfg.and_then(|c| c.symbol.as_deref());
     let style = cost_cfg.and_then(|c| c.style.as_deref());
-    let formatted = format!("${:.2}", val);
+    let currency_symbol = cost_cfg.and_then(|c| c.currency_symbol.as_deref()).unwrap_or("$");
+    let conversion_rate = cost_cfg.and_then(|c| c.conversion_rate).unwrap_or(1.0);
+    let converted_val = val * conversion_rate;
+    let formatted = format!("{}{:.2}", currency_symbol, converted_val);
 
     // Extract threshold variables FIRST (before format check)
     let warn_threshold = cost_cfg.and_then(|c| c.warn_threshold);
@@ -193,6 +196,35 @@ mod tests {
         let ctx = ctx_with_cost(0.01234);
         let result = render(&ctx, &CshipConfig::default());
         assert_eq!(result, Some("$0.01".to_string()));
+    }
+
+    #[test]
+    fn test_cost_renders_custom_currency_symbol() {
+        let ctx = ctx_with_cost(1.50);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                currency_symbol: Some("£".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg);
+        assert_eq!(result, Some("£1.50".to_string()));
+    }
+
+    #[test]
+    fn test_cost_renders_with_conversion_rate() {
+        let ctx = ctx_with_cost(1.00);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                currency_symbol: Some("£".to_string()),
+                conversion_rate: Some(0.79),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg);
+        assert_eq!(result, Some("£0.79".to_string()));
     }
 
     #[test]
