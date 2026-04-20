@@ -265,6 +265,26 @@ pub struct UsageLimitsConfig {
     pub five_hour_format: Option<String>,
     pub seven_day_format: Option<String>,
     pub separator: Option<String>,
+    /// Format string for extra usage display. Shown when extra_usage.is_enabled is true.
+    /// Placeholders: {pct}, {used}, {limit}, {remaining}
+    /// Default: "extra: {pct}% (${used}/${limit})"
+    pub extra_usage_format: Option<String>,
+    /// Format string for 7-day Opus breakdown. Shown when API returns non-null data.
+    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Default: "opus {pct}%"
+    pub opus_format: Option<String>,
+    /// Format string for 7-day Sonnet breakdown.
+    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Default: "sonnet {pct}%"
+    pub sonnet_format: Option<String>,
+    /// Format string for 7-day Cowork breakdown.
+    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Default: "cowork {pct}%"
+    pub cowork_format: Option<String>,
+    /// Format string for 7-day OAuth apps breakdown.
+    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Default: "oauth {pct}%"
+    pub oauth_apps_format: Option<String>,
 }
 
 /// Configuration for `[cship.peak_usage]` — peak-time indicator.

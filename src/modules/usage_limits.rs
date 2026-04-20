@@ -11,75 +11,203 @@ use crate::config::{CshipConfig, UsageLimitsConfig};
 use crate::context::Context;
 use crate::usage_limits::UsageLimitsData;
 
-/// Render the usage limits module.
+/// Shared data-fetch logic for the usage limits module and its sub-field renderers.
 ///
-/// Render flow (exact order):
-/// 1. Check disabled flag — silent None
-/// 2. Extract transcript_path — silent None if absent
-/// 3. Cache hit → render immediately, no thread
-/// 4. Cache miss → get OAuth token, dispatch fetch thread, recv_timeout(2s)
-/// 5. Format output
-/// 6. Apply threshold styling (higher of two pcts)
-pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+/// Stdin `rate_limits` always provides the freshest 5h/7d values (sent every render
+/// by Claude Code). Cache/OAuth provide per-model + extra usage data.
+///
+/// Strategy:
+/// 1. Start with stdin 5h/7d data (always freshest)
+/// 2. Enrich with per-model + extra usage from cache or OAuth
+/// 3. If OAuth fails, merge stdin with stale cache for per-model/extra
+/// 4. If no cache at all, return stdin-only (no per-model/extra)
+fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     let ul_cfg = cfg.usage_limits.as_ref();
 
-    // Step 1: disabled flag → silent None
     if ul_cfg.and_then(|c| c.disabled) == Some(true) {
         return None;
     }
 
-    // Step 2: try to use rate_limits from stdin (Claude Code sends this directly)
-    let data = if let Some(from_stdin) = data_from_stdin_rate_limits(ctx) {
-        from_stdin
-    } else {
-        // Step 3: fall back to cache / OAuth API fetch
-        let transcript_str = ctx.transcript_path.as_deref()?;
-        let transcript_path = std::path::Path::new(transcript_str);
+    let transcript_path = ctx.transcript_path.as_deref().map(std::path::Path::new);
 
-        if let Some(cached) = cache::read_usage_limits(transcript_path, false) {
-            cached
-        } else {
-            let token = match crate::platform::get_oauth_token() {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("cship.usage_limits: credential retrieval failed: {e}");
-                    return None;
-                }
-            };
+    // Stdin provides the freshest 5h/7d values
+    let stdin_data = data_from_stdin_rate_limits(ctx);
 
-            let ttl_secs = ul_cfg.and_then(|c| c.ttl).unwrap_or(60);
+    // Try to get full data (per-model + extra) from cache or OAuth
+    let full_data = transcript_path.and_then(|tp| {
+        // Fresh cache?
+        if let Some(cached) = cache::read_usage_limits(tp, false) {
+            return Some(cached);
+        }
+        // OAuth fetch?
+        if let Some(fresh) = fetch_and_cache(tp, ul_cfg) {
+            return Some(fresh);
+        }
+        // Stale cache as last resort for per-model/extra
+        cache::read_usage_limits(tp, true)
+    });
 
-            match fetch_with_timeout(move || crate::usage_limits::fetch_usage_limits(&token)) {
-                Some(fresh) => {
-                    cache::write_usage_limits(transcript_path, &fresh, ttl_secs);
-                    fresh
-                }
-                None => cache::read_usage_limits(transcript_path, true)?,
-            }
+    match (stdin_data, full_data) {
+        // Merge: stdin 5h/7d (fresh) + cache/OAuth per-model/extra
+        (Some(stdin), Some(full)) => Some(UsageLimitsData {
+            five_hour_pct: stdin.five_hour_pct,
+            seven_day_pct: stdin.seven_day_pct,
+            five_hour_resets_at_epoch: stdin.five_hour_resets_at_epoch,
+            seven_day_resets_at_epoch: stdin.seven_day_resets_at_epoch,
+            ..full
+        }),
+        // Stdin only (no per-model/extra)
+        (Some(stdin), None) => Some(stdin),
+        // No stdin, use cache/OAuth data as-is
+        (None, Some(full)) => Some(full),
+        // Nothing available
+        (None, None) => None,
+    }
+}
+
+/// Attempt an OAuth fetch with timeout and cache the result.
+/// Returns `None` on credential failure, API error, timeout, or if a negative
+/// cache marker indicates a recent failure (30s cooldown to avoid hammering).
+fn fetch_and_cache(
+    transcript_path: &std::path::Path,
+    ul_cfg: Option<&UsageLimitsConfig>,
+) -> Option<UsageLimitsData> {
+    // Check negative cache — avoid retrying immediately after a failure
+    if cache::read_negative_marker(transcript_path) {
+        tracing::debug!("cship.usage_limits: skipping OAuth (recent failure cooldown)");
+        return None;
+    }
+
+    let token = match crate::platform::get_oauth_token() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("cship.usage_limits: credential retrieval failed: {e}");
+            cache::write_negative_marker(transcript_path, 30);
+            return None;
         }
     };
 
-    // Step 5: format output
-    let default_ul_cfg = UsageLimitsConfig::default();
-    let content = format_output(&data, ul_cfg.unwrap_or(&default_ul_cfg));
+    let ttl_secs = ul_cfg.and_then(|c| c.ttl).unwrap_or(60);
 
-    // Step 6: threshold styling — use higher of the two utilization percentages
+    match fetch_with_timeout(move || crate::usage_limits::fetch_usage_limits(&token)) {
+        Some(fresh) => {
+            cache::write_usage_limits(transcript_path, &fresh, ttl_secs);
+            Some(fresh)
+        }
+        None => {
+            cache::write_negative_marker(transcript_path, 30);
+            None
+        }
+    }
+}
+
+/// Apply threshold styling using the higher of 5h/7d utilization.
+fn apply_threshold(content: &str, data: &UsageLimitsData, cfg: &CshipConfig) -> String {
+    let ul_cfg = cfg.usage_limits.as_ref();
     let max_pct = data.five_hour_pct.max(data.seven_day_pct);
-    let style = ul_cfg.and_then(|c| c.style.as_deref());
-    let warn_threshold = ul_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = ul_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = ul_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = ul_cfg.and_then(|c| c.critical_style.as_deref());
-
-    Some(crate::ansi::apply_style_with_threshold(
-        &content,
+    crate::ansi::apply_style_with_threshold(
+        content,
         Some(max_pct),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+        ul_cfg.and_then(|c| c.style.as_deref()),
+        ul_cfg.and_then(|c| c.warn_threshold),
+        ul_cfg.and_then(|c| c.warn_style.as_deref()),
+        ul_cfg.and_then(|c| c.critical_threshold),
+        ul_cfg.and_then(|c| c.critical_style.as_deref()),
+    )
+}
+
+/// Render the usage limits module (5h + 7d + per-model + extra usage combined).
+pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    let data = resolve_data(ctx, cfg)?;
+    let default_ul_cfg = UsageLimitsConfig::default();
+    let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
+    let content = format_output(&data, ul_cfg);
+    Some(apply_threshold(&content, &data, cfg))
+}
+
+/// Render only the per-model breakdown (opus, sonnet, cowork, oauth_apps).
+pub fn render_per_model(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    let data = resolve_data(ctx, cfg)?;
+    let default_ul_cfg = UsageLimitsConfig::default();
+    let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
+    let content = format_per_model(&data, ul_cfg);
+    if content.is_empty() {
+        return None;
+    }
+    Some(apply_threshold(&content, &data, cfg))
+}
+
+/// Render a single model's usage (opus, sonnet, cowork, or oauth).
+fn render_model(
+    ctx: &Context,
+    cfg: &CshipConfig,
+    name: &str,
+    pct: impl FnOnce(&UsageLimitsData) -> Option<f64>,
+    resets_at: impl FnOnce(&UsageLimitsData) -> &Option<String>,
+    fmt: impl FnOnce(&UsageLimitsConfig) -> Option<&str>,
+) -> Option<String> {
+    let data = resolve_data(ctx, cfg)?;
+    let default_ul_cfg = UsageLimitsConfig::default();
+    let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
+    let content = format_single_model(name, pct(&data), resets_at(&data), fmt(ul_cfg))?;
+    Some(apply_threshold(&content, &data, cfg))
+}
+
+/// Render only the opus 7-day usage.
+pub fn render_opus(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    render_model(
+        ctx,
+        cfg,
+        "opus",
+        |d| d.seven_day_opus_pct,
+        |d| &d.seven_day_opus_resets_at,
+        |c| c.opus_format.as_deref(),
+    )
+}
+
+/// Render only the sonnet 7-day usage.
+pub fn render_sonnet(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    render_model(
+        ctx,
+        cfg,
+        "sonnet",
+        |d| d.seven_day_sonnet_pct,
+        |d| &d.seven_day_sonnet_resets_at,
+        |c| c.sonnet_format.as_deref(),
+    )
+}
+
+/// Render only the cowork 7-day usage.
+pub fn render_cowork(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    render_model(
+        ctx,
+        cfg,
+        "cowork",
+        |d| d.seven_day_cowork_pct,
+        |d| &d.seven_day_cowork_resets_at,
+        |c| c.cowork_format.as_deref(),
+    )
+}
+
+/// Render only the oauth_apps 7-day usage.
+pub fn render_oauth_apps(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    render_model(
+        ctx,
+        cfg,
+        "oauth",
+        |d| d.seven_day_oauth_apps_pct,
+        |d| &d.seven_day_oauth_apps_resets_at,
+        |c| c.oauth_apps_format.as_deref(),
+    )
+}
+
+/// Render only the extra usage section.
+pub fn render_extra_usage(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    let data = resolve_data(ctx, cfg)?;
+    let default_ul_cfg = UsageLimitsConfig::default();
+    let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
+    let content = format_extra_usage(&data, ul_cfg)?;
+    Some(apply_threshold(&content, &data, cfg))
 }
 
 /// Spawn `fetch_fn` on a new thread and wait up to 2 seconds for the result.
@@ -141,11 +269,9 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     Some(UsageLimitsData {
         five_hour_pct: five_pct,
         seven_day_pct: seven_pct,
-        // ISO string fields unused on the stdin path — epoch fields carry the reset time.
-        five_hour_resets_at: String::new(),
-        seven_day_resets_at: String::new(),
         five_hour_resets_at_epoch: five_epoch,
         seven_day_resets_at_epoch: seven_epoch,
+        ..Default::default()
     })
 }
 
@@ -155,24 +281,44 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
 /// - `{pct}` — percentage used as integer (e.g. `"23"`)
 /// - `{remaining}` — percentage remaining as integer (e.g. `"77"`)
 /// - `{reset}` — time-until-reset string (e.g. `"4h12m"`)
+/// - `{pace}` — signed pace string (e.g. `"+20%"`, `"-15%"`, `"?"`)
+///
+/// Per-model breakdowns (opus, sonnet, cowork, oauth_apps) are appended when
+/// the API returns non-null data. Extra usage is appended when enabled.
 ///
 /// Defaults (backwards compatible with pre-7.2 hardcoded output):
 /// - `five_hour_format`: `"5h: {pct}% resets in {reset}"`
 /// - `seven_day_format`: `"7d: {pct}% resets in {reset}"`
 /// - `separator`: `" | "`
 fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
+    let sep = cfg.separator.as_deref().unwrap_or(" | ");
+    let now = now_epoch();
+
+    const FIVE_HOUR_SECS: u64 = 18_000;
+    const SEVEN_DAY_SECS: u64 = 604_800;
+
+    let five_h_epoch = resolve_epoch(data.five_hour_resets_at_epoch, &data.five_hour_resets_at);
+    let seven_d_epoch = resolve_epoch(data.seven_day_resets_at_epoch, &data.seven_day_resets_at);
+
     let five_h_pct = format!("{:.0}", data.five_hour_pct);
     let five_h_remaining = format!("{:.0}", (100.0 - data.five_hour_pct).max(0.0));
-    let five_h_reset = match data.five_hour_resets_at_epoch {
-        Some(epoch) => format_time_until_epoch(epoch),
-        None => format_time_until(&data.five_hour_resets_at),
-    };
+    let five_h_reset = format_reset(five_h_epoch, now);
+    let five_h_pace = format_pace(calculate_pace(
+        data.five_hour_pct,
+        five_h_epoch,
+        FIVE_HOUR_SECS,
+        now,
+    ));
+
     let seven_d_pct = format!("{:.0}", data.seven_day_pct);
     let seven_d_remaining = format!("{:.0}", (100.0 - data.seven_day_pct).max(0.0));
-    let seven_d_reset = match data.seven_day_resets_at_epoch {
-        Some(epoch) => format_time_until_epoch(epoch),
-        None => format_time_until(&data.seven_day_resets_at),
-    };
+    let seven_d_reset = format_reset(seven_d_epoch, now);
+    let seven_d_pace = format_pace(calculate_pace(
+        data.seven_day_pct,
+        seven_d_epoch,
+        SEVEN_DAY_SECS,
+        now,
+    ));
 
     let five_h_fmt = cfg
         .five_hour_format
@@ -182,69 +328,185 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
         .seven_day_format
         .as_deref()
         .unwrap_or("7d: {pct}% resets in {reset}");
-    let sep = cfg.separator.as_deref().unwrap_or(" | ");
 
     let five_h_part = five_h_fmt
         .replace("{pct}", &five_h_pct)
         .replace("{remaining}", &five_h_remaining)
-        .replace("{reset}", &five_h_reset);
+        .replace("{reset}", &five_h_reset)
+        .replace("{pace}", &five_h_pace);
     let seven_d_part = seven_d_fmt
         .replace("{pct}", &seven_d_pct)
         .replace("{remaining}", &seven_d_remaining)
-        .replace("{reset}", &seven_d_reset);
+        .replace("{reset}", &seven_d_reset)
+        .replace("{pace}", &seven_d_pace);
 
-    format!("{five_h_part}{sep}{seven_d_part}")
+    let mut parts: Vec<String> = vec![five_h_part, seven_d_part];
+
+    let per_model = format_per_model(data, cfg);
+    if !per_model.is_empty() {
+        parts.push(per_model);
+    }
+
+    if let Some(extra) = format_extra_usage(data, cfg) {
+        parts.push(extra);
+    }
+
+    parts.join(sep)
 }
 
-/// Convert a Unix epoch reset timestamp to a human-readable time-until string.
-///
-/// This is the epoch-native equivalent of `format_time_until`, used on the stdin path
-/// to avoid a round-trip through ISO 8601 formatting and re-parsing.
-///
-/// - Past timestamp → `"now"`
-/// - < 1 hour → `"45m"`
-/// - < 1 day → `"4h12m"`
-/// - >= 1 day → `"3d2h"`
-fn format_time_until_epoch(reset_epoch: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    if now >= reset_epoch {
-        return "now".to_string();
-    }
-    format_remaining_secs(reset_epoch - now)
-}
+/// Format a single model's usage into a string. Returns `None` if the model has no data.
+fn format_single_model(
+    name: &str,
+    pct: Option<f64>,
+    resets_at: &Option<String>,
+    fmt_override: Option<&str>,
+) -> Option<String> {
+    let pct = pct?;
+    let now = now_epoch();
+    const SEVEN_DAY_SECS: u64 = 604_800;
 
-/// Convert an ISO 8601 reset timestamp to a human-readable time-until string.
-///
-/// - Empty string → `"?"`
-/// - Unparseable → `"?"`
-/// - Past timestamp → `"now"`
-/// - < 1 hour → `"45m"`
-/// - < 1 day → `"4h12m"`
-/// - >= 1 day → `"3d2h"`
-fn format_time_until(resets_at: &str) -> String {
-    if resets_at.is_empty() {
-        return "?".to_string();
-    }
-    let reset_epoch = match crate::cache::iso8601_to_epoch(resets_at) {
-        Some(e) => e,
-        None => return "?".to_string(),
+    let pct_str = format!("{:.0}", pct);
+    let remaining_str = format!("{:.0}", (100.0 - pct).max(0.0));
+    let model_epoch = resets_at
+        .as_ref()
+        .and_then(|s| crate::cache::iso8601_to_epoch(s));
+    let reset_str = match model_epoch {
+        Some(_) => format_reset(model_epoch, now),
+        None => "?".to_string(),
     };
-    let now = std::time::SystemTime::now()
+    let pace_str = format_pace(calculate_pace(pct, model_epoch, SEVEN_DAY_SECS, now));
+    let default_fmt;
+    let fmt: &str = match fmt_override {
+        Some(f) => f,
+        None => {
+            default_fmt = format!("{name} {{pct}}%");
+            &default_fmt
+        }
+    };
+    Some(
+        fmt.replace("{pct}", &pct_str)
+            .replace("{remaining}", &remaining_str)
+            .replace("{reset}", &reset_str)
+            .replace("{pace}", &pace_str),
+    )
+}
+
+/// Format the per-model breakdown (opus, sonnet, cowork, oauth_apps).
+/// Returns an empty string when no per-model data is present.
+fn format_per_model(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
+    let sep = cfg.separator.as_deref().unwrap_or(" | ");
+    let parts: Vec<String> = model_entries(data, cfg)
+        .into_iter()
+        .filter_map(|(name, pct, resets_at, fmt)| format_single_model(name, pct, resets_at, fmt))
+        .collect();
+    parts.join(sep)
+}
+
+/// Return the list of (name, pct, resets_at, format_override) for all per-model entries.
+#[allow(clippy::type_complexity)]
+fn model_entries<'a>(
+    data: &'a UsageLimitsData,
+    cfg: &'a UsageLimitsConfig,
+) -> Vec<(&'a str, Option<f64>, &'a Option<String>, Option<&'a str>)> {
+    vec![
+        (
+            "opus",
+            data.seven_day_opus_pct,
+            &data.seven_day_opus_resets_at,
+            cfg.opus_format.as_deref(),
+        ),
+        (
+            "sonnet",
+            data.seven_day_sonnet_pct,
+            &data.seven_day_sonnet_resets_at,
+            cfg.sonnet_format.as_deref(),
+        ),
+        (
+            "cowork",
+            data.seven_day_cowork_pct,
+            &data.seven_day_cowork_resets_at,
+            cfg.cowork_format.as_deref(),
+        ),
+        (
+            "oauth",
+            data.seven_day_oauth_apps_pct,
+            &data.seven_day_oauth_apps_resets_at,
+            cfg.oauth_apps_format.as_deref(),
+        ),
+    ]
+}
+
+/// Format the extra usage section. Returns `None` when extra usage is absent or disabled.
+///
+/// The `{active}` placeholder renders `"⚡"` when either 5h or 7d utilization is at 100%
+/// (meaning requests are currently consuming extra credits), or `"💤"` otherwise.
+fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option<String> {
+    if data.extra_usage_enabled != Some(true) {
+        return None;
+    }
+    let eu_pct = data
+        .extra_usage_utilization
+        .map(|v| format!("{:.0}", v))
+        .unwrap_or_else(|| "?".into());
+    let eu_used = data
+        .extra_usage_used_credits
+        .map(|v| format!("{:.2}", v / 100.0))
+        .unwrap_or_else(|| "?".into());
+    let eu_limit = data
+        .extra_usage_monthly_limit
+        .map(|v| format!("{:.0}", v / 100.0))
+        .unwrap_or_else(|| "?".into());
+    let eu_remaining = match (
+        data.extra_usage_monthly_limit,
+        data.extra_usage_used_credits,
+    ) {
+        (Some(limit), Some(used)) => format!("{:.2}", (limit - used).max(0.0) / 100.0),
+        _ => "?".into(),
+    };
+    let active = if data.five_hour_pct >= 100.0 || data.seven_day_pct >= 100.0 {
+        "\u{26a1}" // ⚡
+    } else {
+        "\u{1f4a4}" // 💤
+    };
+    let eu_fmt = cfg
+        .extra_usage_format
+        .as_deref()
+        .unwrap_or("{active} extra: {pct}% (${used}/${limit})");
+    Some(
+        eu_fmt
+            .replace("{active}", active)
+            .replace("{pct}", &eu_pct)
+            .replace("{used}", &eu_used)
+            .replace("{limit}", &eu_limit)
+            .replace("{remaining}", &eu_remaining),
+    )
+}
+
+fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
-    if now >= reset_epoch {
-        return "now".to_string();
+        .unwrap_or(0)
+}
+
+/// Resolve a reset epoch: prefer a pre-computed epoch, fall back to parsing an ISO 8601 string.
+fn resolve_epoch(epoch: Option<u64>, iso: &str) -> Option<u64> {
+    epoch.or_else(|| crate::cache::iso8601_to_epoch(iso))
+}
+
+/// Format a resolved epoch as a human-readable time-until string.
+/// `None` → `"?"`, past → `"now"`, otherwise `"4h12m"` / `"3d2h"` / `"45m"`.
+fn format_reset(epoch: Option<u64>, now: u64) -> String {
+    match epoch {
+        None => "?".to_string(),
+        Some(e) if now >= e => "now".to_string(),
+        Some(e) => format_remaining_secs(e - now),
     }
-    format_remaining_secs(reset_epoch - now)
 }
 
 /// Format a number of remaining seconds as a compact human-readable string.
 ///
-/// Shared arithmetic used by both `format_time_until_epoch` and `format_time_until`.
+/// Shared arithmetic used by `format_reset`.
 ///
 /// - < 1 hour → `"45m"`
 /// - < 1 day → `"4h12m"`
@@ -259,6 +521,40 @@ fn format_remaining_secs(secs: u64) -> String {
         format!("{}h{}m", hours, mins % 60)
     } else {
         format!("{}m", mins)
+    }
+}
+
+/// Calculate pace: how far ahead or behind linear consumption the user is.
+///
+/// Returns `Some(pace)` where positive = headroom, negative = over-pace.
+/// Returns `None` when `resets_at_epoch` is unavailable.
+fn calculate_pace(
+    used_pct: f64,
+    resets_at_epoch: Option<u64>,
+    window_secs: u64,
+    now: u64,
+) -> Option<f64> {
+    let reset = resets_at_epoch?;
+    let remaining = reset.saturating_sub(now);
+    let elapsed = window_secs.saturating_sub(remaining);
+    let elapsed_fraction = elapsed as f64 / window_secs as f64;
+    let expected_pct = elapsed_fraction * 100.0;
+    Some(expected_pct - used_pct)
+}
+
+/// Format a pace value as a signed percentage string.
+/// Positive → "+20%", negative → "-15%", None → "?".
+fn format_pace(pace: Option<f64>) -> String {
+    match pace {
+        Some(p) => {
+            let rounded = p.round() as i64;
+            if rounded >= 0 {
+                format!("+{rounded}%")
+            } else {
+                format!("{rounded}%")
+            }
+        }
+        None => "?".to_string(),
     }
 }
 
@@ -298,6 +594,16 @@ mod tests {
         }
     }
 
+    fn sample_data() -> UsageLimitsData {
+        UsageLimitsData {
+            five_hour_pct: 23.4,
+            seven_day_pct: 45.1,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        }
+    }
+
     // ── render() tests ────────────────────────────────────────────────────────
 
     #[test]
@@ -327,14 +633,7 @@ mod tests {
     fn test_render_cache_hit_returns_formatted_output() {
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("test.jsonl");
-        let data = UsageLimitsData {
-            five_hour_pct: 23.4,
-            seven_day_pct: 45.1,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
-        };
+        let data = sample_data();
         crate::cache::write_usage_limits(&transcript, &data, 60);
 
         let ctx = Context {
@@ -357,8 +656,7 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         crate::cache::write_usage_limits(&transcript, &data, 60);
 
@@ -390,8 +688,7 @@ mod tests {
             seven_day_pct: 20.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         crate::cache::write_usage_limits(&transcript, &data, 60);
 
@@ -428,8 +725,7 @@ mod tests {
             seven_day_pct: 85.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         crate::cache::write_usage_limits(&transcript, &data, 60);
 
@@ -466,8 +762,7 @@ mod tests {
             seven_day_pct: 30.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         crate::cache::write_usage_limits(&transcript, &data, 60);
         // Verify read_usage_limits(allow_stale=true) works even after TTL would normally expire
@@ -486,8 +781,7 @@ mod tests {
             seven_day_pct: 30.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         let cloned = expected.clone();
         let result = fetch_with_timeout(move || Ok(cloned));
@@ -506,14 +800,7 @@ mod tests {
     fn test_fetch_with_timeout_timeout_returns_none() {
         let result = fetch_with_timeout(|| {
             std::thread::sleep(std::time::Duration::from_secs(5));
-            Ok(UsageLimitsData {
-                five_hour_pct: 0.0,
-                seven_day_pct: 0.0,
-                five_hour_resets_at: String::new(),
-                seven_day_resets_at: String::new(),
-                five_hour_resets_at_epoch: None,
-                seven_day_resets_at_epoch: None,
-            })
+            Ok(UsageLimitsData::default())
         });
         assert!(result.is_none());
     }
@@ -542,27 +829,24 @@ mod tests {
         assert_eq!(epoch_to_iso(Some(4_102_358_400)), "2099-12-31T00:00:00Z");
     }
 
-    // ── format_time_until() tests ─────────────────────────────────────────────
+    // ── format_reset() tests ─────────────────────────────────────────────────
 
     #[test]
-    fn test_format_time_until_empty_string_returns_question_mark() {
-        assert_eq!(format_time_until(""), "?");
+    fn test_format_reset_none_returns_question_mark() {
+        assert_eq!(format_reset(None, now_epoch()), "?");
     }
 
     #[test]
-    fn test_format_time_until_past_timestamp_returns_now() {
-        assert_eq!(format_time_until("2000-01-01T00:00:00Z"), "now");
+    fn test_format_reset_past_returns_now() {
+        let now = now_epoch();
+        assert_eq!(format_reset(Some(0), now), "now");
+        assert_eq!(format_reset(Some(now.saturating_sub(1)), now), "now");
     }
 
     #[test]
-    fn test_format_time_until_hours_minutes() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let future_epoch = now + 4 * 3600 + 12 * 60 + 30; // ~4h12m from now
-        let future_str = epoch_to_iso(Some(future_epoch));
-        let result = format_time_until(&future_str);
+    fn test_format_reset_hours_minutes() {
+        let now = now_epoch();
+        let result = format_reset(Some(now + 4 * 3600 + 12 * 60 + 30), now);
         assert!(
             result.contains('h') && result.contains('m'),
             "expected Xh Ym format: {result}"
@@ -570,14 +854,9 @@ mod tests {
     }
 
     #[test]
-    fn test_format_time_until_days_hours() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let future_epoch = now + 3 * 86400 + 2 * 3600 + 30; // ~3d2h from now
-        let future_str = epoch_to_iso(Some(future_epoch));
-        let result = format_time_until(&future_str);
+    fn test_format_reset_days_hours() {
+        let now = now_epoch();
+        let result = format_reset(Some(now + 3 * 86400 + 2 * 3600 + 30), now);
         assert!(
             result.contains('d') && result.contains('h'),
             "expected Xd Yh format: {result}"
@@ -585,14 +864,9 @@ mod tests {
     }
 
     #[test]
-    fn test_format_time_until_minutes_only() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let future_epoch = now + 45 * 60 + 30; // ~45m from now
-        let future_str = epoch_to_iso(Some(future_epoch));
-        let result = format_time_until(&future_str);
+    fn test_format_reset_minutes_only() {
+        let now = now_epoch();
+        let result = format_reset(Some(now + 45 * 60 + 30), now);
         assert!(
             result.ends_with('m') && !result.contains('h'),
             "expected Xm format: {result}"
@@ -600,15 +874,14 @@ mod tests {
     }
 
     #[test]
-    fn test_format_time_until_plus_offset_format() {
-        // Anthropic API returns "+00:00" not "Z" — format_time_until must handle it
-        // Use a far-future timestamp so this test is stable regardless of when it runs
-        let result = format_time_until("2099-01-01T00:00:00+00:00");
-        assert_ne!(result, "?", "should parse +00:00 format, not return '?'");
-        assert_ne!(
-            result, "now",
-            "far-future +00:00 timestamp should not be 'now'"
-        );
+    fn test_resolve_epoch_from_iso_plus_offset() {
+        // Anthropic API returns "+00:00" not "Z" — resolve_epoch must handle it
+        let epoch = resolve_epoch(None, "2099-01-01T00:00:00+00:00");
+        assert!(epoch.is_some(), "should parse +00:00 format");
+        let now = now_epoch();
+        let result = format_reset(epoch, now);
+        assert_ne!(result, "?");
+        assert_ne!(result, "now");
     }
 
     // ── format_output() tests ─────────────────────────────────────────────────
@@ -616,14 +889,7 @@ mod tests {
     #[test]
     fn test_format_output_default_produces_legacy_format() {
         // AC1: no config → identical to old hardcoded string
-        let data = UsageLimitsData {
-            five_hour_pct: 23.4,
-            seven_day_pct: 45.1,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
-        };
+        let data = sample_data();
         let cfg = UsageLimitsConfig::default();
         let result = format_output(&data, &cfg);
         assert!(result.starts_with("5h: 23%"), "5h prefix: {result:?}");
@@ -639,8 +905,7 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("⏱: {pct}%({reset})".into()),
@@ -661,8 +926,7 @@ mod tests {
             seven_day_pct: 45.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         let cfg = UsageLimitsConfig {
             seven_day_format: Some("7d {pct}%/{reset}".into()),
@@ -683,8 +947,7 @@ mod tests {
             seven_day_pct: 20.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         let cfg = UsageLimitsConfig {
             separator: Some(" — ".into()),
@@ -709,8 +972,7 @@ mod tests {
             seven_day_pct: 50.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
@@ -732,8 +994,7 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         crate::cache::write_usage_limits(&transcript, &data, 60);
 
@@ -1027,8 +1288,7 @@ mod tests {
             seven_day_pct: 99.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         crate::cache::write_usage_limits(&transcript, &cache_data, 60);
 
@@ -1075,20 +1335,16 @@ mod tests {
     }
 
     #[test]
-    fn test_format_time_until_epoch_past_returns_now() {
-        // A past epoch (e.g., Unix epoch 0) should return "now"
-        assert_eq!(format_time_until_epoch(0), "now");
-        assert_eq!(format_time_until_epoch(1), "now");
+    fn test_format_reset_epoch_past_returns_now() {
+        let now = now_epoch();
+        assert_eq!(format_reset(Some(0), now), "now");
+        assert_eq!(format_reset(Some(1), now), "now");
     }
 
     #[test]
-    fn test_format_time_until_epoch_hours_minutes() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let future_epoch = now + 4 * 3600 + 12 * 60 + 30; // ~4h12m from now
-        let result = format_time_until_epoch(future_epoch);
+    fn test_format_reset_epoch_hours_minutes() {
+        let now = now_epoch();
+        let result = format_reset(Some(now + 4 * 3600 + 12 * 60 + 30), now);
         assert!(
             result.contains('h') && result.contains('m'),
             "expected Xh Ym format: {result}"
@@ -1096,13 +1352,9 @@ mod tests {
     }
 
     #[test]
-    fn test_format_time_until_epoch_days_hours() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let future_epoch = now + 3 * 86400 + 2 * 3600 + 30; // ~3d2h from now
-        let result = format_time_until_epoch(future_epoch);
+    fn test_format_reset_epoch_days_hours() {
+        let now = now_epoch();
+        let result = format_reset(Some(now + 3 * 86400 + 2 * 3600 + 30), now);
         assert!(
             result.contains('d') && result.contains('h'),
             "expected Xd Yh format: {result}"
@@ -1110,16 +1362,366 @@ mod tests {
     }
 
     #[test]
-    fn test_format_time_until_epoch_minutes_only() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let future_epoch = now + 45 * 60 + 30; // ~45m from now
-        let result = format_time_until_epoch(future_epoch);
+    fn test_format_reset_epoch_minutes_only() {
+        let now = now_epoch();
+        let result = format_reset(Some(now + 45 * 60 + 30), now);
         assert!(
             result.ends_with('m') && !result.contains('h'),
             "expected Xm format: {result}"
         );
+    }
+
+    // ── calculate_pace() tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_calculate_pace_headroom() {
+        let now = now_epoch();
+        let pace = calculate_pace(30.0, Some(now + 9000), 18000, now);
+        let p = pace.unwrap();
+        assert!(p > 15.0 && p < 25.0, "expected ~+20 headroom, got {p}");
+    }
+
+    #[test]
+    fn test_calculate_pace_over_pace() {
+        let now = now_epoch();
+        let pace = calculate_pace(70.0, Some(now + 9000), 18000, now);
+        let p = pace.unwrap();
+        assert!(p < -15.0 && p > -25.0, "expected ~-20 over-pace, got {p}");
+    }
+
+    #[test]
+    fn test_calculate_pace_no_reset_returns_none() {
+        let pace = calculate_pace(50.0, None, 18000, now_epoch());
+        assert!(pace.is_none());
+    }
+
+    #[test]
+    fn test_calculate_pace_zero_elapsed() {
+        let now = now_epoch();
+        let pace = calculate_pace(10.0, Some(now + 18000), 18000, now);
+        let p = pace.unwrap();
+        assert!(
+            p > -15.0 && p < -5.0,
+            "expected ~-10 over-pace at zero elapsed, got {p}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_pace_reset_in_past() {
+        let now = now_epoch();
+        let pace = calculate_pace(30.0, Some(now.saturating_sub(100)), 18000, now);
+        let p = pace.unwrap();
+        assert!(p > 65.0 && p < 75.0, "expected ~+70 headroom, got {p}");
+    }
+
+    // ── format_pace() tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_format_pace_positive() {
+        assert_eq!(format_pace(Some(20.3)), "+20%");
+    }
+
+    #[test]
+    fn test_format_pace_negative() {
+        assert_eq!(format_pace(Some(-15.7)), "-16%");
+    }
+
+    #[test]
+    fn test_format_pace_zero() {
+        assert_eq!(format_pace(Some(0.0)), "+0%");
+    }
+
+    #[test]
+    fn test_format_pace_none() {
+        assert_eq!(format_pace(None), "?");
+    }
+
+    // ── pace in format_output() tests ────────────────────────────────────────
+
+    #[test]
+    fn test_format_output_pace_placeholder_five_hour() {
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let data = UsageLimitsData {
+            five_hour_pct: 30.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at_epoch: Some(now_epoch + 9000),
+            seven_day_resets_at_epoch: Some(now_epoch + 302400),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("5h {pct}% pace:{pace}".into()),
+            seven_day_format: Some("7d {pct}%".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.contains("pace:+"),
+            "expected positive pace in: {result:?}"
+        );
+        assert!(result.contains("5h 30%"), "expected 5h 30% in: {result:?}");
+    }
+
+    #[test]
+    fn test_format_output_pace_placeholder_no_epoch() {
+        let data = UsageLimitsData {
+            five_hour_pct: 30.0,
+            seven_day_pct: 10.0,
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("5h {pct}% pace:{pace}".into()),
+            seven_day_format: Some("7d {pct}%".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.contains("pace:?"),
+            "expected ? for unknown pace in: {result:?}"
+        );
+    }
+
+    // ── extra usage in format_output() tests ─────────────────────────────────
+
+    #[test]
+    fn test_format_output_extra_usage_enabled() {
+        let data = UsageLimitsData {
+            five_hour_pct: 100.0,
+            seven_day_pct: 50.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(result.contains("100%"), "five_hour in: {result:?}");
+        assert!(result.contains("50%"), "seven_day in: {result:?}");
+        assert!(
+            result.contains("extra:"),
+            "extra usage default format in: {result:?}"
+        );
+        assert!(
+            result.contains('\u{26a1}'),
+            "active indicator (⚡) when 5h at 100%: {result:?}"
+        );
+        assert!(result.contains("31%"), "extra pct in: {result:?}");
+        assert!(result.contains("61.95"), "used credits in: {result:?}");
+        assert!(result.contains("200"), "monthly limit in: {result:?}");
+    }
+
+    #[test]
+    fn test_format_output_extra_usage_inactive() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 40.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(1000.0),
+            extra_usage_utilization: Some(5.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.contains('\u{1f4a4}'),
+            "inactive indicator (💤) when not rate-limited: {result:?}"
+        );
+        assert!(
+            !result.contains('\u{26a1}'),
+            "should not contain ⚡ when not rate-limited: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_extra_usage_disabled() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 20.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            extra_usage_enabled: Some(false),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(0.0),
+            extra_usage_utilization: Some(0.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig::default();
+        let result = format_output(&data, &cfg);
+        assert!(
+            !result.contains("extra"),
+            "extra usage should be hidden when disabled: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_extra_usage_absent() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 20.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig::default();
+        let result = format_output(&data, &cfg);
+        assert!(
+            !result.contains("extra"),
+            "extra usage should be absent: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_extra_usage_custom_format() {
+        let data = UsageLimitsData {
+            five_hour_pct: 100.0,
+            seven_day_pct: 50.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            extra_usage_format: Some("EXTRA {pct}% rem:{remaining}".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(result.contains("EXTRA 31%"), "custom format: {result:?}");
+        assert!(
+            result.contains("rem:138.05"),
+            "remaining credits: {result:?}"
+        );
+    }
+
+    // ── per-model in format_output() tests ───────────────────────────────────
+
+    #[test]
+    fn test_format_output_per_model_present() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some("2099-02-01T00:00:00Z".into()),
+            seven_day_sonnet_pct: Some(3.0),
+            seven_day_sonnet_resets_at: Some("2099-03-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(result.contains("opus 12%"), "opus breakdown in: {result:?}");
+        assert!(
+            result.contains("sonnet 3%"),
+            "sonnet breakdown in: {result:?}"
+        );
+        assert!(
+            !result.contains("cowork"),
+            "null cowork should be omitted: {result:?}"
+        );
+        assert!(
+            !result.contains("oauth"),
+            "null oauth_apps should be omitted: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_per_model_custom_format() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some("2099-02-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            opus_format: Some("OP:{pct}%/{remaining}%".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.contains("OP:12%/88%"),
+            "custom opus format: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_per_model_pace_placeholder() {
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some(epoch_to_iso(Some(now_epoch + 302_400))),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            opus_format: Some("opus {pct}% pace:{pace}".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            !result.contains("{pace}"),
+            "literal {{pace}} should be substituted: {result:?}"
+        );
+        assert!(
+            result.contains("pace:+"),
+            "opus pace should show headroom: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_no_dangling_separators() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            separator: Some(" | ".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert_eq!(result, "50% | 30%", "no trailing separator: {result:?}");
+        assert!(!result.ends_with(" | "), "no dangling sep: {result:?}");
     }
 }

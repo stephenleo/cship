@@ -304,39 +304,91 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 1. **stdin `rate_limits`** — Claude Code (v2.1+) sends `rate_limits` directly in the session JSON for Pro/Max subscribers. When present, cship uses this data immediately with zero latency and no credential setup required.
 2. **OAuth API fetch** — Falls back to fetching from `https://api.anthropic.com/api/oauth/usage` using your OAuth token (stored in the OS credential store). Results are cached for the configured TTL (default 60s).
 
-**Token:** `$cship.usage_limits`
+**Tokens:**
+
+| Token | Renders |
+|-------|---------|
+| `$cship.usage_limits` | Combined: 5h + 7d + per-model (when present) + extra usage (when enabled) |
+| `$cship.usage_limits.per_model` | Only the per-model 7-day breakdown (opus/sonnet/cowork/oauth) |
+| `$cship.usage_limits.opus` | 7-day Opus utilization only |
+| `$cship.usage_limits.sonnet` | 7-day Sonnet utilization only |
+| `$cship.usage_limits.cowork` | 7-day Cowork utilization only |
+| `$cship.usage_limits.oauth_apps` | 7-day OAuth-apps utilization only |
+| `$cship.usage_limits.extra_usage` | Extra-credits display (only when the account has extra usage enabled) |
+
+The sub-tokens let you place sections independently in your `lines` layout — e.g., keep the 5h/7d pair on one row and push per-model onto a second row.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `disabled` | `bool` | `false` | Hide this module |
 | `style` | `string` | — | Base ANSI style |
-| `format` | `string` | — | Format string |
-| `five_hour_format` | `string` | `"5h: {pct}% resets in {reset}"` | Format for the 5h window. Placeholders: `{pct}` (% used), `{remaining}` (% left), `{reset}` (time to reset) |
-| `seven_day_format` | `string` | `"7d: {pct}% resets in {reset}"` | Format for the 7d window. Same placeholders as above |
-| `separator` | `string` | `" \| "` | String placed between 5h and 7d sections |
+| `format` | `string` | — | Reserved; use the per-section formats below |
+| `five_hour_format` | `string` | `"5h: {pct}% resets in {reset}"` | Format for the 5h window |
+| `seven_day_format` | `string` | `"7d: {pct}% resets in {reset}"` | Format for the 7d window |
+| `opus_format` | `string` | `"opus {pct}%"` | Format for the 7-day Opus section |
+| `sonnet_format` | `string` | `"sonnet {pct}%"` | Format for the 7-day Sonnet section |
+| `cowork_format` | `string` | `"cowork {pct}%"` | Format for the 7-day Cowork section |
+| `oauth_apps_format` | `string` | `"oauth {pct}%"` | Format for the 7-day OAuth-apps section |
+| `extra_usage_format` | `string` | `"{active} extra: {pct}% (${used}/${limit})"` | Format for the extra-usage section |
+| `separator` | `string` | `" \| "` | String placed between sections |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
 | `critical_style` | `string` | `"bold red"` | Style at critical level |
 | `ttl` | `integer` | `60` | Cache refresh interval in seconds. Increase to reduce API pressure when running multiple concurrent sessions. |
 
-**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed. Otherwise, on Linux/WSL2 install `libsecret-tools` and store your OAuth token with `secret-tool`. See [FAQ](/faq#usage-limits-linux) for setup instructions.
+**Placeholders** (available in all `*_format` strings):
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `{pct}` | Percentage used as integer (e.g. `23`) |
+| `{remaining}` | Percentage remaining as integer (e.g. `77`) |
+| `{reset}` | Time-until-reset string (e.g. `4h12m`) |
+| `{pace}` | Signed headroom vs linear consumption — `+20%` (under pace), `-15%` (over pace), or `?` when unknown |
+
+**Additional placeholders in `extra_usage_format`:**
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `{used}` | Extra credits consumed, in dollars (e.g. `12.34`) |
+| `{limit}` | Monthly extra-credit limit, in dollars (e.g. `50`) |
+| `{active}` | `⚡` when 5h or 7d utilization is at 100% (actively consuming extra credits), `💤` otherwise |
+
+**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 install `libsecret-tools` and store your OAuth token with `secret-tool`. See [FAQ](/faq#usage-limits-linux) for setup instructions.
 
 ```toml
 [cship.usage_limits]
 ttl                = 300       # 5 minutes; increase if you run many concurrent sessions
-five_hour_format   = "5h({remaining}% left)"
-seven_day_format   = "7d({remaining}% left)"
-separator          = " "
+five_hour_format   = "5h {pct}% ({pace}, {reset})"
+seven_day_format   = "7d {pct}% ({pace}, {reset})"
+opus_format        = "opus {pct}%"
+sonnet_format      = "sonnet {pct}%"
+extra_usage_format = "{active} extra {pct}% (${used}/${limit})"
+separator          = " | "
 warn_threshold     = 70.0
 warn_style         = "bold yellow"
 critical_threshold = 90.0
 critical_style     = "bold red"
 ```
 
+### Composing with sub-tokens
+
+Place per-model and extra usage on a separate line from the 5h/7d summary:
+
+```toml
+[cship]
+lines = [
+  "$cship.model $cship.cost",
+  "$cship.usage_limits",
+  "$cship.usage_limits.per_model $cship.usage_limits.extra_usage",
+]
+```
+
+Each sub-token returns nothing when its data is absent, so the row collapses cleanly on accounts without a given breakdown.
+
 ### Hiding a usage period
 
-To hide one of the two usage periods, set its format **and** the separator to empty strings. For example, to show only the 5-hour window:
+To hide one of the two main windows, set its format **and** the separator to empty strings. For example, to show only the 5-hour window:
 
 ```toml
 [cship.usage_limits]
@@ -352,7 +404,7 @@ five_hour_format = ""
 separator        = ""
 ```
 
-Setting both formats to `""` effectively hides the entire module.
+Setting both formats to `""` effectively hides the combined token. Per-model sections render only when the API returns data for that model, so they disappear automatically on accounts that don't expose a given breakdown.
 
 ---
 

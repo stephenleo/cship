@@ -115,7 +115,9 @@ Everything in the [Claude Code status line documentation](https://code.claude.co
 | `$cship.context_bar` | Visual progress bar of context window usage |
 | `$cship.context_window` | Context window tokens (used/total) |
 | `$cship.context_window.used_tokens` | Real token count in context with percentage (e.g. `8%(79k/1000k)`) |
-| `$cship.usage_limits` | API usage limits (5hr / 7-day) |
+| `$cship.usage_limits` | API usage limits (5hr / 7-day, plus per-model and extra-usage when available) |
+| `$cship.usage_limits.per_model` | 7-day per-model breakdown (opus / sonnet / cowork / oauth) |
+| `$cship.usage_limits.extra_usage` | Extra-credits section with `{active}` indicator |
 | `$cship.peak_usage` | Peak-time indicator (US Pacific business hours) |
 | `$cship.agent` | Sub-agent name |
 | `$cship.session` | Session identity info |

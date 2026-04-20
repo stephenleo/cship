@@ -45,6 +45,12 @@ pub const ALL_NATIVE_MODULES: &[&str] = &[
     "cship.workspace.current_dir",
     "cship.workspace.project_dir",
     "cship.usage_limits",
+    "cship.usage_limits.per_model",
+    "cship.usage_limits.opus",
+    "cship.usage_limits.sonnet",
+    "cship.usage_limits.cowork",
+    "cship.usage_limits.oauth_apps",
+    "cship.usage_limits.extra_usage",
     "cship.peak_usage",
 ];
 
@@ -111,6 +117,12 @@ pub fn render_module(
         "cship.workspace.project_dir" => workspace::render_project_dir(ctx, cfg),
         // Usage limits module — non-blocking thread dispatch for live API data
         "cship.usage_limits" => usage_limits::render(ctx, cfg),
+        "cship.usage_limits.per_model" => usage_limits::render_per_model(ctx, cfg),
+        "cship.usage_limits.opus" => usage_limits::render_opus(ctx, cfg),
+        "cship.usage_limits.sonnet" => usage_limits::render_sonnet(ctx, cfg),
+        "cship.usage_limits.cowork" => usage_limits::render_cowork(ctx, cfg),
+        "cship.usage_limits.oauth_apps" => usage_limits::render_oauth_apps(ctx, cfg),
+        "cship.usage_limits.extra_usage" => usage_limits::render_extra_usage(ctx, cfg),
         // Peak usage indicator — time-based peak-hour check
         "cship.peak_usage" => peak_usage::render(ctx, cfg),
         other => {

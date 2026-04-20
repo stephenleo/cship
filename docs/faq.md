@@ -64,6 +64,23 @@ The CShip `usage_limits` module fetches data from the Anthropic API using your C
 
 ---
 
+## What do `{pace}` and `{active}` mean in the usage_limits format strings?
+
+**`{pace}`** is the signed headroom versus linear consumption of the current window. If you were perfectly on pace to land at 100% exactly when the window resets, `{pace}` would be `0%`. A positive value (e.g. `+20%`) means you have 20 percentage points of headroom over the linear pace — you can comfortably keep going. A negative value (e.g. `-15%`) means you're 15 points ahead of pace and will hit the limit before reset unless you slow down. It renders as `?` when the reset time is unknown.
+
+`{pace}` is available in `five_hour_format`, `seven_day_format`, and each per-model format (`opus_format`, `sonnet_format`, `cowork_format`, `oauth_apps_format`).
+
+**`{active}`** is only available in `extra_usage_format`. It renders `⚡` when either the 5h or 7d window is at 100% — meaning fresh requests are now drawing down extra credits rather than plan credits — and `💤` otherwise. Pair it with `{used}` / `{limit}` (dollars) and `{pct}` (utilization of the monthly extra-credit cap) for a one-glance view of supplemental spend.
+
+```toml
+[cship.usage_limits]
+five_hour_format   = "5h {pct}% ({pace})"
+seven_day_format   = "7d {pct}% ({pace})"
+extra_usage_format = "{active} ${used}/${limit}"
+```
+
+---
+
 ## How does the peak-time indicator handle time zones and DST?
 
 The `peak_usage` module checks whether the current time falls within the configured peak window in **US Pacific time**. It computes the UTC→Pacific offset internally — PDT (UTC−7) from the second Sunday of March through the first Sunday of November, PST (UTC−8) the rest of the year.

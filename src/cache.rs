@@ -170,6 +170,40 @@ pub fn write_usage_limits(transcript_path: &Path, data: &UsageLimitsData, ttl_se
     }
 }
 
+// ── Negative cache marker ────────────────────────────────────────────────────
+
+/// Path for the negative cache marker (same directory as usage-limits cache).
+fn negative_marker_path(transcript_path: &Path) -> Option<std::path::PathBuf> {
+    let dir = transcript_path.parent()?;
+    let stem = transcript_path.file_stem()?.to_str()?;
+    Some(dir.join("cship").join(format!("{stem}-usage-limits-fail")))
+}
+
+/// Returns `true` if a recent failure marker exists and hasn't expired.
+pub fn read_negative_marker(transcript_path: &Path) -> bool {
+    let Some(path) = negative_marker_path(transcript_path) else {
+        return false;
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(expires_at) = raw.trim().parse::<u64>() else {
+        return false;
+    };
+    now_epoch() < expires_at
+}
+
+/// Write a failure marker that expires in `cooldown_secs`.
+pub fn write_negative_marker(transcript_path: &Path, cooldown_secs: u64) {
+    let Some(path) = negative_marker_path(transcript_path) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, (now_epoch() + cooldown_secs).to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,8 +321,7 @@ mod tests {
             seven_day_pct: 45.1,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         }
     }
 
@@ -366,8 +399,7 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2000-01-01T00:00:00Z".into(), // past
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(), // future
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);
@@ -406,8 +438,7 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(), // future
             seven_day_resets_at: "2000-01-01T00:00:00Z".into(), // past
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);
@@ -426,10 +457,7 @@ mod tests {
         let data = UsageLimitsData {
             five_hour_pct: 50.0,
             seven_day_pct: 10.0,
-            five_hour_resets_at: String::new(),
-            seven_day_resets_at: String::new(),
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);
@@ -505,6 +533,56 @@ mod tests {
     }
 
     #[test]
+    fn test_usage_limits_cache_backwards_compat_old_format() {
+        // Old cache JSON (pre-extra-usage/per-model) must still deserialize.
+        // The old format lacks extra_usage_*, seven_day_opus_*, etc. fields —
+        // #[serde(default)] on UsageLimitsData ensures they deserialize as None.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let transcript = dir.path().join("transcript.jsonl");
+        // Write a cache file mimicking the old format (only original fields)
+        let path = dir.path().join("cship").join("transcript-usage-limits");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let old_cache = serde_json::json!({
+            "data": {
+                "five_hour_pct": 42.0,
+                "seven_day_pct": 18.0,
+                "five_hour_resets_at": "2099-01-01T00:00:00Z",
+                "seven_day_resets_at": "2099-01-01T00:00:00Z"
+            },
+            "expires_at": now + 300,
+            "five_hour_resets_at": 9_999_999_999_u64,
+            "seven_day_resets_at": 9_999_999_999_u64
+        });
+        std::fs::write(&path, serde_json::to_string(&old_cache).unwrap()).unwrap();
+        let result = read_usage_limits(&transcript, false);
+        assert!(
+            result.is_some(),
+            "old-format cache should still deserialize"
+        );
+        let data = result.unwrap();
+        assert!((data.five_hour_pct - 42.0).abs() < f64::EPSILON);
+        assert!((data.seven_day_pct - 18.0).abs() < f64::EPSILON);
+        // All new fields should be None (backwards-compatible defaults)
+        assert!(data.extra_usage_enabled.is_none());
+        assert!(data.extra_usage_monthly_limit.is_none());
+        assert!(data.extra_usage_used_credits.is_none());
+        assert!(data.extra_usage_utilization.is_none());
+        assert!(data.seven_day_opus_pct.is_none());
+        assert!(data.seven_day_opus_resets_at.is_none());
+        assert!(data.seven_day_sonnet_pct.is_none());
+        assert!(data.seven_day_sonnet_resets_at.is_none());
+        assert!(data.seven_day_cowork_pct.is_none());
+        assert!(data.seven_day_cowork_resets_at.is_none());
+        assert!(data.seven_day_oauth_apps_pct.is_none());
+        assert!(data.seven_day_oauth_apps_resets_at.is_none());
+        drop(dir);
+    }
+
+    #[test]
     fn test_usage_limits_early_invalidation_with_plus_offset_resets_at() {
         // Real API returns "+00:00" format — early invalidation must fire correctly
         let dir = tempfile::tempdir().expect("tempdir");
@@ -515,8 +593,7 @@ mod tests {
             seven_day_pct: 10.0,
             five_hour_resets_at: "2000-01-01T00:00:00+00:00".into(), // past, +00:00 format
             seven_day_resets_at: "2099-01-01T00:00:00+00:00".into(), // future
-            five_hour_resets_at_epoch: None,
-            seven_day_resets_at_epoch: None,
+            ..Default::default()
         };
         write_usage_limits(&transcript, &data, 60);
         let result = read_usage_limits(&transcript, false);
