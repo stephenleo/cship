@@ -2,10 +2,13 @@ use crate::config::CshipConfig;
 use crate::context::Context;
 
 const DEFAULT_BAR_WIDTH: u32 = 10;
+const DEFAULT_FILLED_CHAR: &str = "█";
+const DEFAULT_EMPTY_CHAR: &str = "░";
 
 /// Renders `$cship.context_bar` — visual Unicode progress bar with threshold color escalation.
 /// Format: `{bar}{used_percentage:.0}%` e.g. `███░░░░░░░35%`
 /// Bar width is configurable via `[cship.context_bar].width` (default 10).
+/// Fill characters are configurable via `filled_char` (default `"█"`) and `empty_char` (default `"░"`).
 ///
 /// Source: epics.md#Story 2.2, prd.md#FR8
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
@@ -36,7 +39,13 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let filled = filled.min(width); // guard floating-point edge at 100%
     let empty = width - filled;
 
-    let bar: String = "█".repeat(filled) + &"░".repeat(empty);
+    let filled_char = bar_cfg
+        .and_then(|c| c.filled_char.as_deref())
+        .unwrap_or(DEFAULT_FILLED_CHAR);
+    let empty_char = bar_cfg
+        .and_then(|c| c.empty_char.as_deref())
+        .unwrap_or(DEFAULT_EMPTY_CHAR);
+    let bar: String = filled_char.repeat(filled) + &empty_char.repeat(empty);
     let bar_content = format!("{bar}{:.0}%", used_pct);
 
     let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
@@ -400,5 +409,42 @@ mod tests {
             warn_result, crit_result,
             "warn and critical styles must produce different output"
         );
+    }
+
+    #[test]
+    fn test_context_bar_custom_filled_and_empty_chars() {
+        let ctx = ctx_with_pct(40.0);
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                filled_char: Some("●".to_string()),
+                empty_char: Some("○".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        // 40% of 10 = 4 filled, 6 empty
+        let filled: usize = result.chars().filter(|&c| c == '●').count();
+        let empty: usize = result.chars().filter(|&c| c == '○').count();
+        assert_eq!(filled, 4, "expected 4 filled circles: {result:?}");
+        assert_eq!(empty, 6, "expected 6 empty circles: {result:?}");
+        assert!(result.contains("40%"), "expected '40%' in: {result:?}");
+    }
+
+    #[test]
+    fn test_context_bar_only_filled_char_overridden() {
+        let ctx = ctx_with_pct(50.0);
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                filled_char: Some("●".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        let filled: usize = result.chars().filter(|&c| c == '●').count();
+        let empty: usize = result.chars().filter(|&c| c == '░').count();
+        assert_eq!(filled, 5, "expected 5 filled circles: {result:?}");
+        assert_eq!(empty, 5, "expected 5 default empty chars: {result:?}");
     }
 }
