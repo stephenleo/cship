@@ -152,4 +152,10 @@ cship explain
 
 This shows each module's current rendered value, the config file path in use, and any warnings about missing data or misconfiguration.
 
+To check the installed binary version:
+
+```sh
+cship --version   # or: cship -v
+```
+
 ## Inspired by [Starship](https://starship.rs)

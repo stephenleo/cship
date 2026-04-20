@@ -2,7 +2,7 @@
   "cwd": "/home/user/projects/myproject",
   "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "transcript_path": "/home/user/.claude/projects/myproject/transcript.jsonl",
-  "version": "1.0.80",
+  "version": "2.0.31",
   "exceeds_200k_tokens": false,
   "model": {
     "id": "claude-sonnet-4-6",

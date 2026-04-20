@@ -4,6 +4,10 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "cship", about = "Claude Code statusline renderer")]
 struct Cli {
+    /// Print cship version and exit
+    #[arg(short = 'v', long = "version")]
+    version: bool,
+
     /// Path to starship.toml config file. Bypasses automatic discovery.
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -30,6 +34,11 @@ fn main() {
 
     // Parse CLI args — must happen before any fallible operations.
     let cli = Cli::parse();
+
+    if cli.version {
+        println!("cship {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
 
     match cli.command {
         Some(Commands::Explain) => {

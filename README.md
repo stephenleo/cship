@@ -131,6 +131,12 @@ Run `cship explain` to inspect what cship sees from Claude Code's context JSON �
 cship explain
 ```
 
+To check the installed binary version:
+
+```sh
+cship --version   # or: cship -v
+```
+
 ## ✨ Showcase
 
 Six ready-to-use configurations — from minimal to full-featured. Each can be dropped into `~/.config/cship.toml`.

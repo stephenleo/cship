@@ -96,9 +96,9 @@ pub fn render_transcript_path(
     Some(crate::ansi::apply_style(&content, style))
 }
 
-/// Renders `$cship.version` — Claude Code version string from Context.
+/// Renders `$cship.version` — cship binary version (compile-time CARGO_PKG_VERSION).
 pub fn render_version(
-    ctx: &crate::context::Context,
+    _ctx: &crate::context::Context,
     cfg: &crate::config::CshipConfig,
 ) -> Option<String> {
     if cfg
@@ -109,13 +109,7 @@ pub fn render_version(
     {
         return None;
     }
-    let value = match ctx.version.as_deref() {
-        Some(v) => v,
-        None => {
-            tracing::warn!("cship.version: field absent from context");
-            return None;
-        }
-    };
+    let value = env!("CARGO_PKG_VERSION");
     let sess_cfg = cfg.session.as_ref();
     let symbol = sess_cfg.and_then(|s| s.symbol.as_deref());
     let style = sess_cfg.and_then(|s| s.style.as_deref());
@@ -273,21 +267,15 @@ mod tests {
     // ── version ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_render_version_renders_value() {
-        let ctx = Context {
-            version: Some("1.0.80".to_string()),
-            ..Default::default()
-        };
+    fn test_render_version_renders_binary_version() {
+        let ctx = Context::default();
         let result = render_version(&ctx, &CshipConfig::default());
-        assert_eq!(result, Some("1.0.80".to_string()));
+        assert_eq!(result, Some(env!("CARGO_PKG_VERSION").to_string()));
     }
 
     #[test]
     fn test_render_version_disabled_returns_none() {
-        let ctx = Context {
-            version: Some("1.0.80".to_string()),
-            ..Default::default()
-        };
+        let ctx = Context::default();
         let cfg = CshipConfig {
             session: Some(SessionConfig {
                 disabled: Some(true),
@@ -296,12 +284,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(render_version(&ctx, &cfg), None);
-    }
-
-    #[test]
-    fn test_render_version_absent_returns_none() {
-        let ctx = Context::default();
-        assert_eq!(render_version(&ctx, &CshipConfig::default()), None);
     }
 
     // ── output_style ──────────────────────────────────────────────────────

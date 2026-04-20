@@ -31,6 +31,24 @@ fn test_empty_stdin_exits_nonzero_with_no_stdout() {
 }
 
 #[test]
+fn test_version_flag_short_prints_version() {
+    cship()
+        .arg("-v")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn test_version_flag_long_prints_version() {
+    cship()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
 fn test_malformed_json_exits_nonzero_with_no_stdout() {
     cargo_bin_cmd!("cship")
         .write_stdin("not valid json{{{")
@@ -609,13 +627,12 @@ fn test_session_transcript_path_renders_string() {
 #[test]
 fn test_session_version_renders_string() {
     let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
-    // sample_input_full.json: version = "1.0.80"
     cship()
         .args(["--config", "tests/fixtures/session_version.toml"])
         .write_stdin(json)
         .assert()
         .success()
-        .stdout(predicate::str::contains("1.0.80"));
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
 
 #[test]

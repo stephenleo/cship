@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.5.1] - 2026-04-20
+
+### Fixed
+- Fixed `$cship.version` to display the installed cship binary version instead of the Claude Code CLI version — now uses compile-time `CARGO_PKG_VERSION`, ensuring the statusline reflects the actual installed binary version
+
+### Added
+- Added `-v` / `--version` CLI flags to print the cship binary version
+
 ## [1.5.0] - 2026-04-19
 
 ### Fixed
