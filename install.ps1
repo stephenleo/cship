@@ -1,12 +1,15 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Install cship - Claude Code statusline tool for Windows.
 .DESCRIPTION
     Downloads the cship binary from GitHub Releases, installs it to
-    %LOCALAPPDATA%\Programs\cship\, writes a default cship.toml, and
+    %USERPROFILE%\.local\bin\, writes a default cship.toml, and
     registers the statusline in Claude Code's settings.json.
+.PARAMETER Yes
+    Non-interactive mode: accept all prompts automatically.
 #>
+param([switch]$Yes)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -72,19 +75,78 @@ if ($currentPath -notlike "*$INSTALL_DIR*") {
     Write-Host "Added $INSTALL_DIR to your user PATH (effective in new shells)."
 }
 
+# --- Starship detection and optional install ---
+$INTERACTIVE = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+if (-not (Get-Command starship -ErrorAction SilentlyContinue)) {
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $winget) {
+        Write-Host "Starship not found, and winget is not available on this system."
+        Write-Host "Install Starship manually from https://starship.rs/ then re-run this script."
+        Write-Host "Native cship modules will still work without Starship."
+    } else {
+        $installStarship = {
+            & $winget.Source install --id Starship.Starship --accept-source-agreements --accept-package-agreements
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Starship installation via winget failed (exit code $LASTEXITCODE). Install manually from https://starship.rs/"
+            }
+        }
+        if ($Yes) {
+            & $installStarship
+        } elseif ($INTERACTIVE) {
+            $answer = Read-Host "Starship not found. Install Starship? (required for passthrough modules) [Y/n]"
+            if ($answer -match '^[Nn]') {
+                Write-Host "Skipping Starship install. Native cship modules will still work."
+            } else {
+                & $installStarship
+            }
+        } else {
+            Write-Host "Skipping Starship install (non-interactive). Re-run with -Yes or install manually from https://starship.rs/"
+        }
+    }
+}
+
 # --- Write default cship.toml ---
 if (-not (Test-Path $CONFIG_FILE)) {
     New-Item -ItemType Directory -Force -Path $CONFIG_DIR | Out-Null
-    @'
+    $tomlContent = @'
+# cship — Claude Code statusline
+# Full config reference: https://cship.dev
 [cship]
-lines = ["$cship.model $cship.cost"]
+lines = [
+  "$directory$git_branch$git_status$python$nodejs$rust",
+  "$cship.model $cship.cost $cship.context_bar $cship.usage_limits"
+]
 
 [cship.model]
-disabled = false
+symbol = "🤖 "
+style  = "bold cyan"
+
+[cship.context_bar]
+width              = 10
+style              = "fg:#7dcfff"
+warn_threshold     = 40.0
+warn_style         = "fg:#e0af68"
+critical_threshold = 70.0
+critical_style     = "bold fg:#f7768e"
 
 [cship.cost]
-disabled = false
-'@ | Set-Content -Path $CONFIG_FILE -Encoding UTF8
+symbol             = "💰 "
+style              = "fg:#a9b1d6"
+warn_threshold     = 2.0
+warn_style         = "fg:#e0af68"
+critical_threshold = 5.0
+critical_style     = "bold fg:#f7768e"
+
+[cship.usage_limits]
+five_hour_format   = "⌛ 5h {pct}% ({reset})"
+seven_day_format   = "📅 7d {pct}% ({reset})"
+separator          = " "
+warn_threshold     = 60.0
+warn_style         = "fg:#e0af68"
+critical_threshold = 80.0
+critical_style     = "bold fg:#f7768e"
+'@
+    [System.IO.File]::WriteAllText($CONFIG_FILE, $tomlContent, (New-Object System.Text.UTF8Encoding $false))
     Write-Host "Config written to: $CONFIG_FILE"
 } else {
     Write-Host "Config already exists at $CONFIG_FILE - skipping."
@@ -96,9 +158,9 @@ if (-not (Test-Path $claudeDir)) {
     Write-Host "Claude Code settings directory not found at $claudeDir - skipping settings update."
     Write-Host "Authenticate in Claude Code first, then re-run this script."
 } elseif (-not (Test-Path $SETTINGS)) {
-    # Create minimal settings.json
-    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
-    '{"statusLine": {"type": "command", "command": "cship"}}' | Set-Content -Path $SETTINGS -Encoding UTF8
+    # Create minimal settings.json — $claudeDir already exists (checked above)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($SETTINGS, '{"statusLine": {"type": "command", "command": "cship"}}', $utf8NoBom)
     Write-Host "Created settings.json with statusLine entry: $SETTINGS"
 } else {
     $json = Get-Content $SETTINGS -Raw | ConvertFrom-Json
@@ -108,7 +170,8 @@ if (-not (Test-Path $claudeDir)) {
     } else {
         $json.statusLine = $statusLineValue
     }
-    $json | ConvertTo-Json -Depth 100 | Set-Content -Path $SETTINGS -Encoding UTF8
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($SETTINGS, ($json | ConvertTo-Json -Depth 100), $utf8NoBom)
     Write-Host "Updated settings.json with statusLine entry: $SETTINGS"
 }
 
