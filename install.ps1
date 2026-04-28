@@ -84,7 +84,7 @@ if (-not (Get-Command starship -ErrorAction SilentlyContinue)) {
         Write-Host "Install Starship manually from https://starship.rs/ then re-run this script."
         Write-Host "Native cship modules will still work without Starship."
     } elseif ($Yes) {
-        winget install --id Starship.Starship --accept-source-agreements --accept-package-agreements
+        & $winget.Source install --id Starship.Starship --accept-source-agreements --accept-package-agreements
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Starship installation via winget failed (exit code $LASTEXITCODE). Install manually from https://starship.rs/"
         }
@@ -93,7 +93,7 @@ if (-not (Get-Command starship -ErrorAction SilentlyContinue)) {
         if ($answer -match '^[Nn]') {
             Write-Host "Skipping Starship install. Native cship modules will still work."
         } else {
-            winget install --id Starship.Starship --accept-source-agreements --accept-package-agreements
+            & $winget.Source install --id Starship.Starship --accept-source-agreements --accept-package-agreements
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "Starship installation via winget failed (exit code $LASTEXITCODE). Install manually from https://starship.rs/"
             }
