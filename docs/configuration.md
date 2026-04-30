@@ -157,6 +157,8 @@ Renders a visual ASCII progress bar showing context window usage.
 | `symbol` | `string` | `""` | Prefix symbol |
 | `format` | `string` | `"[$symbol$value]($style)"` | Format string |
 | `width` | `integer` | `10` | Number of characters in the bar |
+| `filled_char` | `string` | `"█"` | Character used for the filled portion. Any Unicode character is allowed. |
+| `empty_char` | `string` | `"░"` | Character used for the empty portion. Any Unicode character is allowed. |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
@@ -171,6 +173,14 @@ warn_threshold     = 40.0
 warn_style         = "yellow"
 critical_threshold = 70.0
 critical_style     = "bold red"
+```
+
+For a circle-style bar (`●●●●○○○○○○40%`):
+
+```toml
+[cship.context_bar]
+filled_char = "●"
+empty_char  = "○"
 ```
 
 ---

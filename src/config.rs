@@ -148,6 +148,12 @@ pub struct ContextBarConfig {
     /// Style applied when rendering the bar at 0% due to absent context data.
     /// Example: `"dim"` to visually distinguish the empty state.
     pub empty_style: Option<String>,
+    /// Character used for filled (used) slots. Defaults to `"█"`.
+    /// Example: `"●"` for filled circles.
+    pub filled_char: Option<String>,
+    /// Character used for empty (unused) slots. Defaults to `"░"`.
+    /// Example: `"○"` for hollow circles.
+    pub empty_char: Option<String>,
 }
 
 /// Configuration for `[cship.context_window]` sub-field modules.
