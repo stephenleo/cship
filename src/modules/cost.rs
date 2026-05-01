@@ -4,7 +4,10 @@ use crate::config::CostSubfieldConfig;
 ///
 /// `$cship.cost` — convenience alias: formats total_cost_usd as "$X.XX" with threshold styling.
 /// `$cship.cost.total_cost_usd` — raw USD value, 4 decimal places.
-/// `$cship.cost.total_duration_ms` / `total_api_duration_ms` — integer milliseconds.
+/// `$cship.cost.total_duration_ms` / `total_api_duration_ms` — human-readable wall / API duration
+/// (e.g. `45s`, `1m30s`, `2h15m`, or `750ms` for sub-second). The `_ms` suffix is retained for
+/// backwards compatibility; `total_duration` and `total_api_duration` are accepted aliases.
+/// Threshold comparisons still operate on raw milliseconds.
 /// `$cship.cost.total_lines_added` / `total_lines_removed` — integer counts.
 ///
 /// [Source: epics.md#Story 2.1, architecture.md#Structure Patterns]
@@ -85,7 +88,7 @@ pub fn render_total_cost_usd(ctx: &Context, cfg: &CshipConfig) -> Option<String>
     crate::format::render_styled_value(&val_str, Some(val), sub_cfg, None)
 }
 
-/// Renders `$cship.cost.total_duration_ms` — total wall time in milliseconds.
+/// Renders `$cship.cost.total_duration_ms` — human-readable wall time.
 pub fn render_total_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let cost_cfg = cfg.cost.as_ref();
     let sub_cfg = cost_cfg.and_then(|c| c.total_duration_ms.as_ref());
@@ -99,11 +102,11 @@ pub fn render_total_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<Stri
             return None;
         }
     };
-    let val_str = val.to_string();
+    let val_str = crate::format::format_duration_ms(val);
     crate::format::render_styled_value(&val_str, Some(val as f64), sub_cfg, None)
 }
 
-/// Renders `$cship.cost.total_api_duration_ms` — API-only duration in milliseconds.
+/// Renders `$cship.cost.total_api_duration_ms` — human-readable API duration.
 pub fn render_total_api_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let cost_cfg = cfg.cost.as_ref();
     let sub_cfg = cost_cfg.and_then(|c| c.total_api_duration_ms.as_ref());
@@ -117,7 +120,7 @@ pub fn render_total_api_duration_ms(ctx: &Context, cfg: &CshipConfig) -> Option<
             return None;
         }
     };
-    let val_str = val.to_string();
+    let val_str = crate::format::format_duration_ms(val);
     crate::format::render_styled_value(&val_str, Some(val as f64), sub_cfg, None)
 }
 
@@ -304,16 +307,18 @@ mod tests {
 
     #[test]
     fn test_render_total_duration_ms() {
+        // 45_000ms → "45s" (human-readable; raw-ms suffix dropped per issue #162).
         let ctx = ctx_with_cost(0.01);
         let result = render_total_duration_ms(&ctx, &CshipConfig::default());
-        assert_eq!(result, Some("45000".to_string()));
+        assert_eq!(result, Some("45s".to_string()));
     }
 
     #[test]
     fn test_render_total_api_duration_ms() {
+        // 2300ms truncates to 2s, matching starship's whole-second granularity.
         let ctx = ctx_with_cost(0.01);
         let result = render_total_api_duration_ms(&ctx, &CshipConfig::default());
-        assert_eq!(result, Some("2300".to_string()));
+        assert_eq!(result, Some("2s".to_string()));
     }
 
     #[test]
@@ -536,17 +541,18 @@ mod tests {
         };
         let result = render_total_duration_ms(&ctx, &cfg).unwrap();
         assert!(result.contains('\x1b'), "expected warn ANSI: {result:?}");
-        assert!(result.contains("45000"), "expected value: {result:?}");
+        assert!(result.contains("45s"), "expected value: {result:?}");
     }
 
     #[test]
     fn test_subfield_format_with_warn_threshold_uses_warn_style() {
-        // AC3, AC6: format path + threshold → threshold-resolved style in apply_module_format
+        // AC3, AC6: format path + threshold → threshold-resolved style in apply_module_format.
+        // Format string drops " ms" literal — $value is now human-readable per issue #162.
         let ctx = ctx_with_cost(0.01); // total_duration_ms = 45000 > 30000
         let cfg = CshipConfig {
             cost: Some(CostConfig {
                 total_duration_ms: Some(CostSubfieldConfig {
-                    format: Some("[$value ms]($style)".to_string()),
+                    format: Some("[$value]($style)".to_string()),
                     warn_threshold: Some(30000.0),
                     warn_style: Some("yellow".to_string()),
                     critical_threshold: Some(60000.0),
@@ -563,7 +569,7 @@ mod tests {
             "expected ANSI in format path: {result:?}"
         );
         assert!(
-            result.contains("45000"),
+            result.contains("45s"),
             "expected value in format: {result:?}"
         );
     }
@@ -585,7 +591,7 @@ mod tests {
         };
         let result = render_total_api_duration_ms(&ctx, &cfg).unwrap();
         assert!(result.contains('\x1b'), "expected warn ANSI: {result:?}");
-        assert!(result.contains("2300"), "expected value: {result:?}");
+        assert!(result.contains("2s"), "expected value: {result:?}");
     }
 
     #[test]

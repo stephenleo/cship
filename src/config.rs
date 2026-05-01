@@ -50,7 +50,12 @@ pub struct CostConfig {
     pub format: Option<String>,
     // Sub-field per-display configs (map to [cship.cost.total_cost_usd] etc.)
     pub total_cost_usd: Option<SubfieldConfig>,
+    /// `total_duration` is an accepted alias — the rendered value is human-readable, not raw ms.
+    /// Define one or the other in TOML; if both are present, serde uses the last-parsed one.
+    #[serde(alias = "total_duration")]
     pub total_duration_ms: Option<SubfieldConfig>,
+    /// `total_api_duration` is an accepted alias — same rationale as `total_duration`.
+    #[serde(alias = "total_api_duration")]
     pub total_api_duration_ms: Option<SubfieldConfig>,
     pub total_lines_added: Option<SubfieldConfig>,
     pub total_lines_removed: Option<SubfieldConfig>,
@@ -765,5 +770,68 @@ mod tests {
             result.source
         );
         assert_eq!(result.config.lines.as_ref().unwrap()[0], "$cship.cost");
+    }
+
+    #[test]
+    fn test_total_duration_alias_deserializes_into_canonical_field() {
+        // [cship.cost.total_duration] should populate the same field as
+        // [cship.cost.total_duration_ms] (issue #162 alias).
+        let toml_alias = r#"
+            [cship.cost.total_duration]
+            warn_threshold = 30000.0
+            warn_style = "yellow"
+        "#;
+        let toml_canonical = r#"
+            [cship.cost.total_duration_ms]
+            warn_threshold = 30000.0
+            warn_style = "yellow"
+        "#;
+        let alias_cfg: StarshipToml = toml::from_str(toml_alias).unwrap();
+        let canonical_cfg: StarshipToml = toml::from_str(toml_canonical).unwrap();
+
+        let alias_sub = alias_cfg
+            .cship
+            .as_ref()
+            .unwrap()
+            .cost
+            .as_ref()
+            .unwrap()
+            .total_duration_ms
+            .as_ref()
+            .unwrap();
+        let canonical_sub = canonical_cfg
+            .cship
+            .as_ref()
+            .unwrap()
+            .cost
+            .as_ref()
+            .unwrap()
+            .total_duration_ms
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(alias_sub.warn_threshold, canonical_sub.warn_threshold);
+        assert_eq!(alias_sub.warn_style, canonical_sub.warn_style);
+        assert_eq!(alias_sub.warn_threshold, Some(30000.0));
+    }
+
+    #[test]
+    fn test_total_api_duration_alias_deserializes_into_canonical_field() {
+        let toml_alias = r#"
+            [cship.cost.total_api_duration]
+            warn_threshold = 2000.0
+        "#;
+        let cfg: StarshipToml = toml::from_str(toml_alias).unwrap();
+        let sub = cfg
+            .cship
+            .as_ref()
+            .unwrap()
+            .cost
+            .as_ref()
+            .unwrap()
+            .total_api_duration_ms
+            .as_ref()
+            .unwrap();
+        assert_eq!(sub.warn_threshold, Some(2000.0));
     }
 }

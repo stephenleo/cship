@@ -128,17 +128,23 @@ Individual cost metrics can also be referenced directly:
 | Token | Description |
 |-------|-------------|
 | `$cship.cost.total_cost_usd` | Total cost in USD |
-| `$cship.cost.total_duration_ms` | Total wall-clock duration (ms) |
-| `$cship.cost.total_api_duration_ms` | Total API time (ms) |
+| `$cship.cost.total_duration` (alias: `total_duration_ms`) | Total wall-clock duration, human-readable (`45s`, `1m30s`, `2h15m`, or `750ms` for sub-second) |
+| `$cship.cost.total_api_duration` (alias: `total_api_duration_ms`) | Total API time, human-readable |
 | `$cship.cost.total_lines_added` | Lines added this session |
 | `$cship.cost.total_lines_removed` | Lines removed this session |
 
 Each sub-field has its own `[cship.cost.<name>]` section with the same fields as the parent (`style`, `symbol`, `format`, `warn_threshold`, `warn_style`, `critical_threshold`, `critical_style`, `disabled`).
 
+`total_duration` / `total_api_duration` and the `_ms`-suffixed names are accepted interchangeably as TOML keys and as `$cship.cost.…` variables — pick the spelling that reads better. Threshold values are still compared in raw milliseconds (e.g. `warn_threshold = 30000.0` fires at 30s).
+
 ```toml
 [cship.cost.total_lines_added]
 style = "green"
 warn_threshold = 500
+warn_style = "yellow"
+
+[cship.cost.total_duration]
+warn_threshold = 30000.0   # 30s, compared in raw ms
 warn_style = "yellow"
 ```
 
