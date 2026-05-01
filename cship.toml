@@ -10,6 +10,8 @@ style  = "bold cyan"
 
 [cship.context_bar]
 symbol             = " "
+filled_char        = "●"
+empty_char         = "○"
 format             = "[$symbol$value]($style)"
 width              = 10
 style              = "fg:#7dcfff"
@@ -21,14 +23,16 @@ critical_style     = "bold fg:#f7768e"
 [cship.cost]
 symbol             = "💰 "
 style              = "fg:#a9b1d6"
-warn_threshold     = 2.0
+warn_threshold     = 10
 warn_style         = "fg:#e0af68"
-critical_threshold = 5.0
+critical_threshold = 50
 critical_style     = "bold fg:#f7768e"
 
 [cship.usage_limits]
 five_hour_format   = " 5h {pct}% ({reset})"
 seven_day_format   = " 7d {pct}% ({reset})"
+sonnet_format      = "🎼 {pct}% ({reset})"
+extra_usage_format = "{active} {pct}% (${used}/${limit})"
 separator          = " "
 warn_threshold     = 60.0
 warn_style         = "fg:#e0af68"
