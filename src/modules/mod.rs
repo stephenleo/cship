@@ -18,7 +18,9 @@ pub const ALL_NATIVE_MODULES: &[&str] = &[
     "cship.cost",
     "cship.cost.total_cost_usd",
     "cship.cost.total_duration_ms",
+    "cship.cost.total_duration",
     "cship.cost.total_api_duration_ms",
+    "cship.cost.total_api_duration",
     "cship.cost.total_lines_added",
     "cship.cost.total_lines_removed",
     "cship.context_bar",
@@ -68,8 +70,12 @@ pub fn render_module(
         // Cost module — main alias and sub-fields
         "cship.cost" => cost::render(ctx, cfg),
         "cship.cost.total_cost_usd" => cost::render_total_cost_usd(ctx, cfg),
-        "cship.cost.total_duration_ms" => cost::render_total_duration_ms(ctx, cfg),
-        "cship.cost.total_api_duration_ms" => cost::render_total_api_duration_ms(ctx, cfg),
+        "cship.cost.total_duration_ms" | "cship.cost.total_duration" => {
+            cost::render_total_duration_ms(ctx, cfg)
+        }
+        "cship.cost.total_api_duration_ms" | "cship.cost.total_api_duration" => {
+            cost::render_total_api_duration_ms(ctx, cfg)
+        }
         "cship.cost.total_lines_added" => cost::render_total_lines_added(ctx, cfg),
         "cship.cost.total_lines_removed" => cost::render_total_lines_removed(ctx, cfg),
         // Context bar — progress bar with threshold styling
@@ -158,5 +164,39 @@ mod tests {
         let ctx = Context::default();
         let cfg = CshipConfig::default();
         assert!(render_module("cship.unknown_future_module", &ctx, &cfg).is_none());
+    }
+
+    #[test]
+    fn test_total_duration_alias_equivalent_to_total_duration_ms() {
+        // total_duration is an accepted alias for total_duration_ms (issue #162).
+        // Both names must produce byte-identical output for the same context.
+        let ctx = Context {
+            cost: Some(crate::context::Cost {
+                total_duration_ms: Some(90_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        let canonical = render_module("cship.cost.total_duration_ms", &ctx, &cfg);
+        let alias = render_module("cship.cost.total_duration", &ctx, &cfg);
+        assert_eq!(canonical, alias);
+        assert_eq!(canonical, Some("1m30s".to_string()));
+    }
+
+    #[test]
+    fn test_total_api_duration_alias_equivalent_to_total_api_duration_ms() {
+        let ctx = Context {
+            cost: Some(crate::context::Cost {
+                total_api_duration_ms: Some(2300),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        let canonical = render_module("cship.cost.total_api_duration_ms", &ctx, &cfg);
+        let alias = render_module("cship.cost.total_api_duration", &ctx, &cfg);
+        assert_eq!(canonical, alias);
+        assert_eq!(canonical, Some("2s".to_string()));
     }
 }

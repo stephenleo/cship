@@ -232,6 +232,31 @@ fn find_matching_close(s: &str, start: usize, open: char, close: char) -> Option
     None
 }
 
+/// Format a duration in milliseconds as a compact human string.
+///
+/// Mirrors starship's `cmd_duration` default output (whole-second granularity).
+/// Sub-second values keep ms precision so a fast 500ms response doesn't read as `"0s"`.
+/// Uses integer division on `u64` — exact, no float drift, truncation is intentional.
+///
+/// Examples: `0` → `"0ms"`, `500` → `"500ms"`, `1500` → `"1s"`, `45000` → `"45s"`,
+/// `90000` → `"1m30s"`, `3_660_000` → `"1h1m0s"`.
+pub fn format_duration_ms(ms: u64) -> String {
+    if ms < 1000 {
+        return format!("{ms}ms");
+    }
+    let total_secs = ms / 1000;
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}h{mins}m{secs}s")
+    } else if mins > 0 {
+        format!("{mins}m{secs}s")
+    } else {
+        format!("{secs}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +472,63 @@ mod tests {
         assert!(s.contains("bar"), "value present: {s:?}");
         assert!(s.contains("🧠"), "symbol present: {s:?}");
         assert!(s.contains('\x1b'), "ANSI codes present: {s:?}");
+    }
+
+    // --- format_duration_ms tests ---
+
+    #[test]
+    fn test_format_duration_ms_zero() {
+        assert_eq!(format_duration_ms(0), "0ms");
+    }
+
+    #[test]
+    fn test_format_duration_ms_one_ms() {
+        assert_eq!(format_duration_ms(1), "1ms");
+    }
+
+    #[test]
+    fn test_format_duration_ms_just_under_one_second() {
+        assert_eq!(format_duration_ms(999), "999ms");
+    }
+
+    #[test]
+    fn test_format_duration_ms_one_second_exact() {
+        assert_eq!(format_duration_ms(1000), "1s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_truncates_to_seconds() {
+        assert_eq!(format_duration_ms(1500), "1s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_just_under_one_minute() {
+        assert_eq!(format_duration_ms(59_999), "59s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_one_minute_exact() {
+        assert_eq!(format_duration_ms(60_000), "1m0s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_minutes_and_seconds() {
+        assert_eq!(format_duration_ms(90_000), "1m30s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_just_under_one_hour() {
+        assert_eq!(format_duration_ms(3_599_999), "59m59s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_one_hour_exact() {
+        assert_eq!(format_duration_ms(3_600_000), "1h0m0s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_hours_minutes_seconds() {
+        assert_eq!(format_duration_ms(7_265_000), "2h1m5s");
     }
 
     #[test]

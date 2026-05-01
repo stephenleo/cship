@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Changed
+- **Breaking:** `$cship.cost.total_duration_ms` and `$cship.cost.total_api_duration_ms` now render human-readable durations (`45s`, `1m30s`, `2h15m`, or `750ms` for sub-second values) instead of raw milliseconds. If your config has `format = "[$value ms]($style)"`, drop the literal ` ms` — `$value` is no longer in milliseconds. Threshold configs (`warn_threshold = 30000.0`) keep working unchanged because comparisons still operate on raw milliseconds (issue #162).
+
+### Added
+- `$cship.cost.total_duration` and `$cship.cost.total_api_duration` are accepted aliases for the `_ms` versions, in both format-string variables and TOML config keys. Use whichever spelling reads better in your config — they resolve to the same field (issue #162).
+
 ## [1.5.1] - 2026-04-20
 
 ### Fixed
