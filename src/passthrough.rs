@@ -424,7 +424,8 @@ mod tests {
         assert!(tc.0.exists(), "temp config file should exist on disk");
 
         let content = std::fs::read_to_string(&tc.0).expect("temp config should be readable");
-        let value: toml::Value = toml::from_str(&content).expect("temp config should be valid TOML");
+        let value: toml::Value =
+            toml::from_str(&content).expect("temp config should be valid TOML");
         let table = value.as_table().unwrap();
 
         for module in &["line_break", "character"] {
@@ -466,7 +467,10 @@ mod tests {
         let value: toml::Value = toml::from_str(&content).unwrap();
         let char_section = value.as_table().unwrap().get("character").unwrap();
 
-        assert_eq!(char_section.get("disabled").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            char_section.get("disabled").and_then(|v| v.as_bool()),
+            Some(true)
+        );
         assert_eq!(
             char_section.get("success_symbol").and_then(|v| v.as_str()),
             Some("X"),
@@ -506,9 +510,7 @@ mod tests {
         let original = std::env::var("PATH").unwrap_or_default();
         // Prepend mock dir rather than replacing PATH entirely — system commands
         // (e.g. grep, cat) used inside the mock script must remain resolvable.
-        unsafe {
-            std::env::set_var("PATH", format!("{}:{}", dir.to_str().unwrap(), original))
-        };
+        unsafe { std::env::set_var("PATH", format!("{}:{}", dir.to_str().unwrap(), original)) };
 
         let result = render_starship_prompt(&Context::default(), &CshipConfig::default());
 
