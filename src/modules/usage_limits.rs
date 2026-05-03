@@ -1864,9 +1864,15 @@ mod tests {
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
-        assert!(result.starts_with("50% | 30%"), "legacy 5h/7d prefix: {result:?}");
+        assert!(
+            result.starts_with("50% | 30%"),
+            "legacy 5h/7d prefix: {result:?}"
+        );
         assert!(!result.contains("opus"), "opus must be hidden by default");
-        assert!(result.contains("extra"), "extra-usage must show when enabled: {result:?}");
+        assert!(
+            result.contains("extra"),
+            "extra-usage must show when enabled: {result:?}"
+        );
     }
 
     #[test]
