@@ -6,8 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-05-03
+
+### Added
+- Added `filled_char` and `empty_char` config to `cship.context_bar` for fully customizable progress-bar glyphs ([@HotThoughts](https://github.com/HotThoughts), [#155](https://github.com/stephenleo/cship/pull/155))
+- Added `extra_usage_format` and per-model format fields to `cship.usage_limits`, with pace tracking, an active-window indicator, and sub-field renderers for the new fields parsed from the OAuth API ([@nh13](https://github.com/nh13), [#152](https://github.com/stephenleo/cship/pull/152))
+- Added `currency_symbol` and `conversion_rate` config to `cship.cost` so the displayed amount can be expressed in any currency ([@sephml](https://github.com/sephml), [#165](https://github.com/stephenleo/cship/pull/165))
+
 ### Changed
-- `cship.cost` thresholds (`warn_threshold`, `critical_threshold`) are now evaluated against the converted display value (`total_cost_usd × conversion_rate`) instead of raw USD, so they live in the same currency as the displayed amount. Users with both thresholds and a non-`1.0` `conversion_rate` should restate their thresholds in the display currency
+- `cship.cost` thresholds (`warn_threshold`, `critical_threshold`) are now evaluated against the converted display value (`total_cost_usd × conversion_rate`) instead of raw USD, so they live in the same currency as the displayed amount. Users with both thresholds and a non-`1.0` `conversion_rate` should restate their thresholds in the display currency ([#167](https://github.com/stephenleo/cship/pull/167))
+
+### Fixed
+- Brought the Windows PowerShell installer to parity with the macOS/Linux installer, and stopped emitting a UTF-8 BOM when writing `cship.toml` / `settings.json` (BOM was rejected by the Rust `toml` parser) ([@sephml](https://github.com/sephml), [#160](https://github.com/stephenleo/cship/pull/160))
+- `passthrough` now strips `$line_break` and `$character` from `$starship_prompt` output so an embedded Starship prompt renders cleanly inside a cship layout ([#163](https://github.com/stephenleo/cship/pull/163))
+- Addressed code-review follow-ups for the `usage_limits` rewrite ([#169](https://github.com/stephenleo/cship/pull/169))
+
+### Docs
+- Unified agent instructions into a single `CLAUDE.md` source ([#168](https://github.com/stephenleo/cship/pull/168))
 
 ## [1.5.1] - 2026-04-20
 
