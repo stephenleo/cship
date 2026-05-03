@@ -320,7 +320,7 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 
 | Token | Renders |
 |-------|---------|
-| `$cship.usage_limits` | Combined: 5h + 7d + per-model (when present) + extra usage (when enabled) |
+| `$cship.usage_limits` | 5h + 7d window summary. Per-model and extra-usage sections are appended only when `show_per_model = true` (opt-in for backwards compatibility) |
 | `$cship.usage_limits.per_model` | Only the per-model 7-day breakdown (opus/sonnet/cowork/oauth) |
 | `$cship.usage_limits.opus` | 7-day Opus utilization only |
 | `$cship.usage_limits.sonnet` | 7-day Sonnet utilization only |
@@ -342,6 +342,7 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `cowork_format` | `string` | `"cowork {pct}%"` | Format for the 7-day Cowork section |
 | `oauth_apps_format` | `string` | `"oauth {pct}%"` | Format for the 7-day OAuth-apps section |
 | `extra_usage_format` | `string` | `"{active} extra: {pct}% (${used}/${limit})"` | Format for the extra-usage section |
+| `show_per_model` | `bool` | `false` | When `true`, `$cship.usage_limits` appends per-model and extra-usage sections to the default `5h \| 7d` output. Default is `false` so existing status bars retain their pre-1.5 shape; opt in to surface the richer breakdown without using the dedicated `$cship.usage_limits.opus` etc. tokens. |
 | `separator` | `string` | `" \| "` | String placed between sections |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
@@ -358,12 +359,13 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `{reset}` | Time-until-reset string (e.g. `4h12m`) |
 | `{pace}` | Signed headroom vs linear consumption — `+20%` (under pace), `-15%` (over pace), or `?` when unknown |
 
-**Additional placeholders in `extra_usage_format`:**
+**Placeholders specific to `extra_usage_format`** (the standard `{remaining}` percentage placeholder does **not** apply here — use `{remaining_credits}` instead):
 
 | Placeholder | Meaning |
 |-------------|---------|
 | `{used}` | Extra credits consumed, in dollars (e.g. `12.34`) |
 | `{limit}` | Monthly extra-credit limit, in dollars (e.g. `50`) |
+| `{remaining_credits}` | Remaining extra-credit budget, in dollars (e.g. `138.05`) |
 | `{active}` | `⚡` when 5h or 7d utilization is at 100% (actively consuming extra credits), `💤` otherwise |
 
 **Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 install `libsecret-tools` and store your OAuth token with `secret-tool`. See [FAQ](/faq#usage-limits-linux) for setup instructions.

@@ -129,7 +129,7 @@ pub fn fetch_usage_limits(token: &str) -> Result<UsageLimitsData, String> {
 
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
-            .timeout_global(Some(Duration::from_secs(5)))
+            .timeout_global(Some(Duration::from_millis(1500)))
             .build(),
     );
     let mut response = agent

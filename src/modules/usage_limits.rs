@@ -11,8 +11,43 @@ use crate::config::{CshipConfig, UsageLimitsConfig};
 use crate::context::Context;
 use crate::usage_limits::UsageLimitsData;
 
+thread_local! {
+    /// Per-render-cycle memo for `resolve_data`. cship invocations are short-lived
+    /// (one process per prompt render), so a thread-local cache effectively means
+    /// "compute once per render." Restores the zero-latency guarantee from commit
+    /// fdeef09 when a status bar references multiple sub-tokens
+    /// ($cship.usage_limits.opus, .sonnet, etc.) — without this, each token would
+    /// independently call resolve_data and pay the OAuth/cache lookup cost.
+    static RESOLVE_CACHE: std::cell::RefCell<Option<Option<UsageLimitsData>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Shared data-fetch logic for the usage limits module and its sub-field renderers.
 ///
+/// In production builds, memoized per process invocation via `RESOLVE_CACHE` so the
+/// OAuth/cache lookup runs at most once per render cycle even when the user's
+/// status bar references multiple sub-tokens (`$cship.usage_limits.opus`, `.sonnet`,
+/// etc.). In test builds, memoization is bypassed: cargo's worker threads are
+/// reused across tests, so a thread-local cache would leak state between unrelated
+/// test cases. The memoization mechanism itself is exercised by
+/// `resolve_data_memoized` in the test module.
+#[cfg(not(test))]
+fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
+    RESOLVE_CACHE.with(|c| {
+        if let Some(cached) = c.borrow().as_ref() {
+            return cached.clone();
+        }
+        let computed = resolve_data_uncached(ctx, cfg);
+        *c.borrow_mut() = Some(computed.clone());
+        computed
+    })
+}
+
+#[cfg(test)]
+fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
+    resolve_data_uncached(ctx, cfg)
+}
+
 /// Stdin `rate_limits` always provides the freshest 5h/7d values (sent every render
 /// by Claude Code). Cache/OAuth provide per-model + extra usage data.
 ///
@@ -21,7 +56,7 @@ use crate::usage_limits::UsageLimitsData;
 /// 2. Enrich with per-model + extra usage from cache or OAuth
 /// 3. If OAuth fails, merge stdin with stale cache for per-model/extra
 /// 4. If no cache at all, return stdin-only (no per-model/extra)
-fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
+fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     let ul_cfg = cfg.usage_limits.as_ref();
 
     if ul_cfg.and_then(|c| c.disabled) == Some(true) {
@@ -342,13 +377,15 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
 
     let mut parts: Vec<String> = vec![five_h_part, seven_d_part];
 
-    let per_model = format_per_model(data, cfg);
-    if !per_model.is_empty() {
-        parts.push(per_model);
-    }
+    if cfg.show_per_model.unwrap_or(false) {
+        let per_model = format_per_model(data, cfg);
+        if !per_model.is_empty() {
+            parts.push(per_model);
+        }
 
-    if let Some(extra) = format_extra_usage(data, cfg) {
-        parts.push(extra);
+        if let Some(extra) = format_extra_usage(data, cfg) {
+            parts.push(extra);
+        }
     }
 
     parts.join(sep)
@@ -456,7 +493,7 @@ fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option
         .extra_usage_monthly_limit
         .map(|v| format!("{:.0}", v / 100.0))
         .unwrap_or_else(|| "?".into());
-    let eu_remaining = match (
+    let eu_remaining_credits = match (
         data.extra_usage_monthly_limit,
         data.extra_usage_used_credits,
     ) {
@@ -478,7 +515,7 @@ fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option
             .replace("{pct}", &eu_pct)
             .replace("{used}", &eu_used)
             .replace("{limit}", &eu_limit)
-            .replace("{remaining}", &eu_remaining),
+            .replace("{remaining_credits}", &eu_remaining_credits),
     )
 }
 
@@ -527,7 +564,8 @@ fn format_remaining_secs(secs: u64) -> String {
 /// Calculate pace: how far ahead or behind linear consumption the user is.
 ///
 /// Returns `Some(pace)` where positive = headroom, negative = over-pace.
-/// Returns `None` when `resets_at_epoch` is unavailable.
+/// Returns `None` when `resets_at_epoch` is unavailable or already in the past
+/// (an expired window has no meaningful pace — `format_pace(None)` renders `"?"`).
 fn calculate_pace(
     used_pct: f64,
     resets_at_epoch: Option<u64>,
@@ -535,7 +573,10 @@ fn calculate_pace(
     now: u64,
 ) -> Option<f64> {
     let reset = resets_at_epoch?;
-    let remaining = reset.saturating_sub(now);
+    if reset <= now {
+        return None;
+    }
+    let remaining = reset - now;
     let elapsed = window_secs.saturating_sub(remaining);
     let elapsed_fraction = elapsed as f64 / window_secs as f64;
     let expected_pct = elapsed_fraction * 100.0;
@@ -1409,9 +1450,20 @@ mod tests {
     #[test]
     fn test_calculate_pace_reset_in_past() {
         let now = now_epoch();
+        // An expired window has no meaningful pace: pre-fix the function returned
+        // a spurious "+70 headroom" because the clamped elapsed_fraction hit 1.0.
         let pace = calculate_pace(30.0, Some(now.saturating_sub(100)), 18000, now);
-        let p = pace.unwrap();
-        assert!(p > 65.0 && p < 75.0, "expected ~+70 headroom, got {p}");
+        assert!(pace.is_none(), "expired window should produce no pace");
+    }
+
+    #[test]
+    fn test_calculate_pace_reset_equals_now() {
+        let now = now_epoch();
+        let pace = calculate_pace(30.0, Some(now), 18000, now);
+        assert!(
+            pace.is_none(),
+            "reset == now is end of window; treat as expired"
+        );
     }
 
     // ── format_pace() tests ──────────────────────────────────────────────────
@@ -1501,6 +1553,7 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1535,6 +1588,7 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1602,7 +1656,8 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
-            extra_usage_format: Some("EXTRA {pct}% rem:{remaining}".into()),
+            extra_usage_format: Some("EXTRA {pct}% rem:{remaining_credits}".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1631,6 +1686,7 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1664,6 +1720,7 @@ mod tests {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
             opus_format: Some("OP:{pct}%/{remaining}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1692,6 +1749,7 @@ mod tests {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
             opus_format: Some("opus {pct}% pace:{pace}".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1702,6 +1760,173 @@ mod tests {
         assert!(
             result.contains("pace:+"),
             "opus pace should show headroom: {result:?}"
+        );
+    }
+
+    // ── resolve_data memoization tests (Fix #2) ──────────────────────────────
+
+    /// Test-only mirror of the production memoization wrapper. Lets us exercise
+    /// the cache mechanism (which is `cfg(not(test))`-gated in `resolve_data`)
+    /// without re-enabling it for unrelated tests on the same worker thread.
+    fn resolve_data_memoized(
+        compute: impl FnOnce() -> Option<UsageLimitsData>,
+    ) -> Option<UsageLimitsData> {
+        RESOLVE_CACHE.with(|c| {
+            if let Some(cached) = c.borrow().as_ref() {
+                return cached.clone();
+            }
+            let computed = compute();
+            *c.borrow_mut() = Some(computed.clone());
+            computed
+        })
+    }
+
+    fn reset_resolve_cache() {
+        RESOLVE_CACHE.with(|c| *c.borrow_mut() = None);
+    }
+
+    #[test]
+    fn test_resolve_data_memoizes_across_calls() {
+        reset_resolve_cache();
+        let counter = std::sync::atomic::AtomicUsize::new(0);
+        let make_compute = || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(UsageLimitsData {
+                five_hour_pct: 42.0,
+                ..Default::default()
+            })
+        };
+
+        let first = resolve_data_memoized(make_compute);
+        let second = resolve_data_memoized(make_compute);
+        let third = resolve_data_memoized(make_compute);
+
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "compute closure should run exactly once"
+        );
+        assert!((first.unwrap().five_hour_pct - 42.0).abs() < f64::EPSILON);
+        assert!((second.unwrap().five_hour_pct - 42.0).abs() < f64::EPSILON);
+        assert!((third.unwrap().five_hour_pct - 42.0).abs() < f64::EPSILON);
+        reset_resolve_cache(); // courtesy: don't leak to whatever runs next on this thread
+    }
+
+    #[test]
+    fn test_resolve_data_memoizes_none_results() {
+        reset_resolve_cache();
+        let counter = std::sync::atomic::AtomicUsize::new(0);
+        let compute = || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        };
+        let first = resolve_data_memoized(compute);
+        let second = resolve_data_memoized(compute);
+        assert!(first.is_none());
+        assert!(second.is_none());
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "None results should also be memoized — avoids re-fetching on cold cache"
+        );
+        reset_resolve_cache();
+    }
+
+    // ── show_per_model toggle tests (Fix #4) ─────────────────────────────────
+
+    #[test]
+    fn test_format_output_default_omits_per_model_and_extra() {
+        // Backwards-compat: default output stays "5h: X% | 7d: X%" even when
+        // per-model and extra-usage data are present in UsageLimitsData.
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some("2099-02-01T00:00:00Z".into()),
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            // show_per_model omitted → defaults to false
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert_eq!(result, "50% | 30%", "default output should be legacy shape");
+        assert!(!result.contains("opus"), "opus must be hidden by default");
+        assert!(!result.contains("extra"), "extra must be hidden by default");
+    }
+
+    #[test]
+    fn test_format_output_show_per_model_true_includes_sections() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some("2099-02-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(result.contains("opus 12%"), "opus visible: {result:?}");
+    }
+
+    // ── extra_usage placeholder tests (Fix #3) ───────────────────────────────
+
+    #[test]
+    fn test_format_extra_usage_remaining_credits_substituted() {
+        let data = UsageLimitsData {
+            five_hour_pct: 0.0,
+            seven_day_pct: 0.0,
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("rem={remaining_credits} pct={pct}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("extra_usage should render");
+        assert!(out.contains("rem=138.05"), "remaining_credits: {out:?}");
+        assert!(out.contains("pct=31"), "pct still works: {out:?}");
+    }
+
+    #[test]
+    fn test_format_extra_usage_remaining_no_longer_substituted_in_extra() {
+        // Guards against regression: the old `{remaining}` placeholder must NOT
+        // be substituted in extra_usage_format (where it had a confusing
+        // dollar-amount semantic). It's reserved for the percentage-based
+        // formatters now.
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("rem={remaining}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("extra_usage renders");
+        assert_eq!(
+            out, "rem={remaining}",
+            "literal {{remaining}} should pass through untouched"
         );
     }
 

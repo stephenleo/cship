@@ -279,24 +279,35 @@ pub struct UsageLimitsConfig {
     pub five_hour_format: Option<String>,
     pub seven_day_format: Option<String>,
     pub separator: Option<String>,
+    /// When `true`, `$cship.usage_limits` appends per-model breakdowns (opus, sonnet,
+    /// cowork, oauth_apps) and the extra-usage section to the default `5h | 7d` output.
+    /// Defaults to `false` to preserve the pre-7.2 output shape `"5h: X% | 7d: X%"`.
+    /// Users who want the richer output set `show_per_model = true`, or reference the
+    /// dedicated tokens (`$cship.usage_limits.opus`, `.sonnet`, etc.) directly — those
+    /// tokens always render regardless of this flag.
+    pub show_per_model: Option<bool>,
     /// Format string for extra usage display. Shown when extra_usage.is_enabled is true.
-    /// Placeholders: {pct}, {used}, {limit}, {remaining}
-    /// Default: "extra: {pct}% (${used}/${limit})"
+    /// Placeholders: {active}, {pct}, {used}, {limit}, {remaining_credits}
+    /// `{pct}` is the integer percentage of extra-usage budget consumed; `{used}`,
+    /// `{limit}`, and `{remaining_credits}` are dollar amounts (the API reports cents).
+    /// `{remaining_credits}` is named distinctly from the percentage-based `{remaining}`
+    /// used in other format strings to avoid silent misinterpretation.
+    /// Default: "{active} extra: {pct}% (${used}/${limit})"
     pub extra_usage_format: Option<String>,
     /// Format string for 7-day Opus breakdown. Shown when API returns non-null data.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "opus {pct}%"
     pub opus_format: Option<String>,
     /// Format string for 7-day Sonnet breakdown.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "sonnet {pct}%"
     pub sonnet_format: Option<String>,
     /// Format string for 7-day Cowork breakdown.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "cowork {pct}%"
     pub cowork_format: Option<String>,
     /// Format string for 7-day OAuth apps breakdown.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "oauth {pct}%"
     pub oauth_apps_format: Option<String>,
 }
