@@ -280,7 +280,8 @@ pub struct UsageLimitsConfig {
     pub seven_day_format: Option<String>,
     pub separator: Option<String>,
     /// When `true`, `$cship.usage_limits` appends per-model breakdowns (opus, sonnet,
-    /// cowork, oauth_apps) and the extra-usage section to the default `5h | 7d` output.
+    /// cowork, oauth_apps) to the default `5h | 7d` output. The extra-usage section
+    /// renders unconditionally whenever the account has extra-usage data enabled.
     /// Defaults to `false` to preserve the pre-7.2 output shape `"5h: X% | 7d: X%"`.
     /// Users who want the richer output set `show_per_model = true`, or reference the
     /// dedicated tokens (`$cship.usage_limits.opus`, `.sonnet`, etc.) directly — those

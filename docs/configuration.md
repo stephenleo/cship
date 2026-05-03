@@ -342,7 +342,7 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `cowork_format` | `string` | `"cowork {pct}%"` | Format for the 7-day Cowork section |
 | `oauth_apps_format` | `string` | `"oauth {pct}%"` | Format for the 7-day OAuth-apps section |
 | `extra_usage_format` | `string` | `"{active} extra: {pct}% (${used}/${limit})"` | Format for the extra-usage section |
-| `show_per_model` | `bool` | `false` | When `true`, `$cship.usage_limits` appends per-model and extra-usage sections to the default `5h \| 7d` output. Default is `false` so existing status bars retain their pre-1.5 shape; opt in to surface the richer breakdown without using the dedicated `$cship.usage_limits.opus` etc. tokens. |
+| `show_per_model` | `bool` | `false` | When `true`, `$cship.usage_limits` appends the per-model breakdown (opus, sonnet, cowork, oauth) to the default `5h \| 7d` output. The extra-usage section always renders when enabled, regardless of this flag. Default is `false` so existing status bars retain their pre-1.5 shape. |
 | `separator` | `string` | `" \| "` | String placed between sections |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
