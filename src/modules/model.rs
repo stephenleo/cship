@@ -1,3 +1,27 @@
+/// Resolve the effective style for the current model, preferring per-family styles over the
+/// base `style`. Family is detected from `model.id` (fallback: `display_name`) via substring.
+fn resolve_model_style<'a>(
+    ctx: &'a crate::context::Context,
+    model_cfg: Option<&'a crate::config::ModelConfig>,
+) -> Option<&'a str> {
+    let cfg = model_cfg?;
+    let key = ctx
+        .model
+        .as_ref()
+        .and_then(|m| m.id.as_deref().or(m.display_name.as_deref()))
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    if key.contains("haiku") {
+        cfg.haiku_style.as_deref().or(cfg.style.as_deref())
+    } else if key.contains("sonnet") {
+        cfg.sonnet_style.as_deref().or(cfg.style.as_deref())
+    } else if key.contains("opus") {
+        cfg.opus_style.as_deref().or(cfg.style.as_deref())
+    } else {
+        cfg.style.as_deref()
+    }
+}
+
 /// Render the `[cship.model]` module.
 ///
 /// Output format: `{symbol}{display_name}` with optional ANSI style applied.
@@ -22,7 +46,7 @@ pub fn render(ctx: &crate::context::Context, cfg: &crate::config::CshipConfig) -
     };
 
     let symbol = model_cfg.and_then(|m| m.symbol.as_deref());
-    let style = model_cfg.and_then(|m| m.style.as_deref());
+    let style = resolve_model_style(ctx, model_cfg);
 
     // Format string takes priority if configured (AC1–4)
     if let Some(fmt) = model_cfg.and_then(|m| m.format.as_deref()) {
@@ -60,7 +84,7 @@ pub fn render_id(
         }
     };
     let symbol = model_cfg.and_then(|m| m.symbol.as_deref());
-    let style = model_cfg.and_then(|m| m.style.as_deref());
+    let style = resolve_model_style(ctx, model_cfg);
 
     // Format string takes priority if configured (AC1–4)
     if let Some(fmt) = model_cfg.and_then(|m| m.format.as_deref()) {
@@ -208,5 +232,133 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(render_id(&ctx, &cfg), None);
+    }
+
+    fn ctx_with_id(id: &str, display_name: &str) -> Context {
+        Context {
+            model: Some(Model {
+                id: Some(id.to_string()),
+                display_name: Some(display_name.to_string()),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_haiku_style_applied() {
+        let ctx = ctx_with_id("claude-haiku-4-5", "Haiku");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                haiku_style: Some("dim cyan".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(result.contains('\x1b'), "expected ANSI codes for haiku_style: {result:?}");
+        assert!(result.contains("Haiku"));
+    }
+
+    #[test]
+    fn test_sonnet_style_applied() {
+        let ctx = ctx_with_id("claude-sonnet-4-6", "Sonnet");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                sonnet_style: Some("bold blue".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(result.contains('\x1b'), "expected ANSI codes for sonnet_style: {result:?}");
+        assert!(result.contains("Sonnet"));
+    }
+
+    #[test]
+    fn test_opus_style_applied() {
+        let ctx = ctx_with_id("claude-opus-4-7", "Opus");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                opus_style: Some("bold magenta".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(result.contains('\x1b'), "expected ANSI codes for opus_style: {result:?}");
+        assert!(result.contains("Opus"));
+    }
+
+    #[test]
+    fn test_family_style_falls_back_to_base_style() {
+        // haiku_style not set — should use base style
+        let ctx = ctx_with_id("claude-haiku-4-5", "Haiku");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                style: Some("bold green".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(result.contains('\x1b'), "expected ANSI codes from base style: {result:?}");
+    }
+
+    #[test]
+    fn test_unknown_model_id_uses_base_style() {
+        let ctx = Context {
+            model: Some(Model {
+                id: Some("claude-future-99".to_string()),
+                display_name: Some("Future".to_string()),
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                style: Some("bold".to_string()),
+                opus_style: Some("bold magenta".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(result.contains('\x1b'));
+        assert!(result.contains("Future"));
+    }
+
+    #[test]
+    fn test_family_match_via_display_name_when_id_absent() {
+        let ctx = Context {
+            model: Some(Model {
+                id: None,
+                display_name: Some("Opus".to_string()),
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                opus_style: Some("bold magenta".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(result.contains('\x1b'), "expected ANSI codes via display_name fallback: {result:?}");
+        assert!(result.contains("Opus"));
+    }
+
+    #[test]
+    fn test_render_id_honors_per_model_style() {
+        let ctx = ctx_with_id("claude-opus-4-7", "Opus");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                opus_style: Some("bold magenta".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render_id(&ctx, &cfg).unwrap();
+        assert!(result.contains('\x1b'), "expected ANSI codes in render_id: {result:?}");
+        assert!(result.contains("claude-opus-4-7"));
     }
 }

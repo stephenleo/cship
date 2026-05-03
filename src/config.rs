@@ -33,6 +33,9 @@ pub struct ModelConfig {
     /// When `true`, prepends the module name as a label.
     pub label: Option<bool>,
     pub format: Option<String>,
+    pub haiku_style: Option<String>,
+    pub sonnet_style: Option<String>,
+    pub opus_style: Option<String>,
 }
 
 /// Configuration for `[cship.cost]` — convenience alias for total cost display.
