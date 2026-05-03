@@ -96,7 +96,7 @@ style  = "bold fg:#7aa2f7"
 
 ## `[cship.cost]` — Session Cost
 
-Displays total session cost with threshold-based colour escalation. The display currency and conversion rate are configurable; the underlying value is always `total_cost_usd` (USD). Thresholds are always evaluated against the raw USD value.
+Displays total session cost with threshold-based colour escalation. The display currency and conversion rate are configurable; the underlying value is always `total_cost_usd` (USD). Thresholds are evaluated against the converted display value (`total_cost_usd × conversion_rate`); configure them in your display currency.
 
 **Token:** `$cship.cost`
 
@@ -106,12 +106,12 @@ Displays total session cost with threshold-based colour escalation. The display 
 | `style` | `string` | `"green"` | Base ANSI style |
 | `symbol` | `string` | `""` | Prefix symbol |
 | `format` | `string` | `"[$symbol$value]($style)"` | Format string |
-| `warn_threshold` | `float` | — | USD amount at which style switches to `warn_style` |
+| `warn_threshold` | `float` | — | Display-currency amount at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style applied when cost ≥ `warn_threshold` |
-| `critical_threshold` | `float` | — | USD amount at which style switches to `critical_style` |
+| `critical_threshold` | `float` | — | Display-currency amount at which style switches to `critical_style` |
 | `critical_style` | `string` | `"bold red"` | Style applied when cost ≥ `critical_threshold` |
 | `currency_symbol` | `string` | `"$"` | Symbol prepended to the displayed value (e.g. `"£"`, `"€"`) |
-| `conversion_rate` | `float` | `1.0` | Multiplier applied to `total_cost_usd` before display; thresholds are still evaluated in USD |
+| `conversion_rate` | `float` | `1.0` | Multiplier applied to `total_cost_usd` before display; thresholds are evaluated against the converted value, so express them in your display currency |
 
 **Variables:** `$value` (e.g. `$1.23` or `£0.97` with a custom currency), `$symbol`, `$style`
 

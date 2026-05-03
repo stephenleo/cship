@@ -5,8 +5,9 @@ use crate::config::CostSubfieldConfig;
 /// `$cship.cost` — convenience alias: formats total_cost_usd with threshold styling.
 /// Display currency and conversion rate are configurable via `currency_symbol` and
 /// `conversion_rate`; the underlying context value is always `total_cost_usd` (USD).
-/// Threshold styling (`warn_threshold`, `critical_threshold`) is always evaluated
-/// against the raw USD value, regardless of any conversion rate applied for display.
+/// Threshold styling (`warn_threshold`, `critical_threshold`) is evaluated against
+/// the converted display value (`total_cost_usd * conversion_rate`); configure
+/// thresholds in your display currency.
 /// `$cship.cost.total_cost_usd` — raw USD value, 4 decimal places.
 /// `$cship.cost.total_duration_ms` / `$cship.cost.total_api_duration_ms` — integer milliseconds.
 /// `$cship.cost.total_lines_added` / `$cship.cost.total_lines_removed` — integer counts.
@@ -17,8 +18,9 @@ use crate::context::Context;
 
 /// Renders `$cship.cost` — total cost with threshold color escalation.
 /// Display format is `{currency_symbol}{value:.2}` (default: `$X.XX`).
-/// `currency_symbol` and `conversion_rate` are configurable; thresholds are always
-/// evaluated against the raw USD value from context.
+/// `currency_symbol` and `conversion_rate` are configurable; thresholds are
+/// evaluated against the converted display value, so configure them in your
+/// display currency.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let cost_cfg = cfg.cost.as_ref();
 
@@ -54,7 +56,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     // Format string takes priority if configured (AC1)
     if let Some(fmt) = cost_cfg.and_then(|c| c.format.as_deref()) {
         let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val),
+            Some(converted_val),
             style,
             warn_threshold,
             warn_style,
@@ -70,7 +72,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 
     Some(crate::ansi::apply_style_with_threshold(
         &content,
-        Some(val),
+        Some(converted_val),
         style,
         warn_threshold,
         warn_style,
@@ -337,6 +339,92 @@ mod tests {
             result.contains('\x1b'),
             "expected critical ANSI codes: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_cost_default_threshold_uses_converted_value() {
+        // Raw USD 1.0 is below warn_threshold 4.0, but converted = 5.0 trips the warn style.
+        let ctx = ctx_with_cost(1.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                conversion_rate: Some(5.0),
+                warn_threshold: Some(4.0),
+                warn_style: Some("yellow".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected warn ANSI from converted value: {result:?}"
+        );
+        assert!(result.contains("$5.00"));
+    }
+
+    #[test]
+    fn test_cost_default_below_converted_threshold_keeps_base_style() {
+        // Converted = 5.0, below warn_threshold 10.0 → no escalation.
+        let ctx = ctx_with_cost(1.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                conversion_rate: Some(5.0),
+                warn_threshold: Some(10.0),
+                warn_style: Some("yellow".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            !result.contains('\x1b'),
+            "should not escalate when converted value below threshold: {result:?}"
+        );
+        assert!(result.contains("$5.00"));
+    }
+
+    #[test]
+    fn test_cost_format_threshold_uses_converted_value() {
+        // Same converted-value comparison must apply on the format-string code path.
+        let ctx = ctx_with_cost(1.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                conversion_rate: Some(5.0),
+                warn_threshold: Some(4.0),
+                warn_style: Some("yellow".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected warn ANSI in format path from converted value: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_cost_default_critical_uses_converted_value() {
+        // Raw USD 3.0 is below critical_threshold 5.0; converted = 6.0 trips critical.
+        let ctx = ctx_with_cost(3.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                conversion_rate: Some(2.0),
+                warn_threshold: Some(4.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(5.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected critical ANSI from converted value: {result:?}"
+        );
+        assert!(result.contains("$6.00"));
     }
 
     #[test]

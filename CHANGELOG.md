@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Changed
+- `cship.cost` thresholds (`warn_threshold`, `critical_threshold`) are now evaluated against the converted display value (`total_cost_usd × conversion_rate`) instead of raw USD, so they live in the same currency as the displayed amount. Users with both thresholds and a non-`1.0` `conversion_rate` should restate their thresholds in the display currency
+
 ## [1.5.1] - 2026-04-20
 
 ### Fixed

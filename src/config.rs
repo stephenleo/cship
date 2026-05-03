@@ -52,8 +52,9 @@ pub struct CostConfig {
     /// Example: `"£"` or `"€"`.
     pub currency_symbol: Option<String>,
     /// Multiplier applied to `total_cost_usd` before display. Defaults to `1.0` (no conversion).
-    /// Note: `warn_threshold` and `critical_threshold` are always compared against the raw
-    /// USD value — configure them in USD regardless of the conversion rate.
+    /// Note: `warn_threshold` and `critical_threshold` are compared against the converted value
+    /// (`total_cost_usd * conversion_rate`) — configure them in your display currency.
+    /// Should be positive; non-positive values are accepted but produce undefined threshold behavior.
     pub conversion_rate: Option<f64>,
     // Sub-field per-display configs (map to [cship.cost.total_cost_usd] etc.)
     pub total_cost_usd: Option<SubfieldConfig>,
