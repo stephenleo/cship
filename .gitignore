@@ -1,6 +1,7 @@
 PRD/
 _bmad*
 .claude/
+.codex/
 .agents/
 .vscode/
 /target
