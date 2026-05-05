@@ -101,6 +101,7 @@ pub fn render_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ansi;
     use crate::config::{CshipConfig, ModelConfig};
     use crate::context::{Context, Model};
 
@@ -245,64 +246,66 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_haiku_style_applied() {
-        let ctx = ctx_with_id("claude-haiku-4-5", "Haiku");
-        let cfg = CshipConfig {
+    fn all_family_cfg(haiku: &str, sonnet: &str, opus: &str, base: &str) -> CshipConfig {
+        CshipConfig {
             model: Some(ModelConfig {
-                haiku_style: Some("dim cyan".to_string()),
+                haiku_style: Some(haiku.to_string()),
+                sonnet_style: Some(sonnet.to_string()),
+                opus_style: Some(opus.to_string()),
+                style: Some(base.to_string()),
                 ..Default::default()
             }),
             ..Default::default()
-        };
-        let result = render(&ctx, &cfg).unwrap();
-        assert!(result.contains('\x1b'), "expected ANSI codes for haiku_style: {result:?}");
-        assert!(result.contains("Haiku"));
+        }
+    }
+
+    #[test]
+    fn test_haiku_style_applied() {
+        let ctx = ctx_with_id("claude-haiku-4-5", "Haiku");
+        let cfg = all_family_cfg("dim cyan", "bold blue", "bold magenta", "bold red");
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Haiku", Some("dim cyan")),
+        );
     }
 
     #[test]
     fn test_sonnet_style_applied() {
         let ctx = ctx_with_id("claude-sonnet-4-6", "Sonnet");
-        let cfg = CshipConfig {
-            model: Some(ModelConfig {
-                sonnet_style: Some("bold blue".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = render(&ctx, &cfg).unwrap();
-        assert!(result.contains('\x1b'), "expected ANSI codes for sonnet_style: {result:?}");
-        assert!(result.contains("Sonnet"));
+        let cfg = all_family_cfg("dim cyan", "bold blue", "bold magenta", "bold red");
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Sonnet", Some("bold blue")),
+        );
     }
 
     #[test]
     fn test_opus_style_applied() {
         let ctx = ctx_with_id("claude-opus-4-7", "Opus");
+        let cfg = all_family_cfg("dim cyan", "bold blue", "bold magenta", "bold red");
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Opus", Some("bold magenta")),
+        );
+    }
+
+    #[test]
+    fn test_family_style_falls_back_to_base_style() {
+        // haiku_style not set — should use base style, not any other family style
+        let ctx = ctx_with_id("claude-haiku-4-5", "Haiku");
         let cfg = CshipConfig {
             model: Some(ModelConfig {
+                style: Some("bold green".to_string()),
+                sonnet_style: Some("bold blue".to_string()),
                 opus_style: Some("bold magenta".to_string()),
                 ..Default::default()
             }),
             ..Default::default()
         };
-        let result = render(&ctx, &cfg).unwrap();
-        assert!(result.contains('\x1b'), "expected ANSI codes for opus_style: {result:?}");
-        assert!(result.contains("Opus"));
-    }
-
-    #[test]
-    fn test_family_style_falls_back_to_base_style() {
-        // haiku_style not set — should use base style
-        let ctx = ctx_with_id("claude-haiku-4-5", "Haiku");
-        let cfg = CshipConfig {
-            model: Some(ModelConfig {
-                style: Some("bold green".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = render(&ctx, &cfg).unwrap();
-        assert!(result.contains('\x1b'), "expected ANSI codes from base style: {result:?}");
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Haiku", Some("bold green")),
+        );
     }
 
     #[test]
@@ -314,17 +317,11 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cfg = CshipConfig {
-            model: Some(ModelConfig {
-                style: Some("bold".to_string()),
-                opus_style: Some("bold magenta".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = render(&ctx, &cfg).unwrap();
-        assert!(result.contains('\x1b'));
-        assert!(result.contains("Future"));
+        let cfg = all_family_cfg("dim cyan", "bold blue", "bold magenta", "bold red");
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Future", Some("bold red")),
+        );
     }
 
     #[test]
@@ -336,30 +333,20 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cfg = CshipConfig {
-            model: Some(ModelConfig {
-                opus_style: Some("bold magenta".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = render(&ctx, &cfg).unwrap();
-        assert!(result.contains('\x1b'), "expected ANSI codes via display_name fallback: {result:?}");
-        assert!(result.contains("Opus"));
+        let cfg = all_family_cfg("dim cyan", "bold blue", "bold magenta", "bold red");
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Opus", Some("bold magenta")),
+        );
     }
 
     #[test]
     fn test_render_id_honors_per_model_style() {
         let ctx = ctx_with_id("claude-opus-4-7", "Opus");
-        let cfg = CshipConfig {
-            model: Some(ModelConfig {
-                opus_style: Some("bold magenta".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = render_id(&ctx, &cfg).unwrap();
-        assert!(result.contains('\x1b'), "expected ANSI codes in render_id: {result:?}");
-        assert!(result.contains("claude-opus-4-7"));
+        let cfg = all_family_cfg("dim cyan", "bold blue", "bold magenta", "bold red");
+        assert_eq!(
+            render_id(&ctx, &cfg).unwrap(),
+            ansi::apply_style("claude-opus-4-7", Some("bold magenta")),
+        );
     }
 }
