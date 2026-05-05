@@ -83,13 +83,13 @@ Displays the active Claude model name.
 | `style` | `string` | `"bold"` | ANSI style (fallback when no per-family style matches) |
 | `symbol` | `string` | `""` | Prefix symbol |
 | `format` | `string` | `"[$symbol$value]($style)"` | Format string; `$value` = model display name |
-| `haiku_style` | `string` | — | Style applied when model id contains `"haiku"` |
-| `sonnet_style` | `string` | — | Style applied when model id contains `"sonnet"` |
-| `opus_style` | `string` | — | Style applied when model id contains `"opus"` |
+| `haiku_style` | `string` | — | Style applied when the key contains `"haiku"` (case-insensitive) |
+| `sonnet_style` | `string` | — | Style applied when the key contains `"sonnet"` (case-insensitive) |
+| `opus_style` | `string` | — | Style applied when the key contains `"opus"` (case-insensitive) |
 
-**Variables:** `$value` (display name, e.g. `claude-sonnet-4-5`), `$symbol`, `$style`
+**Variables:** `$value` (display name, e.g. `Claude Sonnet 4.5`), `$symbol`, `$style`
 
-Per-family styles are matched against the model id (e.g. `claude-opus-4-7`). If the id is absent, the display name is used as a fallback. When a family style is not set, `style` is used.
+Per-family styles are matched case-insensitively against `model.id` (e.g. `claude-opus-4-7`). If `id` is absent, `display_name` is used as the key instead — so a display name like `"My Sonnet Setup"` will trigger `sonnet_style`. When no family style matches or is set, `style` is used as the fallback.
 
 ```toml
 [cship.model]
