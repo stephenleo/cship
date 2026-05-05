@@ -11,15 +11,16 @@ fn resolve_model_style<'a>(
         .and_then(|m| m.id.as_deref().or(m.display_name.as_deref()))
         .map(|s| s.to_lowercase())
         .unwrap_or_default();
-    if key.contains("haiku") {
-        cfg.haiku_style.as_deref().or(cfg.style.as_deref())
+    let family = if key.contains("haiku") {
+        cfg.haiku_style.as_deref()
     } else if key.contains("sonnet") {
-        cfg.sonnet_style.as_deref().or(cfg.style.as_deref())
+        cfg.sonnet_style.as_deref()
     } else if key.contains("opus") {
-        cfg.opus_style.as_deref().or(cfg.style.as_deref())
+        cfg.opus_style.as_deref()
     } else {
-        cfg.style.as_deref()
-    }
+        None
+    };
+    family.or(cfg.style.as_deref())
 }
 
 /// Render the `[cship.model]` module.
