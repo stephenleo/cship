@@ -80,16 +80,26 @@ Displays the active Claude model name.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `disabled` | `bool` | `false` | Hide this module |
-| `style` | `string` | `"bold"` | ANSI style |
+| `style` | `string` | `"bold"` | ANSI style (fallback when no per-family style matches) |
 | `symbol` | `string` | `""` | Prefix symbol |
 | `format` | `string` | `"[$symbol$value]($style)"` | Format string; `$value` = model display name |
+| `haiku_style` | `string` | — | Style applied when the key contains `"haiku"` (case-insensitive) |
+| `sonnet_style` | `string` | — | Style applied when the key contains `"sonnet"` (case-insensitive) |
+| `opus_style` | `string` | — | Style applied when the key contains `"opus"` (case-insensitive) |
 
-**Variables:** `$value` (display name, e.g. `claude-sonnet-4-5`), `$symbol`, `$style`
+**Variables:** `$value` (display name, e.g. `Claude Sonnet 4.5`), `$symbol`, `$style`
+
+Per-family styles are matched case-insensitively against `model.id` (e.g. `claude-opus-4-7`). If `id` is absent, `display_name` is used as the key instead — so a display name like `"My Sonnet Setup"` will trigger `sonnet_style`. When no family style matches or is set, `style` is used as the fallback.
 
 ```toml
 [cship.model]
 symbol = "🤖 "
 style  = "bold fg:#7aa2f7"
+
+# Per-model colors
+haiku_style  = "green"
+sonnet_style = "cyan"
+opus_style   = "magenta"
 ```
 
 ---
