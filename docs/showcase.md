@@ -45,8 +45,8 @@ critical_threshold = 50
 critical_style     = "bold fg:#f7768e"
 
 [cship.usage_limits]
-five_hour_format   = " 5h {pct}% ({reset})"
-seven_day_format   = " 7d {pct}% ({reset})"
+five_hour_format   = " 5h {pct}% ({reset})"
+seven_day_format   = " 7d {pct}% ({reset})"
 separator          = " "
 warn_threshold     = 50.0
 warn_style         = "fg:#e0af68"
