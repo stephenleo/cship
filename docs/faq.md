@@ -126,6 +126,23 @@ To map raw organization names to short labels:
 
 ---
 
+## Can I right-align modules? (the `$fill` token)
+
+Yes — use `$fill`. It expands to fill the remaining horizontal space, pushing whatever follows it to the right; multiple `$fill` on one line split the space evenly (so the last segment is flush-right). It mirrors Starship's `fill` module and is configured via `[cship.fill]`.
+
+```toml
+[cship]
+lines = ["$cship.model $cship.cost $fill $cship.context_bar $fill $cship.usage_limits"]
+
+[cship.fill]
+symbol = "·"
+style  = "fg:#414868"
+```
+
+**Important caveat:** Claude Code does not tell the statusline how wide the terminal is ([claude-code#22115](https://github.com/anthropics/claude-code/issues/22115)). cship recovers the width best-effort by reading the controlling terminal of a parent process — which works in **macOS/Linux terminals** but not on **Windows** or the **web/desktop apps**, where it falls back to `[cship] width` (if set) and then 80 columns. If alignment is off by a few columns, tune `[cship] width_offset` (default 3) or pin `[cship] width` to your terminal's width.
+
+---
+
 ## How does the peak-time indicator handle time zones and DST?
 
 The `peak_usage` module checks whether the current time falls within the configured peak window in **US Pacific time**. It computes the UTC→Pacific offset internally — PDT (UTC−7) from the second Sunday of March through the first Sunday of November, PST (UTC−8) the rest of the year.

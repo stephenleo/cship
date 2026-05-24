@@ -1,8 +1,11 @@
 [cship]
 lines = [
   "$starship_prompt",
-  "$cship.model $cship.effort $cship.cost $cship.context_bar $cship.usage_limits $cship.peak_usage"
+  "$cship.model $cship.effort $cship.cost $fill $cship.context_bar $fill $cship.usage_limits $cship.peak_usage"
 ]
+
+[cship.fill]
+symbol = " "
 
 [cship.model]
 symbol = " "

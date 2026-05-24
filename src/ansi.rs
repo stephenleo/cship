@@ -138,6 +138,18 @@ pub fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// Display width of `s` in terminal columns, ignoring ANSI escape sequences.
+///
+/// Strips ANSI first, then measures Unicode width (CJK and emoji count as 2,
+/// combining marks as 0). Used to size `$fill` gaps. Note: Nerd Font glyphs live
+/// in the Private Use Area, which `unicode-width` reports as width 1 even though
+/// many terminals render them as 2 — so fill alignment can be off by a column
+/// per glyph. This mirrors a known limitation in Starship.
+pub fn display_width(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    strip_ansi(s).width()
+}
+
 fn parse_color(name: &str) -> Option<Color> {
     match name {
         "black" => Some(Color::Black),
@@ -181,6 +193,25 @@ mod tests {
     #[test]
     fn test_no_style_returns_plain_text() {
         assert_eq!(apply_style("Opus", None), "Opus");
+    }
+
+    #[test]
+    fn test_display_width_ascii() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width(""), 0);
+    }
+
+    #[test]
+    fn test_display_width_emoji_is_two() {
+        assert_eq!(display_width("💰"), 2);
+    }
+
+    #[test]
+    fn test_display_width_ignores_ansi() {
+        // Styled "x" still measures 1 column once ANSI is stripped.
+        let styled = apply_style("x", Some("bold red"));
+        assert!(styled.contains('\x1b'), "precondition: has ANSI");
+        assert_eq!(display_width(&styled), 1);
     }
 
     #[test]

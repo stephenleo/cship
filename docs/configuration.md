@@ -27,6 +27,8 @@ lines = [
 |-------|------|---------|-------------|
 | `lines` | `string[]` | `[]` | Each element is one statusline row. Supports `$cship.<module>` tokens and Starship passthrough tokens. |
 | `format` | `string` | — | Starship-compatible format string. Split on `$line_break` to produce multiple rows. Takes priority over `lines` when both are set. |
+| `width` | `integer` | — | Fallback terminal width (columns) for `$fill` when auto-detection fails (see [`$fill`](#fill-right-alignment)). |
+| `width_offset` | `integer` | `3` | Columns Claude Code reserves around the statusline, subtracted from the terminal width for `$fill`. |
 
 ## Format String Syntax
 
@@ -575,3 +577,35 @@ Renders your entire Starship-configured prompt in a single call. Unlike per-modu
 [cship.starship_prompt]
 disabled = false
 ```
+
+---
+
+## `$fill` — Fill / Right-Alignment {#fill-right-alignment}
+
+`$fill` expands to fill the remaining horizontal space on a line, pushing whatever follows it to the right. Multiple `$fill` tokens on one line split the leftover space evenly, so content after the last `$fill` is right-aligned to the edge. This mirrors Starship's [`fill`](https://starship.rs/config/#fill) module.
+
+**Token:** `$fill` — configured via `[cship.fill]`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `symbol` | `string` | `"."` | Character used to fill the gap. Use `" "` for an invisible gap. |
+| `style` | `string` | `"bold black"` | ANSI style applied to the fill characters. |
+| `disabled` | `bool` | `false` | When `true`, `$fill` renders as nothing (no spacing). |
+
+```toml
+[cship]
+lines = ["$cship.model $cship.cost $fill $cship.context_bar $fill $cship.usage_limits"]
+
+[cship.fill]
+symbol = "·"
+style  = "fg:#414868"
+```
+
+### ⚠️ Terminal-width limitation (read before using)
+
+`$fill` needs to know the terminal width, and **Claude Code does not provide it** to the statusline command — there's no `$COLUMNS`, no controlling tty, and no width field in its JSON ([claude-code#22115](https://github.com/anthropics/claude-code/issues/22115)). cship works around this on **macOS and Linux** by walking up the process tree to Claude Code's controlling terminal and reading its size. This is best-effort:
+
+- **Windows**, the **web/desktop apps**, and other no-tty environments can't be detected — cship falls back to `[cship] width` (if set) and then to **80 columns**.
+- The width resolution order is: detected terminal width → `$COLUMNS` → `[cship] width` → `80`, then minus `[cship] width_offset` (default `3`, ≈2 left + 1 right) to account for the margin Claude Code reserves.
+- If right-alignment looks a few columns off, tune `width_offset`; if detection isn't available in your environment, pin `[cship] width` to your terminal's column count.
+- **Nerd Font glyphs** may be measured one column narrower than they render (a Unicode-width limitation shared by Starship), which can nudge alignment by a column per glyph.

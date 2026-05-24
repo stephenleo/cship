@@ -23,6 +23,32 @@ pub struct CshipConfig {
     pub peak_usage: Option<PeakUsageConfig>,
     pub starship_prompt: Option<StarshipPromptConfig>,
     pub account: Option<AccountConfig>,
+    /// Configuration for the `$fill` layout token (`[cship.fill]`).
+    pub fill: Option<FillConfig>,
+    /// Fallback terminal width (columns) used by `$fill` when auto-detection
+    /// fails (e.g. Windows, or the web/desktop app). Auto-detection from the
+    /// controlling terminal takes priority when available; this is the next
+    /// fallback before the built-in default of 80.
+    pub width: Option<u16>,
+    /// Columns Claude Code reserves around the statusline, subtracted from the
+    /// detected/configured terminal width to get the usable `$fill` width.
+    /// Defaults to 3 (≈2 on the left, 1 on the right).
+    pub width_offset: Option<u16>,
+}
+
+/// Configuration for the `$fill` layout token (`[cship.fill]`).
+///
+/// Mirrors Starship's `[fill]` module: `$fill` expands to fill the remaining
+/// horizontal space with `symbol`. Multiple `$fill` tokens on one line split the
+/// space evenly, so the content after the last `$fill` is right-aligned.
+#[derive(Debug, Deserialize, Default)]
+pub struct FillConfig {
+    /// Character used to fill the gap. Defaults to `"."` (matching Starship).
+    pub symbol: Option<String>,
+    /// Style applied to the fill characters. Defaults to `"bold black"`.
+    pub style: Option<String>,
+    /// When `true`, `$fill` renders as nothing (no spacing).
+    pub disabled: Option<bool>,
 }
 
 /// Per-module config fields shared by all native CShip modules.

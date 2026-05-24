@@ -1108,3 +1108,49 @@ fn test_format_field_line_break_produces_two_rows() {
     assert!(lines[0].contains("Opus"), "line 0: {}", lines[0]);
     assert!(lines[1].contains("Opus"), "line 1: {}", lines[1]);
 }
+
+// ── $fill layout token integration tests ──────────────────────────────────
+// These assert leniently: the exact gap width depends on the detected/fallback
+// terminal width, which differs across environments. We only check that the
+// fill expands (produces its char between the two sides) or collapses.
+
+#[test]
+fn test_fill_expands_between_segments() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
+    // fill_basic.toml: lines = ["L $fill R"], [cship.fill] symbol = "-"
+    let output = cship()
+        .args(["--config", "tests/fixtures/fill_basic.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains('L'), "should keep left side: {stdout:?}");
+    assert!(stdout.contains('R'), "should keep right side: {stdout:?}");
+    assert!(
+        stdout.contains('-'),
+        "fill should expand into '-' chars: {stdout:?}"
+    );
+    assert!(
+        stdout.trim_end().len() > 10,
+        "filled row should be wide: {stdout:?}"
+    );
+}
+
+#[test]
+fn test_fill_disabled_collapses_to_nothing() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
+    // fill_disabled.toml: same line but [cship.fill] disabled = true
+    let output = cship()
+        .args(["--config", "tests/fixtures/fill_disabled.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim_end_matches('\n'), "L  R");
+    assert!(
+        !stdout.contains('-'),
+        "disabled fill must not render: {stdout:?}"
+    );
+}
