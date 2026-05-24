@@ -7,7 +7,7 @@ Ready-to-use `cship.toml` configurations — from the recommended full-featured 
 
 ## 1. Hero / Recommended
 
-My personal setup, end to end. Top row: `$starship_prompt` running Starship's [Catppuccin Powerline preset](https://starship.rs/presets/catppuccin-powerline). Bottom row: model, cost, context bar, 7-day per-model usage, extra credits, peak-hours indicator — thresholds escalate cool → warn → critical as budgets fill.
+My personal setup, end to end. Top row: `$starship_prompt` running Starship's [Catppuccin Powerline preset](https://starship.rs/presets/catppuccin-powerline). Bottom row: model, effort, cost, context bar, 7-day per-model usage, extra credits, peak-hours indicator — thresholds escalate cool → warn → critical as budgets fill.
 
 ![Hero cship statusline](./examples/01.png)
 
@@ -17,12 +17,19 @@ My personal setup, end to end. Top row: `$starship_prompt` running Starship's [C
 [cship]
 lines = [
   "$starship_prompt",
-  "$cship.model $cship.cost $cship.context_bar $cship.usage_limits $cship.peak_usage",
+  "$cship.model $cship.effort $cship.cost $cship.context_bar $cship.usage_limits $cship.peak_usage",
 ]
 
 [cship.model]
 symbol = " "
 style  = "bold cyan"
+
+[cship.effort]
+symbol      = "⚡ "
+style       = "fg:#7dcfff"
+high_style  = "fg:#e0af68"
+xhigh_style = "bold fg:#e0af68"
+max_style   = "bold fg:#f7768e"
 
 [cship.context_bar]
 symbol             = " "
