@@ -5,8 +5,10 @@
 //! `xhigh`, or `max`), reflecting mid-session `/effort` changes.
 //!
 //! The effort field is absent whenever the current model does not support the
-//! reasoning-effort parameter; like the other optional modules (vim, agent) the
-//! module returns `None` with a `tracing::warn!` in that case.
+//! reasoning-effort parameter — a routine state, not an error. The module
+//! therefore returns `None` and logs at `tracing::debug!` (mirroring
+//! `context_bar`'s treatment of normally-absent data) rather than warning on
+//! every render for users on models without effort support.
 use crate::config::{CshipConfig, EffortConfig};
 use crate::context::Context;
 
@@ -41,11 +43,13 @@ pub fn render_level(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         return None;
     }
 
-    // Extract value — WARN before returning None (do NOT use `?` here)
+    // Extract value — log before returning None (do NOT use `?` here). Absence is
+    // the normal state when the active model lacks effort support, so this logs at
+    // debug rather than warn (cf. context_bar's normally-absent handling).
     let level = match ctx.effort.as_ref().and_then(|e| e.level.as_deref()) {
         Some(l) => l,
         None => {
-            tracing::warn!("cship.effort: effort.level absent from context");
+            tracing::debug!("cship.effort: effort.level absent from context");
             return None;
         }
     };
@@ -150,11 +154,38 @@ mod tests {
     }
 
     #[test]
+    fn test_per_level_style_low() {
+        let ctx = ctx_with_effort("low");
+        assert_eq!(
+            render(&ctx, &per_level_cfg()).unwrap(),
+            ansi::apply_style("low", Some("green")),
+        );
+    }
+
+    #[test]
+    fn test_per_level_style_medium() {
+        let ctx = ctx_with_effort("medium");
+        assert_eq!(
+            render(&ctx, &per_level_cfg()).unwrap(),
+            ansi::apply_style("medium", Some("cyan")),
+        );
+    }
+
+    #[test]
     fn test_per_level_style_high() {
         let ctx = ctx_with_effort("high");
         assert_eq!(
             render(&ctx, &per_level_cfg()).unwrap(),
             ansi::apply_style("high", Some("yellow")),
+        );
+    }
+
+    #[test]
+    fn test_per_level_style_xhigh() {
+        let ctx = ctx_with_effort("xhigh");
+        assert_eq!(
+            render(&ctx, &per_level_cfg()).unwrap(),
+            ansi::apply_style("xhigh", Some("bold yellow")),
         );
     }
 
@@ -208,5 +239,19 @@ mod tests {
     fn test_no_style_returns_plain_text() {
         let ctx = ctx_with_effort("medium");
         assert_eq!(render(&ctx, &CshipConfig::default()).unwrap(), "medium");
+    }
+
+    #[test]
+    fn test_format_string_substitutes_value_and_symbol() {
+        let ctx = ctx_with_effort("high");
+        let cfg = CshipConfig {
+            effort: Some(EffortConfig {
+                symbol: Some("⚡".to_string()),
+                format: Some("$symbol $value".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(render(&ctx, &cfg), Some("⚡ high".to_string()));
     }
 }

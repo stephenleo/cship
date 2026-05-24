@@ -167,6 +167,11 @@ fn is_disabled(name: &str, cfg: &crate::config::CshipConfig) -> bool {
             .unwrap_or(false),
         "vim" => cfg.vim.as_ref().and_then(|m| m.disabled).unwrap_or(false),
         "agent" => cfg.agent.as_ref().and_then(|m| m.disabled).unwrap_or(false),
+        "effort" => cfg
+            .effort
+            .as_ref()
+            .and_then(|m| m.disabled)
+            .unwrap_or(false),
         "cwd" | "session_id" | "transcript_path" | "version" | "output_style" => cfg
             .session
             .as_ref()
@@ -221,6 +226,10 @@ fn error_hint_for(
         "agent" => (
             "agent data absent — no agent session active".into(),
             "Agent data is only present during agent sessions. Start an agent session or use the --agent flag.".into(),
+        ),
+        "effort" => (
+            "effort data absent — the active model may not support the effort parameter".into(),
+            "The effort level appears only on models that support the reasoning-effort parameter. Switch to such a model, or adjust it mid-session with /effort.".into(),
         ),
         "cwd" | "session_id" | "transcript_path" | "version" | "output_style" => (
             "session field absent from Claude Code context".into(),
@@ -309,6 +318,7 @@ fn config_section_for(module_name: &str, cfg: &crate::config::CshipConfig) -> &'
         "context_window" if cfg.context_window.is_some() => "[cship.context_window]",
         "vim" if cfg.vim.is_some() => "[cship.vim]",
         "agent" if cfg.agent.is_some() => "[cship.agent]",
+        "effort" if cfg.effort.is_some() => "[cship.effort]",
         "cwd" | "session_id" | "transcript_path" | "version" | "output_style"
             if cfg.session.is_some() =>
         {
@@ -386,6 +396,47 @@ mod tests {
     fn test_config_section_for_model_without_config() {
         let cfg = CshipConfig::default();
         assert_eq!(config_section_for("cship.model", &cfg), "(default)");
+    }
+
+    #[test]
+    fn test_config_section_for_effort_with_config() {
+        let cfg = CshipConfig {
+            effort: Some(crate::config::EffortConfig::default()),
+            ..Default::default()
+        };
+        // Both the alias and the sub-token resolve to the [cship.effort] section.
+        assert_eq!(config_section_for("cship.effort", &cfg), "[cship.effort]");
+        assert_eq!(
+            config_section_for("cship.effort.level", &cfg),
+            "[cship.effort]"
+        );
+    }
+
+    #[test]
+    fn test_effort_disabled_detected() {
+        let cfg = CshipConfig {
+            effort: Some(crate::config::EffortConfig {
+                disabled: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(is_disabled("cship.effort", &cfg));
+        // The hint should report the explicit-disable case, not the absent-data case.
+        let (status, _) = error_hint_for("cship.effort", &Context::default(), &cfg);
+        assert!(status.contains("disabled"), "status: {status}");
+    }
+
+    #[test]
+    fn test_effort_absent_hint_mentions_model_support() {
+        // No effort config, no effort in context → effort-specific absent hint.
+        let (status, _) =
+            error_hint_for("cship.effort", &Context::default(), &CshipConfig::default());
+        assert!(status.contains("effort"), "status: {status}");
+        assert!(
+            status.contains("model"),
+            "expected the hint to mention model support: {status}"
+        );
     }
 
     #[test]
