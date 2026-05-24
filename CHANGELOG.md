@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Added the `cship.effort` module (`$cship.effort` / `$cship.effort.level`), which displays the session's reasoning effort level (`low`/`medium`/`high`/`xhigh`/`max`) and reflects mid-session `/effort` changes. Supports per-level styling via `low_style` / `medium_style` / `high_style` / `xhigh_style` / `max_style`, each falling back to `style`. Renders nothing when the active model does not support the effort parameter ([#187](https://github.com/stephenleo/cship/issues/187))
+
 ## [1.7.1] - 2026-05-12
 
 ### Changed

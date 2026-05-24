@@ -584,6 +584,81 @@ fn test_agent_absent_produces_no_output() {
         .stdout("");
 }
 
+// ── Effort module integration tests ──────────────────────────────────────
+
+#[test]
+fn test_effort_renders_level_string() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // sample_input_full.json: effort.level = "high"
+    cship()
+        .args(["--config", "tests/fixtures/effort_basic.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("high"));
+}
+
+#[test]
+fn test_effort_level_subfield_renders_identically() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // effort_level_subfield.toml: lines = ["$cship.effort.level"] → same as $cship.effort
+    cship()
+        .args(["--config", "tests/fixtures/effort_level_subfield.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("high"));
+}
+
+#[test]
+fn test_effort_applies_symbol_and_style() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // effort_styled.toml: symbol = "⚡ ", style = "bold magenta" → ANSI codes present
+    cship()
+        .args(["--config", "tests/fixtures/effort_styled.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b["))
+        .stdout(predicate::str::contains("⚡ "));
+}
+
+#[test]
+fn test_effort_per_level_style_applies_to_high() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    // effort_per_level.toml: high_style = "bold yellow"; effort.level = "high" → ANSI codes
+    cship()
+        .args(["--config", "tests/fixtures/effort_per_level.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("high"))
+        .stdout(predicate::str::contains("\x1b["));
+}
+
+#[test]
+fn test_effort_disabled_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
+    cship()
+        .args(["--config", "tests/fixtures/effort_disabled.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_effort_absent_produces_no_output() {
+    let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
+    // sample_input_minimal.json has no effort field → empty render
+    cship()
+        .args(["--config", "tests/fixtures/effort_basic.toml"])
+        .write_stdin(json)
+        .assert()
+        .success()
+        .stdout("");
+}
+
 // ── Story 2.4: Session identity and workspace modules integration tests ───
 
 #[test]

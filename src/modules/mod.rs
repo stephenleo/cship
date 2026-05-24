@@ -2,6 +2,7 @@ pub mod agent;
 pub mod context_bar;
 pub mod context_window;
 pub mod cost;
+pub mod effort;
 pub mod model;
 pub mod peak_usage;
 pub mod session;
@@ -37,6 +38,8 @@ pub const ALL_NATIVE_MODULES: &[&str] = &[
     "cship.vim.mode",
     "cship.agent",
     "cship.agent.name",
+    "cship.effort",
+    "cship.effort.level",
     "cship.cwd",
     "cship.session_id",
     "cship.transcript_path",
@@ -106,6 +109,9 @@ pub fn render_module(
         // Agent module — agent name display
         "cship.agent" => agent::render(ctx, cfg),
         "cship.agent.name" => agent::render_name(ctx, cfg),
+        // Effort module — reasoning effort level display
+        "cship.effort" => effort::render(ctx, cfg),
+        "cship.effort.level" => effort::render_level(ctx, cfg),
         // Session identity modules
         "cship.cwd" => session::render_cwd(ctx, cfg),
         "cship.session_id" => session::render_session_id(ctx, cfg),

@@ -287,6 +287,39 @@ style  = "fg:#9ece6a"
 
 ---
 
+## `[cship.effort]` — Reasoning Effort
+
+Displays the current reasoning effort level (`low`, `medium`, `high`, `xhigh`, or `max`), reflecting mid-session `/effort` changes. Returns nothing when the active model does not support the effort parameter.
+
+**Token:** `$cship.effort` (alias for `$cship.effort.level`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | `bool` | `false` | Hide this module |
+| `style` | `string` | — | Base ANSI style (fallback when no per-level style matches) |
+| `symbol` | `string` | — | Prefix symbol |
+| `format` | `string` | — | Format string; `$value` = effort level |
+| `low_style` | `string` | — | Style applied when the level is `low` |
+| `medium_style` | `string` | — | Style applied when the level is `medium` |
+| `high_style` | `string` | — | Style applied when the level is `high` |
+| `xhigh_style` | `string` | — | Style applied when the level is `xhigh` |
+| `max_style` | `string` | — | Style applied when the level is `max` |
+
+**Variables:** `$value` (effort level, e.g. `high`), `$symbol`, `$style`
+
+Per-level styles are matched case-insensitively against the effort level. When no per-level style matches or is set, `style` is used as the fallback.
+
+```toml
+[cship.effort]
+symbol      = "⚡ "
+style       = "dim"
+high_style  = "yellow"
+xhigh_style = "bold yellow"
+max_style   = "bold red"
+```
+
+---
+
 ## `[cship.session]` — Session Identity
 
 Displays session metadata (session ID, transcript path, output style, cship version).

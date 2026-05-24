@@ -1,0 +1,5 @@
+[cship]
+lines = ["$cship.effort"]
+
+[cship.effort]
+disabled = true

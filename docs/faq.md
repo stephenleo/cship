@@ -94,6 +94,14 @@ not enabled on your Enterprise account).
 
 ---
 
+## Why does `$cship.effort` show nothing?
+
+The `effort` module renders the session's reasoning effort level, which Claude Code only sends when the **active model supports the effort parameter**. If you're on a model without effort support, the field is absent and the module renders nothing — switch to a model that supports `/effort` (or run `cship explain` to confirm whether an `effort` value is present in the context).
+
+The value reflects live `/effort` changes, so it updates on the next render after you change it mid-session.
+
+---
+
 ## How does the peak-time indicator handle time zones and DST?
 
 The `peak_usage` module checks whether the current time falls within the configured peak window in **US Pacific time**. It computes the UTC→Pacific offset internally — PDT (UTC−7) from the second Sunday of March through the first Sunday of November, PST (UTC−8) the rest of the year.

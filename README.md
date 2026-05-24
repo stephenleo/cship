@@ -106,6 +106,7 @@ Everything in the [Claude Code status line documentation](https://code.claude.co
 | `$cship.usage_limits.extra_usage` | Extra-credits section with `{active}` indicator |
 | `$cship.peak_usage` | Peak-time indicator (US Pacific business hours) |
 | `$cship.agent` | Sub-agent name |
+| `$cship.effort` | Reasoning effort level (`low`/`medium`/`high`/`xhigh`/`max`) |
 | `$cship.session` | Session identity info |
 | `$cship.workspace` | Workspace/project directory |
 

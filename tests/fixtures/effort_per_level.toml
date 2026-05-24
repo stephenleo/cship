@@ -1,0 +1,7 @@
+[cship]
+lines = ["$cship.effort"]
+
+[cship.effort]
+style       = "dim"
+high_style  = "bold yellow"
+max_style   = "bold red"

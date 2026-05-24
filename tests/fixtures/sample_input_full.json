@@ -41,6 +41,9 @@
   "agent": {
     "name": "security-reviewer"
   },
+  "effort": {
+    "level": "high"
+  },
   "rate_limits": {
     "five_hour": {
       "used_percentage": 23.5,

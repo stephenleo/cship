@@ -16,6 +16,7 @@ pub struct CshipConfig {
     pub context_window: Option<ContextWindowConfig>,
     pub vim: Option<VimConfig>,
     pub agent: Option<AgentConfig>,
+    pub effort: Option<EffortConfig>,
     pub session: Option<SessionConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub usage_limits: Option<UsageLimitsConfig>,
@@ -239,6 +240,25 @@ pub struct AgentConfig {
     pub disabled: Option<bool>,
     pub label: Option<String>,
     pub format: Option<String>,
+}
+
+/// Configuration for `[cship.effort]` — reasoning effort level display.
+///
+/// Per-level styles (`low_style`, `medium_style`, …) are matched against the
+/// effort level (`low`/`medium`/`high`/`xhigh`/`max`); each falls back to the
+/// base `style` when unset, mirroring `[cship.model]`'s per-family styles.
+#[derive(Debug, Deserialize, Default)]
+pub struct EffortConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub label: Option<String>,
+    pub format: Option<String>,
+    pub low_style: Option<String>,
+    pub medium_style: Option<String>,
+    pub high_style: Option<String>,
+    pub xhigh_style: Option<String>,
+    pub max_style: Option<String>,
 }
 
 /// Configuration for session identity modules (cwd, session_id, transcript_path, etc.).

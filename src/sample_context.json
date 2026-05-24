@@ -40,5 +40,8 @@
   },
   "agent": {
     "name": "code"
+  },
+  "effort": {
+    "level": "high"
   }
 }

@@ -23,6 +23,9 @@ pub struct Context {
     pub vim: Option<Vim>,
     /// Absent unless --agent flag or agent settings are active.
     pub agent: Option<Agent>,
+    /// Reasoning effort level for the session. Absent when the current model does
+    /// not support the effort parameter; reflects mid-session `/effort` changes.
+    pub effort: Option<Effort>,
     /// Rate limits sent directly by Claude Code via stdin (Pro/Max subscribers).
     /// When present, the usage_limits module uses this instead of making an OAuth API call.
     pub rate_limits: Option<RateLimits>,
@@ -96,6 +99,12 @@ pub struct Vim {
 #[derive(Debug, Deserialize, Default)]
 pub struct Agent {
     pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct Effort {
+    /// "low", "medium", "high", "xhigh", or "max".
+    pub level: Option<String>,
 }
 
 /// Deserialize Claude Code session JSON from any reader.
@@ -178,6 +187,8 @@ mod tests {
             ctx.agent.as_ref().unwrap().name.as_deref(),
             Some("security-reviewer")
         );
+        // Effort
+        assert_eq!(ctx.effort.as_ref().unwrap().level.as_deref(), Some("high"));
         // Rate limits
         let rl = ctx.rate_limits.as_ref().unwrap();
         let five = rl.five_hour.as_ref().unwrap();
@@ -193,6 +204,7 @@ mod tests {
         let ctx: Context = serde_json::from_str(MINIMAL_JSON).unwrap();
         assert!(ctx.vim.is_none());
         assert!(ctx.agent.is_none());
+        assert!(ctx.effort.is_none());
         assert!(ctx.context_window.is_none());
         assert_eq!(ctx.cost.as_ref().unwrap().total_cost_usd, Some(0.53));
     }
