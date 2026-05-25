@@ -30,7 +30,12 @@ pub fn statusline_width(cfg: &CshipConfig) -> u16 {
         .or_else(env_columns)
         .or(cfg.width)
         .unwrap_or(DEFAULT_WIDTH);
-    let offset = cfg.width_offset.unwrap_or(DEFAULT_OFFSET);
+    apply_offset(raw, cfg.width_offset.unwrap_or(DEFAULT_OFFSET))
+}
+
+/// Subtract the reserved-margin offset from a raw terminal width, clamped to ≥1.
+/// Pure (no environment lookup) so it's unit-testable independent of the terminal.
+fn apply_offset(raw: u16, offset: u16) -> u16 {
     raw.saturating_sub(offset).max(1)
 }
 
@@ -122,40 +127,34 @@ mod tests {
     use crate::config::CshipConfig;
 
     #[test]
-    fn test_offset_subtracted_from_configured_width() {
-        // No tty in the test env's ancestry is guaranteed, so pin width via config.
-        // (If detection *does* find a tty here, this asserts the offset math only.)
-        let cfg = CshipConfig {
-            width: Some(100),
-            width_offset: Some(3),
-            ..Default::default()
-        };
-        // When detection returns None, raw = 100 → 100 - 3 = 97.
-        if detect_columns().is_none() {
-            assert_eq!(statusline_width(&cfg), 97);
-        }
+    fn test_apply_offset_subtracts() {
+        assert_eq!(apply_offset(100, 3), 97);
+        assert_eq!(apply_offset(50, 3), 47);
     }
 
     #[test]
-    fn test_default_offset_is_three() {
-        let cfg = CshipConfig {
-            width: Some(50),
-            ..Default::default()
-        };
-        if detect_columns().is_none() {
-            assert_eq!(statusline_width(&cfg), 47);
-        }
+    fn test_apply_offset_clamps_to_one() {
+        // Offset larger than width never yields 0.
+        assert_eq!(apply_offset(2, 10), 1);
+        assert_eq!(apply_offset(1, 1), 1);
     }
 
     #[test]
-    fn test_never_returns_zero() {
-        let cfg = CshipConfig {
-            width: Some(2),
-            width_offset: Some(10),
-            ..Default::default()
-        };
-        if detect_columns().is_none() {
-            assert_eq!(statusline_width(&cfg), 1);
+    fn test_default_offset_constant_is_three() {
+        assert_eq!(DEFAULT_OFFSET, 3);
+    }
+
+    #[test]
+    fn test_statusline_width_applies_offset_when_detection_absent() {
+        // Only meaningful when no ancestor tty is found (e.g. CI); pinned via config.
+        // The offset math itself is covered unconditionally by `test_apply_offset_*`.
+        if detect_columns().is_none() && env_columns().is_none() {
+            let cfg = CshipConfig {
+                width: Some(100),
+                width_offset: Some(5),
+                ..Default::default()
+            };
+            assert_eq!(statusline_width(&cfg), 95);
         }
     }
 }

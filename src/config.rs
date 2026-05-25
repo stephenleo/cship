@@ -47,7 +47,8 @@ pub struct FillConfig {
     pub symbol: Option<String>,
     /// Style applied to the fill characters. Defaults to `"bold black"`.
     pub style: Option<String>,
-    /// When `true`, `$fill` renders as nothing (no spacing).
+    /// When `true`, the `$fill` token itself renders as nothing. Any literal
+    /// spaces written around it in the format string still remain.
     pub disabled: Option<bool>,
 }
 

@@ -172,7 +172,6 @@ fn build_filled_line(
     fill_char: &str,
     fill_style: Option<&str>,
 ) -> String {
-    let n_fills = pieces.iter().filter(|p| matches!(p, Piece::Fill)).count();
     let content_width: usize = pieces
         .iter()
         .filter_map(|p| match p {
@@ -180,6 +179,14 @@ fn build_filled_line(
             Piece::Fill => None,
         })
         .sum();
+
+    // A line with no visible content (only fills / absent modules) renders nothing,
+    // matching cship's habit of dropping empty lines rather than emitting a bare rule.
+    if content_width == 0 {
+        return String::new();
+    }
+
+    let n_fills = pieces.iter().filter(|p| matches!(p, Piece::Fill)).count();
     let gaps = distribute(total_width.saturating_sub(content_width), n_fills);
 
     let mut out = String::new();
@@ -192,7 +199,7 @@ fn build_filled_line(
                 gap_idx += 1;
                 if gap > 0 {
                     out.push_str(&crate::ansi::apply_style(
-                        &fill_char.repeat(gap),
+                        &render_fill(fill_char, gap),
                         fill_style,
                     ));
                 }
@@ -200,6 +207,20 @@ fn build_filled_line(
         }
     }
     out
+}
+
+/// Build exactly `gap` columns of fill from `fill_char`, accounting for the
+/// char's own display width and padding any leftover columns with spaces. This
+/// keeps alignment exact even when `symbol` is more than one column wide.
+fn render_fill(fill_char: &str, gap: usize) -> String {
+    let char_cols = crate::ansi::display_width(fill_char).max(1);
+    let reps = gap / char_cols;
+    let mut s = fill_char.repeat(reps);
+    let pad = gap - reps * char_cols;
+    if pad > 0 {
+        s.push_str(&" ".repeat(pad));
+    }
+    s
 }
 
 /// Split `remaining` columns across `n` fills as evenly as possible (earlier
@@ -508,6 +529,44 @@ mod tests {
         ];
         let out = build_filled_line(&pieces, 10, ".", None);
         assert_eq!(out, "💰.......X");
+    }
+
+    #[test]
+    fn test_build_filled_line_no_content_renders_empty() {
+        // Only fills / empty text → nothing, not a full-width rule.
+        assert_eq!(build_filled_line(&[Piece::Fill], 80, ".", None), "");
+        let pieces = vec![
+            Piece::Text(String::new()),
+            Piece::Fill,
+            Piece::Text(String::new()),
+        ];
+        assert_eq!(build_filled_line(&pieces, 80, ".", None), "");
+    }
+
+    #[test]
+    fn test_build_filled_line_multichar_symbol_is_column_exact() {
+        let pieces = vec![
+            Piece::Text("A".into()),
+            Piece::Fill,
+            Piece::Text("B".into()),
+        ];
+        // width 10, content 2, gap 8; symbol "··" is 2 cols → 4 reps = exactly 8 cols
+        let out = build_filled_line(&pieces, 10, "··", None);
+        assert_eq!(out, "A········B");
+        assert_eq!(crate::ansi::display_width(&out), 10);
+    }
+
+    #[test]
+    fn test_build_filled_line_multichar_symbol_pads_remainder() {
+        let pieces = vec![
+            Piece::Text("A".into()),
+            Piece::Fill,
+            Piece::Text("B".into()),
+        ];
+        // width 11, content 2, gap 9; "··"(2) → 4 reps = 8 cols, +1 space pad = 9
+        let out = build_filled_line(&pieces, 11, "··", None);
+        assert_eq!(out, "A········ B");
+        assert_eq!(crate::ansi::display_width(&out), 11);
     }
 
     #[test]

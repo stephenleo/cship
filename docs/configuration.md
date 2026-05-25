@@ -590,7 +590,7 @@ disabled = false
 |-------|------|---------|-------------|
 | `symbol` | `string` | `"."` | Character used to fill the gap. Use `" "` for an invisible gap. |
 | `style` | `string` | `"bold black"` | ANSI style applied to the fill characters. |
-| `disabled` | `bool` | `false` | When `true`, `$fill` renders as nothing (no spacing). |
+| `disabled` | `bool` | `false` | When `true`, the `$fill` token renders as nothing (literal spaces around it in your format still remain). |
 
 ```toml
 [cship]
@@ -600,6 +600,8 @@ lines = ["$cship.model $cship.cost $fill $cship.context_bar $fill $cship.usage_l
 symbol = "·"
 style  = "fg:#414868"
 ```
+
+A line whose only visible content is `$fill` (e.g. every module on it rendered empty) is dropped rather than emitting a bare full-width rule, consistent with how cship omits empty lines.
 
 ### ⚠️ Terminal-width limitation (read before using)
 
