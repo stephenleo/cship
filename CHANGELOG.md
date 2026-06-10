@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - `cship.account` module for displaying the currently authenticated Anthropic account (work vs personal) — sources organization and account info from the `/api/oauth/profile` endpoint, with opt-in label mapping so org names can be replaced with user-defined labels (e.g. `"Fulcrum Genomics" = "work"`). Supports format string placeholders: `{label}`, `{organization}`, `{display_name}`, `{email}`, `{tier}`, `{type}`. Cached for 24 hours (configurable via `ttl`). ([@nh13](https://github.com/nh13), [#153](https://github.com/stephenleo/cship/pull/153))
 
+### Fixed
+- `cship.account` HTTP fetch timeout lowered from 5s to 1500ms so it always completes inside the 2s `recv_timeout` window in `fetch_with_timeout`; previously a slow profile fetch was reported as timed out while the spawned thread (holding the OAuth token) kept running
+- `cship explain cship.account` now prints account-specific remediation (no credential / expired-or-unreachable / malformed credential) instead of the generic "module returned no value" fallback
+
+### Docs
+- Documented the `cship.account` module in the README module table, configuration guide, and FAQ (setup, label mapping, and `cship explain` diagnostics)
+
 ## [1.7.1] - 2026-05-12
 
 ### Changed

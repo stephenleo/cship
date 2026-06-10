@@ -2259,12 +2259,7 @@ mod tests {
             ..Default::default()
         };
         let fp = current_fingerprint();
-        crate::cache::write_usage_limits(
-            &transcript_path,
-            &data,
-            600,
-            fp.as_deref(),
-        );
+        crate::cache::write_usage_limits(&transcript_path, &data, 600, fp.as_deref());
 
         let ctx = Context {
             transcript_path: Some(transcript_path.to_string_lossy().into()),
@@ -2289,12 +2284,7 @@ mod tests {
             ..Default::default()
         };
         let fp = current_fingerprint();
-        crate::cache::write_usage_limits(
-            &transcript_path,
-            &data,
-            600,
-            fp.as_deref(),
-        );
+        crate::cache::write_usage_limits(&transcript_path, &data, 600, fp.as_deref());
 
         let ctx = Context {
             transcript_path: Some(transcript_path.to_string_lossy().into()),

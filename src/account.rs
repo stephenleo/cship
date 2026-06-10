@@ -71,7 +71,13 @@ pub fn parse_api_response(json: &str) -> Result<AccountProfile, String> {
 
 const API_ENDPOINT: &str = "https://api.anthropic.com/api/oauth/profile";
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
-const HTTP_TIMEOUT_SECS: u64 = 5;
+/// HTTP timeout in milliseconds. Must stay below the `FETCH_TIMEOUT_SECS` (2s)
+/// `recv_timeout` window in `modules::fetch_with_timeout`, otherwise the mpsc
+/// receiver gives up first and reports a timeout while this request is still
+/// in flight, leaking the spawned thread (and the live token) for the
+/// remainder of the HTTP timeout. See cship commit 06051f5 for the same fix
+/// applied to `usage_limits`.
+const HTTP_TIMEOUT_MS: u64 = 1500;
 
 /// Fetch the current account profile from the Anthropic OAuth API.
 /// Returns a structured `AccountProfile` or a descriptive `Err`.
@@ -80,7 +86,7 @@ pub fn fetch_account_profile(token: &str) -> Result<AccountProfile, String> {
 
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
-            .timeout_global(Some(Duration::from_secs(HTTP_TIMEOUT_SECS)))
+            .timeout_global(Some(Duration::from_millis(HTTP_TIMEOUT_MS)))
             .build(),
     );
     let mut response = agent

@@ -441,6 +441,55 @@ specific diagnostics.
 
 ---
 
+## `[cship.account]` — Authenticated Account
+
+Displays which Anthropic account the active Claude Code session is signed in to — handy for telling work and personal accounts apart at a glance. Profile data is fetched once from the OAuth `/api/oauth/profile` endpoint and cached for 24 hours (the profile rarely changes). The OAuth token is held only for the duration of the fetch — never written to disk, cache, stdout, or stderr.
+
+**Token:** `$cship.account`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | `bool` | `false` | Hide this module |
+| `style` | `string` | — | ANSI style applied to the rendered value |
+| `symbol` | `string` | `""` | Prefix symbol prepended to the value |
+| `format` | `string` | `"{label}"` | Format string built from the placeholders below |
+| `ttl` | `integer` | `86400` | Cache TTL in seconds (default 24h). The cache is also invalidated automatically when you switch accounts (token fingerprint change). |
+| `labels` | `table` | — | Opt-in map from raw organization name → friendly label, e.g. `{ "Fulcrum Genomics" = "work", "Personal Workspace" = "personal" }` |
+
+**Placeholders** (available in `format`):
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `{label}` | Resolved label: a `labels` mapping for the organization if present, else the raw organization name, else the account display name |
+| `{organization}` | Raw organization name (e.g. `Fulcrum Genomics`) |
+| `{display_name}` | Account display name (e.g. `Nils`) |
+| `{email}` | Account email — treat as PII; opt in by referencing it in `format` |
+| `{tier}` | Organization rate-limit tier (e.g. `default_claude_max_5x`) |
+| `{type}` | Organization type (e.g. `claude_team`, `personal`) |
+
+**Prerequisites:** Requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2, install `libsecret-tools` and store your token with `secret-tool`. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, or unreachable API).
+
+```toml
+[cship.account]
+symbol = " "
+style  = "bold fg:#7aa2f7"
+format = "{label}"
+
+# Map raw org names to short labels
+[cship.account.labels]
+"Fulcrum Genomics" = "work"
+"Personal Workspace" = "personal"
+```
+
+To show more detail, reference additional placeholders:
+
+```toml
+[cship.account]
+format = "{display_name} @ {organization}"
+```
+
+---
+
 ## `[cship.peak_usage]` — Peak-Time Indicator
 
 Shows when Anthropic's peak-time rate limiting is likely active, based on current time relative to US Pacific business hours. Returns nothing outside peak hours so the indicator disappears entirely.

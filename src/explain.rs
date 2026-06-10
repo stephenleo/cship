@@ -297,6 +297,28 @@ fn error_hint_for(
                 ),
             }
         }
+        "account" => {
+            // The account module renders nothing when the OAuth credential is
+            // missing/malformed, or when it is present but the profile fetch
+            // failed (and no fingerprint-matching stale cache is available).
+            // Probe credential state to give the right remediation.
+            // NOTE: like the `usage_limits` arm, this reads a credential —
+            // acceptable for interactive `cship explain`, never the hot path.
+            match crate::platform::get_oauth_token() {
+                Err(msg) if msg.contains("credentials not found") => (
+                    "account returned no data — no Claude Code credential found".into(),
+                    "Authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
+                ),
+                Ok(_) => (
+                    "account returned no data — credential present but profile fetch failed".into(),
+                    "Your Claude Code token may have expired, or the account profile API was unreachable. Re-authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
+                ),
+                Err(_) => (
+                    "account returned no data — credential appears malformed or tool unavailable".into(),
+                    "Re-authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
+                ),
+            }
+        }
         _ => (
             "module returned no value".into(),
             "Check cship configuration and ensure Claude Code is running.".into(),

@@ -104,6 +104,7 @@ Everything in the [Claude Code status line documentation](https://code.claude.co
 | `$cship.usage_limits` | API usage limits (5hr / 7-day, plus per-model and extra-usage when available) |
 | `$cship.usage_limits.per_model` | 7-day per-model breakdown (opus / sonnet / cowork / oauth) |
 | `$cship.usage_limits.extra_usage` | Extra-credits section with `{active}` indicator |
+| `$cship.account` | Authenticated Anthropic account (work/personal); map org names via `labels` |
 | `$cship.peak_usage` | Peak-time indicator (US Pacific business hours) |
 | `$cship.agent` | Sub-agent name |
 | `$cship.session` | Session identity info |
