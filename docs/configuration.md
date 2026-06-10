@@ -140,7 +140,7 @@ Individual cost metrics can also be referenced directly:
 | Token | Description |
 |-------|-------------|
 | `$cship.cost.total_cost_usd` | Total cost in USD |
-| `$cship.cost.total_duration` (alias: `total_duration_ms`) | Total wall-clock duration, human-readable (`45s`, `1m30s`, `2h15m`, or `750ms` for sub-second) |
+| `$cship.cost.total_duration` (alias: `total_duration_ms`) | Total wall-clock duration, human-readable (`45s`, `1m30s`, `2h15m30s`, or `750ms` for sub-second) |
 | `$cship.cost.total_api_duration` (alias: `total_api_duration_ms`) | Total API time, human-readable |
 | `$cship.cost.total_lines_added` | Lines added this session |
 | `$cship.cost.total_lines_removed` | Lines removed this session |

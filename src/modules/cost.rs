@@ -10,7 +10,7 @@ use crate::config::CostSubfieldConfig;
 /// thresholds in your display currency.
 /// `$cship.cost.total_cost_usd` — raw USD value, 4 decimal places.
 /// `$cship.cost.total_duration_ms` / `total_api_duration_ms` — human-readable wall / API duration
-/// (e.g. `45s`, `1m30s`, `2h15m`, or `750ms` for sub-second). The `_ms` suffix is retained for
+/// (e.g. `45s`, `1m30s`, `2h15m30s`, or `750ms` for sub-second). The `_ms` suffix is retained for
 /// backwards compatibility; `total_duration` and `total_api_duration` are accepted aliases.
 /// Threshold comparisons still operate on raw milliseconds.
 /// `$cship.cost.total_lines_added` / `total_lines_removed` — integer counts.
