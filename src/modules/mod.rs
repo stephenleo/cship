@@ -1,3 +1,4 @@
+pub mod account;
 pub mod agent;
 pub mod context_bar;
 pub mod context_window;
@@ -19,7 +20,9 @@ pub const ALL_NATIVE_MODULES: &[&str] = &[
     "cship.cost",
     "cship.cost.total_cost_usd",
     "cship.cost.total_duration_ms",
+    "cship.cost.total_duration",
     "cship.cost.total_api_duration_ms",
+    "cship.cost.total_api_duration",
     "cship.cost.total_lines_added",
     "cship.cost.total_lines_removed",
     "cship.context_bar",
@@ -55,6 +58,7 @@ pub const ALL_NATIVE_MODULES: &[&str] = &[
     "cship.usage_limits.oauth_apps",
     "cship.usage_limits.extra_usage",
     "cship.peak_usage",
+    "cship.account",
 ];
 
 /// Static dispatch registry — the ONLY file modified when adding a new native module.
@@ -71,8 +75,12 @@ pub fn render_module(
         // Cost module — main alias and sub-fields
         "cship.cost" => cost::render(ctx, cfg),
         "cship.cost.total_cost_usd" => cost::render_total_cost_usd(ctx, cfg),
-        "cship.cost.total_duration_ms" => cost::render_total_duration_ms(ctx, cfg),
-        "cship.cost.total_api_duration_ms" => cost::render_total_api_duration_ms(ctx, cfg),
+        "cship.cost.total_duration_ms" | "cship.cost.total_duration" => {
+            cost::render_total_duration_ms(ctx, cfg)
+        }
+        "cship.cost.total_api_duration_ms" | "cship.cost.total_api_duration" => {
+            cost::render_total_api_duration_ms(ctx, cfg)
+        }
         "cship.cost.total_lines_added" => cost::render_total_lines_added(ctx, cfg),
         "cship.cost.total_lines_removed" => cost::render_total_lines_removed(ctx, cfg),
         // Context bar — progress bar with threshold styling
@@ -129,10 +137,42 @@ pub fn render_module(
         "cship.usage_limits.cowork" => usage_limits::render_cowork(ctx, cfg),
         "cship.usage_limits.oauth_apps" => usage_limits::render_oauth_apps(ctx, cfg),
         "cship.usage_limits.extra_usage" => usage_limits::render_extra_usage(ctx, cfg),
-        // Peak usage indicator — time-based peak-hour check
         "cship.peak_usage" => peak_usage::render(ctx, cfg),
+        "cship.account" => account::render(ctx, cfg),
         other => {
             tracing::warn!("cship: unknown native module '{other}' — skipping");
+            None
+        }
+    }
+}
+
+/// Spawn `fetch_fn` on a new thread and wait up to 2 seconds for the result.
+///
+/// Returns `None` on API error or timeout, logging a warning in both cases.
+/// `module_name` is used as the log prefix (e.g. `"cship.account"`).
+///
+/// Shared by modules that perform non-blocking network fetches with a cache-miss
+/// fallback. Currently used by `account`; `usage_limits` has its own copy that
+/// should be migrated in a follow-up.
+const FETCH_TIMEOUT_SECS: u64 = 2;
+
+pub(crate) fn fetch_with_timeout<T, F>(module_name: &str, fetch_fn: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        tx.send(fetch_fn()).ok();
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS)) {
+        Ok(Ok(data)) => Some(data),
+        Ok(Err(e)) => {
+            tracing::warn!("{module_name}: API fetch failed: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("{module_name}: API fetch timed out after {FETCH_TIMEOUT_SECS}s");
             None
         }
     }
@@ -164,5 +204,39 @@ mod tests {
         let ctx = Context::default();
         let cfg = CshipConfig::default();
         assert!(render_module("cship.unknown_future_module", &ctx, &cfg).is_none());
+    }
+
+    #[test]
+    fn test_total_duration_alias_equivalent_to_total_duration_ms() {
+        // total_duration is an accepted alias for total_duration_ms (issue #162).
+        // Both names must produce byte-identical output for the same context.
+        let ctx = Context {
+            cost: Some(crate::context::Cost {
+                total_duration_ms: Some(90_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        let canonical = render_module("cship.cost.total_duration_ms", &ctx, &cfg);
+        let alias = render_module("cship.cost.total_duration", &ctx, &cfg);
+        assert_eq!(canonical, alias);
+        assert_eq!(canonical, Some("1m30s".to_string()));
+    }
+
+    #[test]
+    fn test_total_api_duration_alias_equivalent_to_total_api_duration_ms() {
+        let ctx = Context {
+            cost: Some(crate::context::Cost {
+                total_api_duration_ms: Some(2300),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        let canonical = render_module("cship.cost.total_api_duration_ms", &ctx, &cfg);
+        let alias = render_module("cship.cost.total_api_duration", &ctx, &cfg);
+        assert_eq!(canonical, alias);
+        assert_eq!(canonical, Some("2s".to_string()));
     }
 }

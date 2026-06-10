@@ -140,17 +140,23 @@ Individual cost metrics can also be referenced directly:
 | Token | Description |
 |-------|-------------|
 | `$cship.cost.total_cost_usd` | Total cost in USD |
-| `$cship.cost.total_duration_ms` | Total wall-clock duration (ms) |
-| `$cship.cost.total_api_duration_ms` | Total API time (ms) |
+| `$cship.cost.total_duration` (alias: `total_duration_ms`) | Total wall-clock duration, human-readable (`45s`, `1m30s`, `2h15m30s`, or `750ms` for sub-second) |
+| `$cship.cost.total_api_duration` (alias: `total_api_duration_ms`) | Total API time, human-readable |
 | `$cship.cost.total_lines_added` | Lines added this session |
 | `$cship.cost.total_lines_removed` | Lines removed this session |
 
 Each sub-field has its own `[cship.cost.<name>]` section with the same fields as the parent (`style`, `symbol`, `format`, `warn_threshold`, `warn_style`, `critical_threshold`, `critical_style`, `disabled`).
 
+`total_duration` / `total_api_duration` and the `_ms`-suffixed names are accepted interchangeably as TOML keys and as `$cship.cost.…` variables — pick the spelling that reads better. Threshold values are still compared in raw milliseconds (e.g. `warn_threshold = 30000.0` fires at 30s).
+
 ```toml
 [cship.cost.total_lines_added]
 style = "green"
 warn_threshold = 500
+warn_style = "yellow"
+
+[cship.cost.total_duration]
+warn_threshold = 30000.0   # 30s, compared in raw ms
 warn_style = "yellow"
 ```
 
@@ -471,6 +477,55 @@ On Enterprise, the OAuth usage API only populates `extra_usage` (the standard
 
 If `cship.usage_limits` is empty on Enterprise, run `cship explain` for
 specific diagnostics.
+
+---
+
+## `[cship.account]` — Authenticated Account
+
+Displays which Anthropic account the active Claude Code session is signed in to — handy for telling work and personal accounts apart at a glance. Profile data is fetched once from the OAuth `/api/oauth/profile` endpoint and cached for 24 hours (the profile rarely changes). The OAuth token is held only for the duration of the fetch — never written to disk, cache, stdout, or stderr.
+
+**Token:** `$cship.account`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | `bool` | `false` | Hide this module |
+| `style` | `string` | — | ANSI style applied to the rendered value |
+| `symbol` | `string` | `""` | Prefix symbol prepended to the value |
+| `format` | `string` | `"{label}"` | Format string built from the placeholders below |
+| `ttl` | `integer` | `86400` | Cache TTL in seconds (default 24h). The cache is also invalidated automatically when you switch accounts (token fingerprint change). |
+| `labels` | `table` | — | Opt-in map from raw organization name → friendly label, e.g. `{ "Fulcrum Genomics" = "work", "Personal Workspace" = "personal" }` |
+
+**Placeholders** (available in `format`):
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `{label}` | Resolved label: a `labels` mapping for the organization if present, else the raw organization name, else the account display name |
+| `{organization}` | Raw organization name (e.g. `Fulcrum Genomics`) |
+| `{display_name}` | Account display name (e.g. `Nils`) |
+| `{email}` | Account email — treat as PII; opt in by referencing it in `format` |
+| `{tier}` | Organization rate-limit tier (e.g. `default_claude_max_5x`) |
+| `{type}` | Organization type (e.g. `claude_team`, `personal`) |
+
+**Prerequisites:** Requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2, install `libsecret-tools` and store your token with `secret-tool`. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, or unreachable API).
+
+```toml
+[cship.account]
+symbol = " "
+style  = "bold fg:#7aa2f7"
+format = "{label}"
+
+# Map raw org names to short labels
+[cship.account.labels]
+"Fulcrum Genomics" = "work"
+"Personal Workspace" = "personal"
+```
+
+To show more detail, reference additional placeholders:
+
+```toml
+[cship.account]
+format = "{display_name} @ {organization}"
+```
 
 ---
 

@@ -202,6 +202,22 @@ fn install_hint(tool: &str) -> String {
     }
 }
 
+/// Derive a non-reversible fingerprint from an OAuth token.
+///
+/// Returns the last 16 characters of the token string. OAuth tokens are
+/// high-entropy random strings, so the suffix is effectively unique per
+/// token without being reversible to the full credential.
+///
+/// Used by cache readers to detect account switches (different token →
+/// different fingerprint → cache miss).
+pub(crate) fn token_fingerprint(token: &str) -> String {
+    let mut start = token.len().saturating_sub(16);
+    while !token.is_char_boundary(start) {
+        start += 1;
+    }
+    token[start..].to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +323,28 @@ mod tests {
     fn test_install_hint_security() {
         let hint = install_hint("security");
         assert!(hint.contains("xcode-select"), "{hint}");
+    }
+
+    #[test]
+    fn test_token_fingerprint_returns_last_16_chars() {
+        assert_eq!(
+            token_fingerprint("sk-ant-oat01-abcdefghijklmnop"),
+            "abcdefghijklmnop"
+        );
+    }
+
+    #[test]
+    fn test_token_fingerprint_short_token_returns_full() {
+        assert_eq!(token_fingerprint("short"), "short");
+    }
+
+    #[test]
+    fn test_token_fingerprint_exactly_16_chars() {
+        assert_eq!(token_fingerprint("0123456789abcdef"), "0123456789abcdef");
+    }
+
+    #[test]
+    fn test_token_fingerprint_empty_returns_empty() {
+        assert_eq!(token_fingerprint(""), "");
     }
 }

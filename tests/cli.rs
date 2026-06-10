@@ -282,7 +282,9 @@ fn test_cost_disabled_produces_no_output() {
 fn test_cost_subfields_render_numeric_values() {
     let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
     // sample_input_full.json: total_cost_usd=0.01234, total_duration_ms=45000,
-    // total_api_duration_ms=2300, total_lines_added=156, total_lines_removed=23
+    // total_api_duration_ms=2300, total_lines_added=156, total_lines_removed=23.
+    // Duration fields render as human-readable strings (issue #162):
+    // 45000ms → "45s"; 2300ms → "2s" (truncated to whole seconds).
     let output = cship()
         .args(["--config", "tests/fixtures/cost_subfields.toml"])
         .write_stdin(json)
@@ -294,8 +296,8 @@ fn test_cost_subfields_render_numeric_values() {
         stdout.contains("0.0123"),
         "expected '0.0123' in: {stdout:?}"
     );
-    assert!(stdout.contains("45000"), "expected '45000' in: {stdout:?}");
-    assert!(stdout.contains("2300"), "expected '2300' in: {stdout:?}");
+    assert!(stdout.contains("45s"), "expected '45s' in: {stdout:?}");
+    assert!(stdout.contains("2s"), "expected '2s' in: {stdout:?}");
     assert!(stdout.contains("156"), "expected '156' in: {stdout:?}");
     assert!(stdout.contains("23"), "expected '23' in: {stdout:?}");
 }
