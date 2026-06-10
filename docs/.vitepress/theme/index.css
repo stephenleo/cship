@@ -10,3 +10,24 @@
     'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
     monospace;
 }
+
+.VPHero .container {
+  justify-content: center;
+}
+
+.VPHero .main {
+  text-align: center;
+}
+
+.VPHero .heading {
+  align-items: center;
+  justify-content: center;
+}
+
+.VPHero .tagline {
+  margin: 0 auto;
+}
+
+.VPHero .actions {
+  justify-content: center;
+}

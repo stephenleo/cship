@@ -6,7 +6,7 @@ const DEFAULT_FILLED_CHAR: &str = "█";
 const DEFAULT_EMPTY_CHAR: &str = "░";
 
 /// Renders `$cship.context_bar` — visual Unicode progress bar with threshold color escalation.
-/// Format: `{bar}{used_percentage:.0}%` e.g. `███░░░░░░░35%`
+/// Format: `{bar} {used_percentage:.0}%` e.g. `███░░░░░░░ 35%`
 /// Bar width is configurable via `[cship.context_bar].width` (default 10).
 /// Fill characters are configurable via `filled_char` (default `"█"`) and `empty_char` (default `"░"`).
 ///
@@ -46,7 +46,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         .and_then(|c| c.empty_char.as_deref())
         .unwrap_or(DEFAULT_EMPTY_CHAR);
     let bar: String = filled_char.repeat(filled) + &empty_char.repeat(empty);
-    let bar_content = format!("{bar}{:.0}%", used_pct);
+    let bar_content = format!("{bar} {:.0}%", used_pct);
 
     let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
     let style = bar_cfg.and_then(|c| c.style.as_deref());
@@ -126,7 +126,7 @@ mod tests {
     fn test_context_bar_35_percent_3_filled_7_empty() {
         let ctx = ctx_with_pct(35.0);
         let result = render(&ctx, &CshipConfig::default()).unwrap();
-        // 35% of 10 = 3.5 → floor → 3 filled, 7 empty → "███░░░░░░░35%"
+        // 35% of 10 = 3.5 → floor → 3 filled, 7 empty → "███░░░░░░░ 35%"
         let filled: usize = result.chars().filter(|&c| c == '█').count();
         let empty: usize = result.chars().filter(|&c| c == '░').count();
         assert_eq!(filled, 3, "expected 3 filled chars: {result:?}");

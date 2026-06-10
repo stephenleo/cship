@@ -80,23 +80,33 @@ Displays the active Claude model name.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `disabled` | `bool` | `false` | Hide this module |
-| `style` | `string` | `"bold"` | ANSI style |
+| `style` | `string` | `"bold"` | ANSI style (fallback when no per-family style matches) |
 | `symbol` | `string` | `""` | Prefix symbol |
 | `format` | `string` | `"[$symbol$value]($style)"` | Format string; `$value` = model display name |
+| `haiku_style` | `string` | — | Style applied when the key contains `"haiku"` (case-insensitive) |
+| `sonnet_style` | `string` | — | Style applied when the key contains `"sonnet"` (case-insensitive) |
+| `opus_style` | `string` | — | Style applied when the key contains `"opus"` (case-insensitive) |
 
-**Variables:** `$value` (display name, e.g. `claude-sonnet-4-5`), `$symbol`, `$style`
+**Variables:** `$value` (display name, e.g. `Claude Sonnet 4.5`), `$symbol`, `$style`
+
+Per-family styles are matched case-insensitively against `model.id` (e.g. `claude-opus-4-7`). If `id` is absent, `display_name` is used as the key instead — so a display name like `"My Sonnet Setup"` will trigger `sonnet_style`. When no family style matches or is set, `style` is used as the fallback.
 
 ```toml
 [cship.model]
 symbol = "🤖 "
 style  = "bold fg:#7aa2f7"
+
+# Per-model colors
+haiku_style  = "green"
+sonnet_style = "cyan"
+opus_style   = "magenta"
 ```
 
 ---
 
 ## `[cship.cost]` — Session Cost
 
-Displays total session cost in USD. Supports threshold-based colour escalation.
+Displays total session cost with threshold-based colour escalation. The display currency and conversion rate are configurable; the underlying value is always `total_cost_usd` (USD). Thresholds are evaluated against the converted display value (`total_cost_usd × conversion_rate`); configure them in your display currency.
 
 **Token:** `$cship.cost`
 
@@ -106,12 +116,14 @@ Displays total session cost in USD. Supports threshold-based colour escalation.
 | `style` | `string` | `"green"` | Base ANSI style |
 | `symbol` | `string` | `""` | Prefix symbol |
 | `format` | `string` | `"[$symbol$value]($style)"` | Format string |
-| `warn_threshold` | `float` | — | USD amount at which style switches to `warn_style` |
+| `warn_threshold` | `float` | — | Display-currency amount at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style applied when cost ≥ `warn_threshold` |
-| `critical_threshold` | `float` | — | USD amount at which style switches to `critical_style` |
+| `critical_threshold` | `float` | — | Display-currency amount at which style switches to `critical_style` |
 | `critical_style` | `string` | `"bold red"` | Style applied when cost ≥ `critical_threshold` |
+| `currency_symbol` | `string` | `"$"` | Symbol prepended to the displayed value (e.g. `"£"`, `"€"`) |
+| `conversion_rate` | `float` | `1.0` | Multiplier applied to `total_cost_usd` before display; thresholds are evaluated against the converted value, so express them in your display currency |
 
-**Variables:** `$value` (e.g. `$1.23`), `$symbol`, `$style`
+**Variables:** `$value` (e.g. `$1.23` or `£0.97` with a custom currency), `$symbol`, `$style`
 
 ```toml
 [cship.cost]
@@ -324,7 +336,7 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 
 | Token | Renders |
 |-------|---------|
-| `$cship.usage_limits` | Combined: 5h + 7d + per-model (when present) + extra usage (when enabled) |
+| `$cship.usage_limits` | 5h + 7d window summary. Per-model and extra-usage sections are appended only when `show_per_model = true` (opt-in for backwards compatibility) |
 | `$cship.usage_limits.per_model` | Only the per-model 7-day breakdown (opus/sonnet/cowork/oauth) |
 | `$cship.usage_limits.opus` | 7-day Opus utilization only |
 | `$cship.usage_limits.sonnet` | 7-day Sonnet utilization only |
@@ -346,6 +358,7 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `cowork_format` | `string` | `"cowork {pct}%"` | Format for the 7-day Cowork section |
 | `oauth_apps_format` | `string` | `"oauth {pct}%"` | Format for the 7-day OAuth-apps section |
 | `extra_usage_format` | `string` | `"{active} extra: {pct}% (${used}/${limit})"` | Format for the extra-usage section |
+| `show_per_model` | `bool` | `false` | When `true`, `$cship.usage_limits` appends the per-model breakdown (opus, sonnet, cowork, oauth) to the default `5h \| 7d` output. The extra-usage section always renders when enabled, regardless of this flag. Default is `false` so existing status bars retain their pre-1.5 shape. |
 | `separator` | `string` | `" \| "` | String placed between sections |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
@@ -362,12 +375,13 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `{reset}` | Time-until-reset string (e.g. `4h12m`) |
 | `{pace}` | Signed headroom vs linear consumption — `+20%` (under pace), `-15%` (over pace), or `?` when unknown |
 
-**Additional placeholders in `extra_usage_format`:**
+**Placeholders specific to `extra_usage_format`** (the standard `{remaining}` percentage placeholder does **not** apply here — use `{remaining_credits}` instead):
 
 | Placeholder | Meaning |
 |-------------|---------|
 | `{used}` | Extra credits consumed, in dollars (e.g. `12.34`) |
 | `{limit}` | Monthly extra-credit limit, in dollars (e.g. `50`) |
+| `{remaining_credits}` | Remaining extra-credit budget, in dollars (e.g. `138.05`) |
 | `{active}` | `⚡` when 5h or 7d utilization is at 100% (actively consuming extra credits), `💤` otherwise |
 
 **Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 install `libsecret-tools` and store your OAuth token with `secret-tool`. See [FAQ](/faq#usage-limits-linux) for setup instructions.
@@ -421,6 +435,64 @@ separator        = ""
 ```
 
 Setting both formats to `""` effectively hides the combined token. Per-model sections render only when the API returns data for that model, so they disappear automatically on accounts that don't expose a given breakdown.
+
+### Claude Enterprise plans
+
+On Enterprise, the OAuth usage API only populates `extra_usage` (the standard
+5h/7d fields are `null`). `cship.usage_limits` automatically renders just the
+`extra_usage` line, and threshold styling falls back to `extra_usage_utilization`.
+
+If `cship.usage_limits` is empty on Enterprise, run `cship explain` for
+specific diagnostics.
+
+---
+
+## `[cship.account]` — Authenticated Account
+
+Displays which Anthropic account the active Claude Code session is signed in to — handy for telling work and personal accounts apart at a glance. Profile data is fetched once from the OAuth `/api/oauth/profile` endpoint and cached for 24 hours (the profile rarely changes). The OAuth token is held only for the duration of the fetch — never written to disk, cache, stdout, or stderr.
+
+**Token:** `$cship.account`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disabled` | `bool` | `false` | Hide this module |
+| `style` | `string` | — | ANSI style applied to the rendered value |
+| `symbol` | `string` | `""` | Prefix symbol prepended to the value |
+| `format` | `string` | `"{label}"` | Format string built from the placeholders below |
+| `ttl` | `integer` | `86400` | Cache TTL in seconds (default 24h). The cache is also invalidated automatically when you switch accounts (token fingerprint change). |
+| `labels` | `table` | — | Opt-in map from raw organization name → friendly label, e.g. `{ "Fulcrum Genomics" = "work", "Personal Workspace" = "personal" }` |
+
+**Placeholders** (available in `format`):
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `{label}` | Resolved label: a `labels` mapping for the organization if present, else the raw organization name, else the account display name |
+| `{organization}` | Raw organization name (e.g. `Fulcrum Genomics`) |
+| `{display_name}` | Account display name (e.g. `Nils`) |
+| `{email}` | Account email — treat as PII; opt in by referencing it in `format` |
+| `{tier}` | Organization rate-limit tier (e.g. `default_claude_max_5x`) |
+| `{type}` | Organization type (e.g. `claude_team`, `personal`) |
+
+**Prerequisites:** Requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2, install `libsecret-tools` and store your token with `secret-tool`. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, or unreachable API).
+
+```toml
+[cship.account]
+symbol = " "
+style  = "bold fg:#7aa2f7"
+format = "{label}"
+
+# Map raw org names to short labels
+[cship.account.labels]
+"Fulcrum Genomics" = "work"
+"Personal Workspace" = "personal"
+```
+
+To show more detail, reference additional placeholders:
+
+```toml
+[cship.account]
+format = "{display_name} @ {organization}"
+```
 
 ---
 

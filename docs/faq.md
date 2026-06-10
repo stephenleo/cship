@@ -81,6 +81,43 @@ extra_usage_format = "{active} ${used}/${limit}"
 
 ---
 
+## I'm on a Claude Enterprise plan and `cship.usage_limits` shows nothing — why?
+
+Claude Enterprise reports usage through `extra_usage` (monthly credit pool)
+rather than the standard 5-hour and 7-day windows used for Pro and Max.
+cship now renders the `extra_usage` line directly when standard fields are
+absent, with threshold styling applied to monthly credit utilization.
+
+If you still see no output, run `cship explain` — it will surface the
+specific reason (missing credential, expired token, or extra-credit billing
+not enabled on your Enterprise account).
+
+---
+
+## How do I set up the `cship.account` module, and why is it empty? {#account-setup}
+
+`cship.account` shows which Anthropic account you're signed in to (work vs
+personal). It reads your account profile from the OAuth `/api/oauth/profile`
+endpoint using the OAuth token in your OS credential store — the same
+credential `usage_limits` uses — so the [Linux/WSL2 setup above](#usage-limits-linux)
+applies here too (`libsecret-tools` + `secret-tool`). The profile is cached for
+24 hours and re-fetched automatically when you switch accounts.
+
+If the module renders nothing, run `cship explain cship.account`. It
+distinguishes the three causes: no credential found (authenticate in Claude
+Code), credential present but the profile fetch failed (token may have expired,
+or the API was unreachable — re-authenticate), or a malformed credential.
+
+To map raw organization names to short labels:
+
+```toml
+[cship.account.labels]
+"Fulcrum Genomics" = "work"
+"Personal Workspace" = "personal"
+```
+
+---
+
 ## How does the peak-time indicator handle time zones and DST?
 
 The `peak_usage` module checks whether the current time falls within the configured peak window in **US Pacific time**. It computes the UTC→Pacific offset internally — PDT (UTC−7) from the second Sunday of March through the first Sunday of November, PST (UTC−8) the rest of the year.

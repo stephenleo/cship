@@ -57,8 +57,8 @@ pub struct UsageLimitsData {
 /// Intermediate struct matching the raw API response structure.
 #[derive(serde::Deserialize)]
 struct ApiResponse {
-    five_hour: UsagePeriod,
-    seven_day: UsagePeriod,
+    five_hour: Option<UsagePeriod>,
+    seven_day: Option<UsagePeriod>,
     seven_day_opus: Option<UsagePeriod>,
     seven_day_sonnet: Option<UsagePeriod>,
     seven_day_cowork: Option<UsagePeriod>,
@@ -99,11 +99,20 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
     let (cowork_pct, cowork_reset) = map_period(&api.seven_day_cowork);
     let (oauth_apps_pct, oauth_apps_reset) = map_period(&api.seven_day_oauth_apps);
 
+    let (five_h_pct, five_h_reset) = api
+        .five_hour
+        .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
+        .unwrap_or((0.0, String::new()));
+    let (seven_d_pct, seven_d_reset) = api
+        .seven_day
+        .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
+        .unwrap_or((0.0, String::new()));
+
     Ok(UsageLimitsData {
-        five_hour_pct: api.five_hour.utilization,
-        seven_day_pct: api.seven_day.utilization,
-        five_hour_resets_at: api.five_hour.resets_at.unwrap_or_default(),
-        seven_day_resets_at: api.seven_day.resets_at.unwrap_or_default(),
+        five_hour_pct: five_h_pct,
+        seven_day_pct: seven_d_pct,
+        five_hour_resets_at: five_h_reset,
+        seven_day_resets_at: seven_d_reset,
         five_hour_resets_at_epoch: None,
         seven_day_resets_at_epoch: None,
         extra_usage_enabled: api.extra_usage.as_ref().and_then(|e| e.is_enabled),
@@ -129,7 +138,7 @@ pub fn fetch_usage_limits(token: &str) -> Result<UsageLimitsData, String> {
 
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
-            .timeout_global(Some(Duration::from_secs(5)))
+            .timeout_global(Some(Duration::from_millis(1500)))
             .build(),
     );
     let mut response = agent
@@ -201,5 +210,56 @@ mod tests {
         assert!(data.extra_usage_monthly_limit.is_none());
         assert!(data.seven_day_opus_pct.is_none());
         assert!(data.seven_day_sonnet_pct.is_none());
+    }
+
+    #[test]
+    fn test_parse_enterprise_response_with_null_standard_fields() {
+        // Reproduces the Enterprise API shape: standard fields all null,
+        // extra_usage populated. Sourced from issue #173.
+        let json = r#"{
+            "five_hour": null,
+            "seven_day": null,
+            "seven_day_oauth_apps": null,
+            "seven_day_opus": null,
+            "seven_day_sonnet": null,
+            "seven_day_cowork": null,
+            "seven_day_omelette": null,
+            "tangelo": null,
+            "iguana_necktie": null,
+            "omelette_promotional": {"utilization": 0.0, "resets_at": null},
+            "extra_usage": {
+                "is_enabled": true,
+                "monthly_limit": 20000,
+                "used_credits": 19411.0,
+                "utilization": 97.055,
+                "currency": "USD"
+            }
+        }"#;
+        let data = parse_api_response(json).expect("Enterprise response must parse");
+        assert_eq!(data.five_hour_pct, 0.0);
+        assert_eq!(data.seven_day_pct, 0.0);
+        assert!(data.five_hour_resets_at.is_empty());
+        assert!(data.seven_day_resets_at.is_empty());
+        assert_eq!(data.extra_usage_enabled, Some(true));
+        assert_eq!(data.extra_usage_monthly_limit, Some(20000.0));
+        assert!((data.extra_usage_used_credits.unwrap() - 19411.0).abs() < f64::EPSILON);
+        assert!((data.extra_usage_utilization.unwrap() - 97.055).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_response_with_missing_standard_fields_keys() {
+        // Future-proofing: even if the API drops these keys entirely, parse must succeed.
+        let json = r#"{
+            "extra_usage": {
+                "is_enabled": true,
+                "monthly_limit": 5000,
+                "used_credits": 1234.5,
+                "utilization": 24.69
+            }
+        }"#;
+        let data = parse_api_response(json).expect("missing standard fields must not be fatal");
+        assert_eq!(data.five_hour_pct, 0.0);
+        assert_eq!(data.seven_day_pct, 0.0);
+        assert_eq!(data.extra_usage_enabled, Some(true));
     }
 }

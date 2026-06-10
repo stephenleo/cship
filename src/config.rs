@@ -21,6 +21,7 @@ pub struct CshipConfig {
     pub usage_limits: Option<UsageLimitsConfig>,
     pub peak_usage: Option<PeakUsageConfig>,
     pub starship_prompt: Option<StarshipPromptConfig>,
+    pub account: Option<AccountConfig>,
 }
 
 /// Per-module config fields shared by all native CShip modules.
@@ -33,6 +34,9 @@ pub struct ModelConfig {
     /// When `true`, prepends the module name as a label.
     pub label: Option<bool>,
     pub format: Option<String>,
+    pub haiku_style: Option<String>,
+    pub sonnet_style: Option<String>,
+    pub opus_style: Option<String>,
 }
 
 /// Configuration for `[cship.cost]` — convenience alias for total cost display.
@@ -48,6 +52,14 @@ pub struct CostConfig {
     pub critical_threshold: Option<f64>,
     pub critical_style: Option<String>,
     pub format: Option<String>,
+    /// Currency symbol to display instead of `$`. Defaults to `$`.
+    /// Example: `"£"` or `"€"`.
+    pub currency_symbol: Option<String>,
+    /// Multiplier applied to `total_cost_usd` before display. Defaults to `1.0` (no conversion).
+    /// Note: `warn_threshold` and `critical_threshold` are compared against the converted value
+    /// (`total_cost_usd * conversion_rate`) — configure them in your display currency.
+    /// Should be positive; non-positive values are accepted but produce undefined threshold behavior.
+    pub conversion_rate: Option<f64>,
     // Sub-field per-display configs (map to [cship.cost.total_cost_usd] etc.)
     pub total_cost_usd: Option<SubfieldConfig>,
     /// `total_duration` is an accepted alias — the rendered value is human-readable, not raw ms.
@@ -276,24 +288,37 @@ pub struct UsageLimitsConfig {
     pub five_hour_format: Option<String>,
     pub seven_day_format: Option<String>,
     pub separator: Option<String>,
+    /// When `true`, `$cship.usage_limits` appends per-model breakdowns (opus, sonnet,
+    /// cowork, oauth_apps) to the default `5h | 7d` output. The extra-usage section
+    /// renders unconditionally whenever the account has extra-usage data enabled.
+    /// Defaults to `false` to preserve the pre-7.2 output shape `"5h: X% | 7d: X%"`.
+    /// Users who want the richer output set `show_per_model = true`, or reference the
+    /// dedicated tokens (`$cship.usage_limits.opus`, `.sonnet`, etc.) directly — those
+    /// tokens always render regardless of this flag.
+    pub show_per_model: Option<bool>,
     /// Format string for extra usage display. Shown when extra_usage.is_enabled is true.
-    /// Placeholders: {pct}, {used}, {limit}, {remaining}
-    /// Default: "extra: {pct}% (${used}/${limit})"
+    /// Placeholders: {active}, {pct}, {used}, {limit}, {remaining_credits}
+    /// `{pct}` is the integer percentage of extra-usage budget consumed; `{used}`,
+    /// `{limit}`, and `{remaining_credits}` render as dollar amounts with two
+    /// decimal places (the API reports cents; cship divides by 100 for display).
+    /// `{remaining_credits}` is named distinctly from the percentage-based `{remaining}`
+    /// used in other format strings to avoid silent misinterpretation.
+    /// Default: "{active} extra: {pct}% (${used}/${limit})"
     pub extra_usage_format: Option<String>,
     /// Format string for 7-day Opus breakdown. Shown when API returns non-null data.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "opus {pct}%"
     pub opus_format: Option<String>,
     /// Format string for 7-day Sonnet breakdown.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "sonnet {pct}%"
     pub sonnet_format: Option<String>,
     /// Format string for 7-day Cowork breakdown.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "cowork {pct}%"
     pub cowork_format: Option<String>,
     /// Format string for 7-day OAuth apps breakdown.
-    /// Placeholders: {pct}, {reset}, {remaining}
+    /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "oauth {pct}%"
     pub oauth_apps_format: Option<String>,
 }
@@ -318,6 +343,35 @@ pub struct PeakUsageConfig {
 #[derive(Debug, Deserialize, Default)]
 pub struct StarshipPromptConfig {
     pub disabled: Option<bool>,
+}
+
+/// Configuration for `[cship.account]` — displays the currently authenticated Anthropic account.
+///
+/// Sources account + organization metadata from the `/api/oauth/profile` endpoint so users
+/// can see whether they're on their work or personal Claude account at a glance. Opt-in
+/// label mapping lets users hide raw org names / emails behind friendly labels.
+///
+/// ## Format placeholders
+/// - `{label}` — resolved user label (from `labels` map, keyed by organization name).
+///   Falls back to `{organization}` when no mapping matches.
+/// - `{organization}` — raw organization `name` from the API (e.g. `"Fulcrum Genomics"`).
+/// - `{display_name}` — account `display_name` (e.g. `"Nils"`).
+/// - `{email}` — account `email` (PII; opt in explicitly).
+/// - `{tier}` — organization `rate_limit_tier` (e.g. `"default_claude_max_5x"`).
+/// - `{type}` — organization `organization_type` (e.g. `"claude_team"`, `"personal"`).
+#[derive(Debug, Deserialize, Default)]
+pub struct AccountConfig {
+    pub style: Option<String>,
+    pub symbol: Option<String>,
+    pub disabled: Option<bool>,
+    pub format: Option<String>,
+    /// Cache TTL in seconds. Default: 86400 (24 hours). Profile data rarely changes.
+    pub ttl: Option<u64>,
+    /// Opt-in mapping from raw organization name → user-friendly label.
+    /// Example: `{ "Fulcrum Genomics" = "work", "Personal Workspace" = "personal" }`
+    /// When a rendered value uses `{label}` and this map is absent or doesn't contain
+    /// the organization, the raw organization name is used instead.
+    pub labels: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// Result of a config load operation — includes the loaded config and its source.

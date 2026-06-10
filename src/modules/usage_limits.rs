@@ -11,17 +11,49 @@ use crate::config::{CshipConfig, UsageLimitsConfig};
 use crate::context::Context;
 use crate::usage_limits::UsageLimitsData;
 
+thread_local! {
+    /// Per-render-cycle memo for `resolve_data`. cship invocations are short-lived
+    /// (one process per prompt render), so a thread-local cache effectively means
+    /// "compute once per render cycle." When a status bar references multiple
+    /// sub-tokens ($cship.usage_limits.opus, .sonnet, etc.), each token invokes
+    /// `render` independently; without this cache each call would pay the full
+    /// OAuth/cache lookup cost.
+    static RESOLVE_CACHE: std::cell::RefCell<Option<Option<UsageLimitsData>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Shared data-fetch logic for the usage limits module and its sub-field renderers.
 ///
+/// In production builds, memoized per process invocation via `RESOLVE_CACHE` so the
+/// OAuth/cache lookup runs at most once per render cycle even when the user's
+/// status bar references multiple sub-tokens (`$cship.usage_limits.opus`, `.sonnet`,
+/// etc.). In test builds, memoization is bypassed: cargo's worker threads are
+/// reused across tests, so a thread-local cache would leak state between unrelated
+/// test cases. The memoization mechanism itself is exercised by
+/// `resolve_data_memoized` in the test module.
+#[cfg(not(test))]
+fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
+    RESOLVE_CACHE.with(|c| {
+        if let Some(cached) = c.borrow().as_ref() {
+            return cached.clone();
+        }
+        let computed = resolve_data_uncached(ctx, cfg);
+        *c.borrow_mut() = Some(computed.clone());
+        computed
+    })
+}
+
+#[cfg(test)]
+fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
+    resolve_data_uncached(ctx, cfg)
+}
+
 /// Stdin `rate_limits` always provides the freshest 5h/7d values (sent every render
 /// by Claude Code). Cache/OAuth provide per-model + extra usage data.
 ///
-/// Strategy:
-/// 1. Start with stdin 5h/7d data (always freshest)
-/// 2. Enrich with per-model + extra usage from cache or OAuth
-/// 3. If OAuth fails, merge stdin with stale cache for per-model/extra
-/// 4. If no cache at all, return stdin-only (no per-model/extra)
-fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
+/// Token is read up front for fingerprint computation (cache identity check).
+/// Token failure is non-fatal — stdin data is still usable.
+fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     let ul_cfg = cfg.usage_limits.as_ref();
 
     if ul_cfg.and_then(|c| c.disabled) == Some(true) {
@@ -33,18 +65,48 @@ fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     // Stdin provides the freshest 5h/7d values
     let stdin_data = data_from_stdin_rate_limits(ctx);
 
+    // Read OAuth token up front for fingerprint (cache identity check).
+    // Token failure is non-fatal here — stdin data is still usable.
+    let token_and_fp = match crate::platform::get_oauth_token() {
+        Ok(token) => {
+            let fp = crate::platform::token_fingerprint(&token);
+            Some((token, fp))
+        }
+        Err(e) => {
+            tracing::warn!("cship.usage_limits: credential retrieval failed: {e}");
+            if let Some(tp) = transcript_path {
+                cache::write_negative_marker(tp, 30);
+            }
+            None
+        }
+    };
+
     // Try to get full data (per-model + extra) from cache or OAuth
     let full_data = transcript_path.and_then(|tp| {
+        let fp_ref = token_and_fp.as_ref().map(|(_, fp)| fp.as_str());
         // Fresh cache?
-        if let Some(cached) = cache::read_usage_limits(tp, false) {
+        if let Some(cached) = cache::read_usage_limits(tp, false, fp_ref) {
             return Some(cached);
         }
-        // OAuth fetch?
-        if let Some(fresh) = fetch_and_cache(tp, ul_cfg) {
-            return Some(fresh);
+        // Check negative cache — avoid retrying immediately after a failure
+        if cache::read_negative_marker(tp) {
+            tracing::debug!("cship.usage_limits: skipping OAuth (recent failure cooldown)");
+            if let Some((_, ref fp)) = token_and_fp {
+                return cache::read_usage_limits(tp, true, Some(fp));
+            }
+            return cache::read_usage_limits(tp, true, None);
         }
-        // Stale cache as last resort for per-model/extra
-        cache::read_usage_limits(tp, true)
+        // OAuth fetch? (needs token)
+        if let Some((token, fp)) = token_and_fp {
+            if let Some(fresh) = fetch_and_cache(tp, ul_cfg, token, &fp) {
+                return Some(fresh);
+            }
+            // Stale cache as last resort for per-model/extra
+            cache::read_usage_limits(tp, true, Some(&fp))
+        } else {
+            // No token available — try stale cache without fingerprint check
+            cache::read_usage_limits(tp, true, None)
+        }
     });
 
     match (stdin_data, full_data) {
@@ -65,33 +127,22 @@ fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     }
 }
 
-/// Attempt an OAuth fetch with timeout and cache the result.
-/// Returns `None` on credential failure, API error, timeout, or if a negative
-/// cache marker indicates a recent failure (30s cooldown to avoid hammering).
+/// Fetch usage limits via OAuth and write to cache with fingerprint.
+///
+/// Accepts a pre-fetched token and fingerprint — the caller handles credential
+/// retrieval so this function only deals with the fetch + cache write.
 fn fetch_and_cache(
     transcript_path: &std::path::Path,
     ul_cfg: Option<&UsageLimitsConfig>,
+    token: String,
+    fingerprint: &str,
 ) -> Option<UsageLimitsData> {
-    // Check negative cache — avoid retrying immediately after a failure
-    if cache::read_negative_marker(transcript_path) {
-        tracing::debug!("cship.usage_limits: skipping OAuth (recent failure cooldown)");
-        return None;
-    }
-
-    let token = match crate::platform::get_oauth_token() {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("cship.usage_limits: credential retrieval failed: {e}");
-            cache::write_negative_marker(transcript_path, 30);
-            return None;
-        }
-    };
-
     let ttl_secs = ul_cfg.and_then(|c| c.ttl).unwrap_or(60);
+    let fp = fingerprint.to_string();
 
     match fetch_with_timeout(move || crate::usage_limits::fetch_usage_limits(&token)) {
         Some(fresh) => {
-            cache::write_usage_limits(transcript_path, &fresh, ttl_secs);
+            cache::write_usage_limits(transcript_path, &fresh, ttl_secs, Some(&fp));
             Some(fresh)
         }
         None => {
@@ -101,13 +152,34 @@ fn fetch_and_cache(
     }
 }
 
+/// True when the response carries no 5h or 7d signal — i.e. percentages and
+/// reset markers are all at their `Default` zero state. On Claude Enterprise
+/// the API returns these fields as `null`, so they remain at default values
+/// after `parse_api_response`. Used to switch the renderer into "extra-usage
+/// only" mode.
+pub(crate) fn lacks_standard_signal(data: &UsageLimitsData) -> bool {
+    data.five_hour_pct == 0.0
+        && data.seven_day_pct == 0.0
+        && data.five_hour_resets_at_epoch.is_none()
+        && data.seven_day_resets_at_epoch.is_none()
+        && data.five_hour_resets_at.is_empty()
+        && data.seven_day_resets_at.is_empty()
+}
+
 /// Apply threshold styling using the higher of 5h/7d utilization.
+/// Falls back to `extra_usage_utilization` when both standard signals are zero
+/// (Enterprise plans where 5h/7d data is absent).
 fn apply_threshold(content: &str, data: &UsageLimitsData, cfg: &CshipConfig) -> String {
     let ul_cfg = cfg.usage_limits.as_ref();
-    let max_pct = data.five_hour_pct.max(data.seven_day_pct);
+    let standard_max = data.five_hour_pct.max(data.seven_day_pct);
+    let pct = if standard_max > 0.0 {
+        standard_max
+    } else {
+        data.extra_usage_utilization.unwrap_or(0.0)
+    };
     crate::ansi::apply_style_with_threshold(
         content,
-        Some(max_pct),
+        Some(pct),
         ul_cfg.and_then(|c| c.style.as_deref()),
         ul_cfg.and_then(|c| c.warn_threshold),
         ul_cfg.and_then(|c| c.warn_style.as_deref()),
@@ -116,12 +188,21 @@ fn apply_threshold(content: &str, data: &UsageLimitsData, cfg: &CshipConfig) -> 
     )
 }
 
-/// Render the usage limits module (5h + 7d + per-model + extra usage combined).
+/// Render the usage limits module.
+///
+/// On Pro/Max plans this is the full 5h + 7d (+ optional per-model + optional extra)
+/// composition produced by `format_output`. On Enterprise plans (where the API returns
+/// 5h/7d as null), `render` short-circuits to the `extra_usage` section only.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let data = resolve_data(ctx, cfg)?;
     let default_ul_cfg = UsageLimitsConfig::default();
     let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
-    let content = format_output(&data, ul_cfg);
+
+    let content = if lacks_standard_signal(&data) {
+        format_extra_usage(&data, ul_cfg)?
+    } else {
+        format_output(&data, ul_cfg)
+    };
     Some(apply_threshold(&content, &data, cfg))
 }
 
@@ -342,9 +423,11 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
 
     let mut parts: Vec<String> = vec![five_h_part, seven_d_part];
 
-    let per_model = format_per_model(data, cfg);
-    if !per_model.is_empty() {
-        parts.push(per_model);
+    if cfg.show_per_model.unwrap_or(false) {
+        let per_model = format_per_model(data, cfg);
+        if !per_model.is_empty() {
+            parts.push(per_model);
+        }
     }
 
     if let Some(extra) = format_extra_usage(data, cfg) {
@@ -438,25 +521,30 @@ fn model_entries<'a>(
 
 /// Format the extra usage section. Returns `None` when extra usage is absent or disabled.
 ///
-/// The `{active}` placeholder renders `"⚡"` when either 5h or 7d utilization is at 100%
-/// (meaning requests are currently consuming extra credits), or `"💤"` otherwise.
+/// `{active}` glyph rules:
+/// - Pro/Max: `⚡` when either 5h or 7d utilization is at 100%, else `💤`.
+/// - Enterprise (no 5h/7d signal): `⚡` once `extra_usage_utilization` exceeds
+///   `warn_threshold`, or for any non-zero utilization when no threshold is
+///   configured. Otherwise `💤`.
 fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option<String> {
     if data.extra_usage_enabled != Some(true) {
         return None;
     }
     let eu_pct = data
         .extra_usage_utilization
-        .map(|v| format!("{:.0}", v))
+        .map(|v| format!("{v:.0}"))
         .unwrap_or_else(|| "?".into());
+    // The Anthropic OAuth usage API reports `used_credits` and `monthly_limit`
+    // in cents (smallest currency unit). Divide by 100 for dollar display.
     let eu_used = data
         .extra_usage_used_credits
         .map(|v| format!("{:.2}", v / 100.0))
         .unwrap_or_else(|| "?".into());
     let eu_limit = data
         .extra_usage_monthly_limit
-        .map(|v| format!("{:.0}", v / 100.0))
+        .map(|v| format!("{:.2}", v / 100.0))
         .unwrap_or_else(|| "?".into());
-    let eu_remaining = match (
+    let eu_remaining_credits = match (
         data.extra_usage_monthly_limit,
         data.extra_usage_used_credits,
     ) {
@@ -465,6 +553,12 @@ fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option
     };
     let active = if data.five_hour_pct >= 100.0 || data.seven_day_pct >= 100.0 {
         "\u{26a1}" // ⚡
+    } else if lacks_standard_signal(data) {
+        let threshold = cfg.warn_threshold.unwrap_or(0.0);
+        match data.extra_usage_utilization {
+            Some(u) if u > threshold => "\u{26a1}", // ⚡
+            _ => "\u{1f4a4}",                       // 💤
+        }
     } else {
         "\u{1f4a4}" // 💤
     };
@@ -472,13 +566,19 @@ fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option
         .extra_usage_format
         .as_deref()
         .unwrap_or("{active} extra: {pct}% (${used}/${limit})");
+    if eu_fmt.contains("{remaining}") {
+        tracing::warn!(
+            "`extra_usage_format` contains `{{remaining}}` which is no longer substituted; \
+             use `{{remaining_credits}}` for the dollar amount remaining"
+        );
+    }
     Some(
         eu_fmt
             .replace("{active}", active)
             .replace("{pct}", &eu_pct)
             .replace("{used}", &eu_used)
             .replace("{limit}", &eu_limit)
-            .replace("{remaining}", &eu_remaining),
+            .replace("{remaining_credits}", &eu_remaining_credits),
     )
 }
 
@@ -527,7 +627,8 @@ fn format_remaining_secs(secs: u64) -> String {
 /// Calculate pace: how far ahead or behind linear consumption the user is.
 ///
 /// Returns `Some(pace)` where positive = headroom, negative = over-pace.
-/// Returns `None` when `resets_at_epoch` is unavailable.
+/// Returns `None` when `resets_at_epoch` is unavailable or already in the past
+/// (an expired window has no meaningful pace — `format_pace(None)` renders `"?"`).
 fn calculate_pace(
     used_pct: f64,
     resets_at_epoch: Option<u64>,
@@ -535,7 +636,10 @@ fn calculate_pace(
     now: u64,
 ) -> Option<f64> {
     let reset = resets_at_epoch?;
-    let remaining = reset.saturating_sub(now);
+    if reset <= now {
+        return None;
+    }
+    let remaining = reset - now;
     let elapsed = window_secs.saturating_sub(remaining);
     let elapsed_fraction = elapsed as f64 / window_secs as f64;
     let expected_pct = elapsed_fraction * 100.0;
@@ -604,6 +708,41 @@ mod tests {
         }
     }
 
+    // ── lacks_standard_signal() tests ────────────────────────────────────────
+
+    #[test]
+    fn test_lacks_standard_signal_returns_true_for_default() {
+        let data = UsageLimitsData::default();
+        assert!(lacks_standard_signal(&data));
+    }
+
+    #[test]
+    fn test_lacks_standard_signal_returns_false_when_pct_set() {
+        let data = UsageLimitsData {
+            five_hour_pct: 1.0,
+            ..Default::default()
+        };
+        assert!(!lacks_standard_signal(&data));
+    }
+
+    #[test]
+    fn test_lacks_standard_signal_returns_false_when_reset_iso_set() {
+        let data = UsageLimitsData {
+            seven_day_resets_at: "2099-01-01T00:00:00+00:00".into(),
+            ..Default::default()
+        };
+        assert!(!lacks_standard_signal(&data));
+    }
+
+    #[test]
+    fn test_lacks_standard_signal_returns_false_when_reset_epoch_set() {
+        let data = UsageLimitsData {
+            five_hour_resets_at_epoch: Some(1_700_000_000),
+            ..Default::default()
+        };
+        assert!(!lacks_standard_signal(&data));
+    }
+
     // ── render() tests ────────────────────────────────────────────────────────
 
     #[test]
@@ -631,13 +770,21 @@ mod tests {
 
     #[test]
     fn test_render_cache_hit_returns_formatted_output() {
+        use crate::context::{RateLimitPeriod, RateLimits};
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("test.jsonl");
-        let data = sample_data();
-        crate::cache::write_usage_limits(&transcript, &data, 60);
-
         let ctx = Context {
             transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: Some(RateLimits {
+                five_hour: Some(RateLimitPeriod {
+                    used_percentage: Some(23.4),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(RateLimitPeriod {
+                    used_percentage: Some(45.1),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
             ..Default::default()
         };
         let result = render(&ctx, &CshipConfig::default()).unwrap();
@@ -649,19 +796,21 @@ mod tests {
 
     #[test]
     fn test_render_warn_threshold_applies_ansi() {
+        use crate::context::{RateLimitPeriod, RateLimits};
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("test.jsonl");
-        let data = UsageLimitsData {
-            five_hour_pct: 65.0,
-            seven_day_pct: 10.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        };
-        crate::cache::write_usage_limits(&transcript, &data, 60);
-
         let ctx = Context {
             transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: Some(RateLimits {
+                five_hour: Some(RateLimitPeriod {
+                    used_percentage: Some(65.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(RateLimitPeriod {
+                    used_percentage: Some(10.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
             ..Default::default()
         };
         let cfg = CshipConfig {
@@ -681,25 +830,27 @@ mod tests {
 
     #[test]
     fn test_render_critical_overrides_warn() {
+        use crate::context::{RateLimitPeriod, RateLimits};
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("test.jsonl");
-        let data = UsageLimitsData {
-            five_hour_pct: 85.0,
-            seven_day_pct: 20.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        };
-        crate::cache::write_usage_limits(&transcript, &data, 60);
-
         let ctx = Context {
             transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: Some(RateLimits {
+                five_hour: Some(RateLimitPeriod {
+                    used_percentage: Some(85.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(RateLimitPeriod {
+                    used_percentage: Some(20.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
             ..Default::default()
         };
         let cfg = CshipConfig {
             usage_limits: Some(UsageLimitsConfig {
                 warn_threshold: Some(60.0),
-                warn_style: Some("yellow".to_string()),
+                warn_style: Some("bold yellow".to_string()),
                 critical_threshold: Some(80.0),
                 critical_style: Some("bold red".to_string()),
                 ..Default::default()
@@ -707,30 +858,30 @@ mod tests {
             ..Default::default()
         };
         let result = render(&ctx, &cfg).unwrap();
-        // Verify critical style ("bold red") is applied, NOT warn style ("yellow")
-        let content = format_output(&data, &UsageLimitsConfig::default());
-        let expected_critical = crate::ansi::apply_style(&content, Some("bold red"));
-        let expected_warn = crate::ansi::apply_style(&content, Some("yellow"));
-        assert_eq!(result, expected_critical, "expected critical style applied");
-        assert_ne!(result, expected_warn, "critical should override warn style");
+        assert!(
+            result.contains("31m") || result.contains("red"),
+            "expected critical/red ANSI codes: {result:?}"
+        );
     }
 
     #[test]
     fn test_threshold_uses_higher_of_two_pcts() {
+        use crate::context::{RateLimitPeriod, RateLimits};
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("test.jsonl");
         // seven_day is high (85%), five_hour is low (20%) — should still trigger critical
-        let data = UsageLimitsData {
-            five_hour_pct: 20.0,
-            seven_day_pct: 85.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        };
-        crate::cache::write_usage_limits(&transcript, &data, 60);
-
         let ctx = Context {
             transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: Some(RateLimits {
+                five_hour: Some(RateLimitPeriod {
+                    used_percentage: Some(20.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(RateLimitPeriod {
+                    used_percentage: Some(85.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
             ..Default::default()
         };
         let cfg = CshipConfig {
@@ -746,6 +897,53 @@ mod tests {
             result.contains('\x1b'),
             "expected ANSI codes for critical: {result:?}"
         );
+    }
+
+    // ── apply_threshold() extra_usage fallback tests ─────────────────────────
+
+    #[test]
+    fn test_apply_threshold_uses_extra_usage_when_standard_absent() {
+        use crate::config::CshipConfig;
+        let data = UsageLimitsData {
+            extra_usage_utilization: Some(85.0),
+            ..Default::default()
+        };
+        let cfg = CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                critical_threshold: Some(80.0),
+                critical_style: Some("bold red".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let styled = apply_threshold("X", &data, &cfg);
+        // Critical style should have wrapped the content with ANSI escapes.
+        assert_ne!(styled, "X", "expected critical styling to apply");
+        assert!(
+            styled.contains('\x1b'),
+            "expected ANSI escape; got {styled:?}"
+        );
+    }
+
+    #[test]
+    fn test_apply_threshold_prefers_standard_when_present() {
+        use crate::config::CshipConfig;
+        let data = UsageLimitsData {
+            five_hour_pct: 30.0,
+            extra_usage_utilization: Some(90.0),
+            ..Default::default()
+        };
+        let cfg = CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                critical_threshold: Some(80.0),
+                critical_style: Some("bold red".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let styled = apply_threshold("X", &data, &cfg);
+        // Standard pct (30%) is below threshold; extra_usage (90%) is ignored.
+        assert_eq!(styled, "X", "expected no styling; standard signal must win");
     }
 
     // ── fetch_with_timeout() tests ────────────────────────────────────────────
@@ -764,9 +962,9 @@ mod tests {
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
             ..Default::default()
         };
-        crate::cache::write_usage_limits(&transcript, &data, 60);
+        crate::cache::write_usage_limits(&transcript, &data, 60, None);
         // Verify read_usage_limits(allow_stale=true) works even after TTL would normally expire
-        let stale = crate::cache::read_usage_limits(&transcript, true);
+        let stale = crate::cache::read_usage_limits(&transcript, true, None);
         assert!(
             stale.is_some(),
             "stale read should return data regardless of TTL"
@@ -987,19 +1185,21 @@ mod tests {
     #[test]
     fn test_threshold_styling_applies_to_custom_format() {
         // AC6: threshold styling wraps the full composed output after format substitution
+        use crate::context::{RateLimitPeriod, RateLimits};
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("test.jsonl");
-        let data = UsageLimitsData {
-            five_hour_pct: 75.0,
-            seven_day_pct: 10.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        };
-        crate::cache::write_usage_limits(&transcript, &data, 60);
-
         let ctx = Context {
             transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: Some(RateLimits {
+                five_hour: Some(RateLimitPeriod {
+                    used_percentage: Some(75.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(RateLimitPeriod {
+                    used_percentage: Some(10.0),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
             ..Default::default()
         };
         let cfg = CshipConfig {
@@ -1290,7 +1490,7 @@ mod tests {
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
             ..Default::default()
         };
-        crate::cache::write_usage_limits(&transcript, &cache_data, 60);
+        crate::cache::write_usage_limits(&transcript, &cache_data, 60, None);
 
         let ctx = Context {
             transcript_path: Some(transcript.to_str().unwrap().to_string()),
@@ -1409,9 +1609,20 @@ mod tests {
     #[test]
     fn test_calculate_pace_reset_in_past() {
         let now = now_epoch();
+        // An expired window has no meaningful pace: pre-fix the function returned
+        // a spurious "+70 headroom" because the clamped elapsed_fraction hit 1.0.
         let pace = calculate_pace(30.0, Some(now.saturating_sub(100)), 18000, now);
-        let p = pace.unwrap();
-        assert!(p > 65.0 && p < 75.0, "expected ~+70 headroom, got {p}");
+        assert!(pace.is_none(), "expired window should produce no pace");
+    }
+
+    #[test]
+    fn test_calculate_pace_reset_equals_now() {
+        let now = now_epoch();
+        let pace = calculate_pace(30.0, Some(now), 18000, now);
+        assert!(
+            pace.is_none(),
+            "reset == now is end of window; treat as expired"
+        );
     }
 
     // ── format_pace() tests ──────────────────────────────────────────────────
@@ -1501,6 +1712,7 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1516,7 +1728,7 @@ mod tests {
         );
         assert!(result.contains("31%"), "extra pct in: {result:?}");
         assert!(result.contains("61.95"), "used credits in: {result:?}");
-        assert!(result.contains("200"), "monthly limit in: {result:?}");
+        assert!(result.contains("200.00"), "monthly limit in: {result:?}");
     }
 
     #[test]
@@ -1535,6 +1747,7 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1602,7 +1815,8 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
-            extra_usage_format: Some("EXTRA {pct}% rem:{remaining}".into()),
+            extra_usage_format: Some("EXTRA {pct}% rem:{remaining_credits}".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1631,6 +1845,7 @@ mod tests {
         let cfg = UsageLimitsConfig {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1664,6 +1879,7 @@ mod tests {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
             opus_format: Some("OP:{pct}%/{remaining}%".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1692,6 +1908,7 @@ mod tests {
             five_hour_format: Some("{pct}%".into()),
             seven_day_format: Some("{pct}%".into()),
             opus_format: Some("opus {pct}% pace:{pace}".into()),
+            show_per_model: Some(true),
             ..Default::default()
         };
         let result = format_output(&data, &cfg);
@@ -1703,6 +1920,303 @@ mod tests {
             result.contains("pace:+"),
             "opus pace should show headroom: {result:?}"
         );
+    }
+
+    // ── resolve_data memoization tests (Fix #2) ──────────────────────────────
+
+    /// Test-only mirror of the production memoization wrapper. Lets us exercise
+    /// the cache mechanism (which is `cfg(not(test))`-gated in `resolve_data`)
+    /// without re-enabling it for unrelated tests on the same worker thread.
+    fn resolve_data_memoized(
+        compute: impl FnOnce() -> Option<UsageLimitsData>,
+    ) -> Option<UsageLimitsData> {
+        RESOLVE_CACHE.with(|c| {
+            if let Some(cached) = c.borrow().as_ref() {
+                return cached.clone();
+            }
+            let computed = compute();
+            *c.borrow_mut() = Some(computed.clone());
+            computed
+        })
+    }
+
+    fn reset_resolve_cache() {
+        RESOLVE_CACHE.with(|c| *c.borrow_mut() = None);
+    }
+
+    #[test]
+    fn test_resolve_data_memoizes_across_calls() {
+        reset_resolve_cache();
+        let counter = std::sync::atomic::AtomicUsize::new(0);
+        let make_compute = || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(UsageLimitsData {
+                five_hour_pct: 42.0,
+                ..Default::default()
+            })
+        };
+
+        let first = resolve_data_memoized(make_compute);
+        let second = resolve_data_memoized(make_compute);
+        let third = resolve_data_memoized(make_compute);
+
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "compute closure should run exactly once"
+        );
+        assert!((first.unwrap().five_hour_pct - 42.0).abs() < f64::EPSILON);
+        assert!((second.unwrap().five_hour_pct - 42.0).abs() < f64::EPSILON);
+        assert!((third.unwrap().five_hour_pct - 42.0).abs() < f64::EPSILON);
+        reset_resolve_cache(); // courtesy: don't leak to whatever runs next on this thread
+    }
+
+    #[test]
+    fn test_resolve_data_memoizes_none_results() {
+        reset_resolve_cache();
+        let counter = std::sync::atomic::AtomicUsize::new(0);
+        let compute = || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        };
+        let first = resolve_data_memoized(compute);
+        let second = resolve_data_memoized(compute);
+        assert!(first.is_none());
+        assert!(second.is_none());
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "None results should also be memoized — avoids re-fetching on cold cache"
+        );
+        reset_resolve_cache();
+    }
+
+    // ── show_per_model toggle tests (Fix #4) ─────────────────────────────────
+
+    #[test]
+    fn test_format_output_default_omits_per_model_only() {
+        // show_per_model defaults to false, so per-model sections are hidden.
+        // Extra-usage is always appended when enabled, regardless of show_per_model.
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some("2099-02-01T00:00:00Z".into()),
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            // show_per_model omitted → defaults to false
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            result.starts_with("50% | 30%"),
+            "legacy 5h/7d prefix: {result:?}"
+        );
+        assert!(!result.contains("opus"), "opus must be hidden by default");
+        assert!(
+            result.contains("extra"),
+            "extra-usage must show when enabled: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_show_per_model_true_includes_sections() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            seven_day_pct: 30.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_opus_pct: Some(12.0),
+            seven_day_opus_resets_at: Some("2099-02-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("{pct}%".into()),
+            seven_day_format: Some("{pct}%".into()),
+            show_per_model: Some(true),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(result.contains("opus 12%"), "opus visible: {result:?}");
+    }
+
+    // ── extra_usage placeholder tests (Fix #3) ───────────────────────────────
+
+    #[test]
+    fn test_format_extra_usage_remaining_credits_substituted() {
+        let data = UsageLimitsData {
+            five_hour_pct: 0.0,
+            seven_day_pct: 0.0,
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("rem={remaining_credits} pct={pct}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("extra_usage should render");
+        assert!(out.contains("rem=138.05"), "remaining_credits: {out:?}");
+        assert!(out.contains("pct=31"), "pct still works: {out:?}");
+    }
+
+    #[test]
+    fn test_format_extra_usage_remaining_no_longer_substituted_in_extra() {
+        // Guards against regression: the old `{remaining}` placeholder must NOT
+        // be substituted in extra_usage_format (where it had a confusing
+        // dollar-amount semantic). It's reserved for the percentage-based
+        // formatters now.
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(6195.0),
+            extra_usage_utilization: Some(31.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("rem={remaining}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("extra_usage renders");
+        assert_eq!(
+            out, "rem={remaining}",
+            "literal {{remaining}} should pass through untouched"
+        );
+    }
+
+    #[test]
+    fn test_format_extra_usage_renders_dollars_from_cents() {
+        // The Anthropic OAuth usage API reports `used_credits` and
+        // `monthly_limit` in cents. Verified against a real Claude Enterprise
+        // response: monthly_limit=30000 cents = $300.00, used=23076 cents =
+        // $230.76. The default format must render those as $230.76 / $300.00.
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(30000.0),
+            extra_usage_used_credits: Some(23076.0),
+            extra_usage_utilization: Some(76.92),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig::default();
+        let out = format_extra_usage(&data, &cfg).expect("extra_usage enabled => Some");
+        assert!(out.contains("230.76"), "expected $230.76 in output: {out}");
+        assert!(out.contains("300.00"), "expected $300.00 in output: {out}");
+        assert!(
+            !out.contains("23076"),
+            "raw cents must not appear in output: {out}"
+        );
+        assert!(
+            !out.contains("30000"),
+            "raw cents must not appear in output: {out}"
+        );
+    }
+
+    #[test]
+    fn test_format_extra_usage_remaining_credits_dollars_from_cents() {
+        // monthly_limit=30000c, used=23076c → remaining=6924c → $69.24
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(30000.0),
+            extra_usage_used_credits: Some(23076.0),
+            extra_usage_utilization: Some(76.92),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("rem ${remaining_credits}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("extra_usage enabled => Some");
+        assert_eq!(out, "rem $69.24");
+    }
+
+    #[test]
+    fn test_active_glyph_on_enterprise_above_warn() {
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(17000.0),
+            extra_usage_utilization: Some(85.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            warn_threshold: Some(80.0),
+            extra_usage_format: Some("{active}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("Some");
+        assert_eq!(
+            out, "\u{26a1}", /* ⚡ */
+            "above warn => lightning bolt"
+        );
+    }
+
+    #[test]
+    fn test_active_glyph_on_enterprise_below_warn() {
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(10000.0),
+            extra_usage_utilization: Some(50.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            warn_threshold: Some(80.0),
+            extra_usage_format: Some("{active}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("Some");
+        assert_eq!(
+            out, "\u{1f4a4}", /* 💤 */
+            "below warn => sleep emoji"
+        );
+    }
+
+    #[test]
+    fn test_active_glyph_on_enterprise_no_threshold_any_usage() {
+        // No warn_threshold configured — ANY non-zero utilization shows ⚡.
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_utilization: Some(0.1),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(20.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("{active}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("Some");
+        assert_eq!(out, "\u{26a1}" /* ⚡ */);
+    }
+
+    #[test]
+    fn test_active_glyph_pro_max_unchanged_at_5h_full() {
+        // Pre-existing semantic: ⚡ when 5h or 7d at 100%, regardless of extra_usage.
+        let data = UsageLimitsData {
+            five_hour_pct: 100.0,
+            extra_usage_enabled: Some(true),
+            extra_usage_utilization: Some(0.0),
+            extra_usage_monthly_limit: Some(20000.0),
+            extra_usage_used_credits: Some(0.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("{active}".into()),
+            ..Default::default()
+        };
+        let out = format_extra_usage(&data, &cfg).expect("Some");
+        assert_eq!(out, "\u{26a1}" /* ⚡ */);
     }
 
     #[test]
@@ -1723,5 +2237,60 @@ mod tests {
         let result = format_output(&data, &cfg);
         assert_eq!(result, "50% | 30%", "no trailing separator: {result:?}");
         assert!(!result.ends_with(" | "), "no dangling sep: {result:?}");
+    }
+
+    fn current_fingerprint() -> Option<String> {
+        crate::platform::get_oauth_token()
+            .ok()
+            .map(|t| crate::platform::token_fingerprint(&t))
+    }
+
+    #[test]
+    fn test_render_enterprise_extra_usage_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript_path = tmp.path().join("transcript.jsonl");
+        std::fs::write(&transcript_path, "").unwrap();
+
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(30000.0),
+            extra_usage_used_credits: Some(23076.0),
+            extra_usage_utilization: Some(76.92),
+            ..Default::default()
+        };
+        let fp = current_fingerprint();
+        crate::cache::write_usage_limits(&transcript_path, &data, 600, fp.as_deref());
+
+        let ctx = Context {
+            transcript_path: Some(transcript_path.to_string_lossy().into()),
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        let out = render(&ctx, &cfg).expect("Enterprise: extra_usage_only must render");
+        assert!(!out.contains("5h:"), "must not include 5h section: {out}");
+        assert!(!out.contains("7d:"), "must not include 7d section: {out}");
+        assert!(out.contains("230.76"), "must include used dollars: {out}");
+        assert!(out.contains("300.00"), "must include limit dollars: {out}");
+    }
+
+    #[test]
+    fn test_render_enterprise_extra_disabled_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript_path = tmp.path().join("transcript.jsonl");
+        std::fs::write(&transcript_path, "").unwrap();
+
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(false),
+            ..Default::default()
+        };
+        let fp = current_fingerprint();
+        crate::cache::write_usage_limits(&transcript_path, &data, 600, fp.as_deref());
+
+        let ctx = Context {
+            transcript_path: Some(transcript_path.to_string_lossy().into()),
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        assert!(render(&ctx, &cfg).is_none());
     }
 }

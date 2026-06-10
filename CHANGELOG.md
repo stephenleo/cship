@@ -11,6 +11,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - `$cship.cost.total_duration` and `$cship.cost.total_api_duration` are accepted aliases for the `_ms` versions, in both format-string variables and TOML config keys. Use whichever spelling reads better in your config — they resolve to the same field (issue #162).
+- `cship.account` module for displaying the currently authenticated Anthropic account (work vs personal) — sources organization and account info from the `/api/oauth/profile` endpoint, with opt-in label mapping so org names can be replaced with user-defined labels (e.g. `"Fulcrum Genomics" = "work"`). Supports format string placeholders: `{label}`, `{organization}`, `{display_name}`, `{email}`, `{tier}`, `{type}`. Cached for 24 hours (configurable via `ttl`). ([@nh13](https://github.com/nh13), [#153](https://github.com/stephenleo/cship/pull/153))
+
+### Fixed
+- `cship.account` HTTP fetch timeout lowered from 5s to 1500ms so it always completes inside the 2s `recv_timeout` window in `fetch_with_timeout`; previously a slow profile fetch was reported as timed out while the spawned thread (holding the OAuth token) kept running
+- `cship explain cship.account` now prints account-specific remediation (no credential / expired-or-unreachable / malformed credential) instead of the generic "module returned no value" fallback
+
+### Docs
+- Documented the `cship.account` module in the README module table, configuration guide, and FAQ (setup, label mapping, and `cship explain` diagnostics)
+
+## [1.7.1] - 2026-05-12
+
+### Changed
+- Updated crate description, README hero tagline, and docs site hero to a single shared line: "A beautiful, fully customizable statusline for Claude Code — Starship-style TOML config, themeable colours, Nerd Font glyphs, and tunable cost/context/usage thresholds."
+
+### Fixed
+- `cship.context_bar` now renders with a space between the bar and the percentage for better readability ([@ikhurramraza](https://github.com/ikhurramraza), [#179](https://github.com/stephenleo/cship/pull/179))
+
+### Docs
+- Restructured the README and docs showcase: centered the README title/badges/tagline/hero image, dropped the redundant "Full Starship Prompt" example, folded its content into the Hero showcase, and labelled the example with both `~/.config/cship.toml` and a trimmed `~/.config/starship.toml` (Catppuccin Powerline preset)
+- Refreshed example screenshots
+
+## [1.7.0] - 2026-05-10
+
+### Added
+- Added per-family `haiku_style`, `sonnet_style`, and `opus_style` fields to `cship.model`, so each Claude family can be coloured independently while still falling back to `style` when a family field is unset ([@aerickson](https://github.com/aerickson), [#172](https://github.com/stephenleo/cship/pull/172))
+- Added Claude Enterprise support to `cship.usage_limits`: when the OAuth API returns no 5h/7d signal, `cship` now renders the `extra_usage` section on its own and falls back to `extra_usage_utilization` for `warn_threshold` / `critical_threshold` evaluation ([@jessedobbelaere](https://github.com/jessedobbelaere), [#174](https://github.com/stephenleo/cship/pull/174))
+- `cship explain` now distinguishes Enterprise-without-credits from a fetch failure, and prints a dedicated hint for per-model sub-tokens on Enterprise ([@jessedobbelaere](https://github.com/jessedobbelaere), [#174](https://github.com/stephenleo/cship/pull/174))
+
+### Fixed
+- `cship.usage_limits` no longer crashes when the OAuth API returns `null` for `five_hour` or `seven_day` (the shape Enterprise accounts return) ([@jessedobbelaere](https://github.com/jessedobbelaere), [#174](https://github.com/stephenleo/cship/pull/174))
+- `extra_usage` amounts now render in whole units, and `{active}` resolves correctly on Enterprise ([@jessedobbelaere](https://github.com/jessedobbelaere), [#174](https://github.com/stephenleo/cship/pull/174))
+
+### Changed
+- Updated all GitHub Actions to their latest majors (Node 24) ([#175](https://github.com/stephenleo/cship/pull/175))
+
+### Docs
+- Documented Claude Enterprise behaviour for `usage_limits` in the configuration guide and FAQ ([#174](https://github.com/stephenleo/cship/pull/174))
+
+## [1.6.0] - 2026-05-03
+
+### Added
+- Added `filled_char` and `empty_char` config to `cship.context_bar` for fully customizable progress-bar glyphs ([@HotThoughts](https://github.com/HotThoughts), [#155](https://github.com/stephenleo/cship/pull/155))
+- Added `extra_usage_format` and per-model format fields to `cship.usage_limits`, with pace tracking, an active-window indicator, and sub-field renderers for the new fields parsed from the OAuth API ([@nh13](https://github.com/nh13), [#152](https://github.com/stephenleo/cship/pull/152))
+- Added `currency_symbol` and `conversion_rate` config to `cship.cost` so the displayed amount can be expressed in any currency ([@sephml](https://github.com/sephml), [#165](https://github.com/stephenleo/cship/pull/165))
+
+### Changed
+- `cship.cost` thresholds (`warn_threshold`, `critical_threshold`) are now evaluated against the converted display value (`total_cost_usd × conversion_rate`) instead of raw USD, so they live in the same currency as the displayed amount. Users with both thresholds and a non-`1.0` `conversion_rate` should restate their thresholds in the display currency ([#167](https://github.com/stephenleo/cship/pull/167))
+
+### Fixed
+- Brought the Windows PowerShell installer to parity with the macOS/Linux installer, and stopped emitting a UTF-8 BOM when writing `cship.toml` / `settings.json` (BOM was rejected by the Rust `toml` parser) ([@sephml](https://github.com/sephml), [#160](https://github.com/stephenleo/cship/pull/160))
+- `passthrough` now strips `$line_break` and `$character` from `$starship_prompt` output so an embedded Starship prompt renders cleanly inside a cship layout ([#163](https://github.com/stephenleo/cship/pull/163))
+- Addressed code-review follow-ups for the `usage_limits` rewrite ([#169](https://github.com/stephenleo/cship/pull/169))
+
+### Docs
+- Unified agent instructions into a single `CLAUDE.md` source ([#168](https://github.com/stephenleo/cship/pull/168))
 
 ## [1.5.1] - 2026-04-20
 

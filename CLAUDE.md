@@ -1,4 +1,4 @@
-# cship — Claude Code Instructions
+# cship — AI Agent Instructions
 
 ## Environment Quirks
 - WSL2 ENOENT race: after any `cargo init` or file write, verify content with Read before proceeding
@@ -11,7 +11,7 @@
 - stdout owned by `main.rs` only; all module diagnostics via `tracing::*` macros; no `eprintln!` anywhere
 - Exception: CLI-action subcommands (e.g. `uninstall`, `explain`) may use `println!` directly — the stdout rule applies to the rendering pipeline only
 - All config structs: `#[derive(Debug, Deserialize, Default)]`, all fields `pub Option<T>`
-- Never add `deny_unknown_fields` to any struct — omitted intentionally on both `Context` and config structs so future Claude Code versions can add fields without breaking deserialization
+- Never add `deny_unknown_fields` to any struct — omitted intentionally on both `Context` and config structs so future versions can add fields without breaking deserialization
 
 ## Before Submitting a PR
 - Follow all guidelines in [CONTRIBUTING.md](CONTRIBUTING.md) before opening or updating a pull request

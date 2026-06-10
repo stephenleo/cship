@@ -2,7 +2,12 @@
 use crate::config::CostSubfieldConfig;
 /// Render the `[cship.cost]` family of modules.
 ///
-/// `$cship.cost` — convenience alias: formats total_cost_usd as "$X.XX" with threshold styling.
+/// `$cship.cost` — convenience alias: formats total_cost_usd with threshold styling.
+/// Display currency and conversion rate are configurable via `currency_symbol` and
+/// `conversion_rate`; the underlying context value is always `total_cost_usd` (USD).
+/// Threshold styling (`warn_threshold`, `critical_threshold`) is evaluated against
+/// the converted display value (`total_cost_usd * conversion_rate`); configure
+/// thresholds in your display currency.
 /// `$cship.cost.total_cost_usd` — raw USD value, 4 decimal places.
 /// `$cship.cost.total_duration_ms` / `total_api_duration_ms` — human-readable wall / API duration
 /// (e.g. `45s`, `1m30s`, `2h15m`, or `750ms` for sub-second). The `_ms` suffix is retained for
@@ -14,7 +19,11 @@ use crate::config::CostSubfieldConfig;
 use crate::config::{CostConfig, CshipConfig};
 use crate::context::Context;
 
-/// Renders `$cship.cost` — total cost as `$X.XX` with threshold color escalation.
+/// Renders `$cship.cost` — total cost with threshold color escalation.
+/// Display format is `{currency_symbol}{value:.2}` (default: `$X.XX`).
+/// `currency_symbol` and `conversion_rate` are configurable; thresholds are
+/// evaluated against the converted display value, so configure them in your
+/// display currency.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let cost_cfg = cfg.cost.as_ref();
 
@@ -34,7 +43,12 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 
     let symbol = cost_cfg.and_then(|c| c.symbol.as_deref());
     let style = cost_cfg.and_then(|c| c.style.as_deref());
-    let formatted = format!("${:.2}", val);
+    let currency_symbol = cost_cfg
+        .and_then(|c| c.currency_symbol.as_deref())
+        .unwrap_or("$");
+    let conversion_rate = cost_cfg.and_then(|c| c.conversion_rate).unwrap_or(1.0);
+    let converted_val = val * conversion_rate;
+    let formatted = format!("{}{:.2}", currency_symbol, converted_val);
 
     // Extract threshold variables FIRST (before format check)
     let warn_threshold = cost_cfg.and_then(|c| c.warn_threshold);
@@ -45,7 +59,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     // Format string takes priority if configured (AC1)
     if let Some(fmt) = cost_cfg.and_then(|c| c.format.as_deref()) {
         let effective_style = crate::ansi::resolve_threshold_style(
-            Some(val),
+            Some(converted_val),
             style,
             warn_threshold,
             warn_style,
@@ -61,7 +75,7 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 
     Some(crate::ansi::apply_style_with_threshold(
         &content,
-        Some(val),
+        Some(converted_val),
         style,
         warn_threshold,
         warn_style,
@@ -199,6 +213,56 @@ mod tests {
     }
 
     #[test]
+    fn test_cost_renders_custom_currency_symbol() {
+        let ctx = ctx_with_cost(1.50);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                currency_symbol: Some("£".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg);
+        assert_eq!(result, Some("£1.50".to_string()));
+    }
+
+    #[test]
+    fn test_cost_renders_with_conversion_rate() {
+        let ctx = ctx_with_cost(1.00);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                currency_symbol: Some("£".to_string()),
+                conversion_rate: Some(0.79),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg);
+        assert_eq!(result, Some("£0.79".to_string()));
+    }
+
+    #[test]
+    fn test_cost_format_path_uses_converted_value() {
+        // Regression: conversion_rate and currency_symbol must flow into $value
+        // when a format string is configured (apply_module_format branch).
+        let ctx = ctx_with_cost(1.00);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                currency_symbol: Some("€".to_string()),
+                conversion_rate: Some(0.92),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains("€0.92"),
+            "expected converted value in format path: {result:?}"
+        );
+    }
+
+    #[test]
     fn test_cost_disabled_returns_none() {
         let ctx = ctx_with_cost(5.0);
         let cfg = CshipConfig {
@@ -278,6 +342,92 @@ mod tests {
             result.contains('\x1b'),
             "expected critical ANSI codes: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_cost_default_threshold_uses_converted_value() {
+        // Raw USD 1.0 is below warn_threshold 4.0, but converted = 5.0 trips the warn style.
+        let ctx = ctx_with_cost(1.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                conversion_rate: Some(5.0),
+                warn_threshold: Some(4.0),
+                warn_style: Some("yellow".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected warn ANSI from converted value: {result:?}"
+        );
+        assert!(result.contains("$5.00"));
+    }
+
+    #[test]
+    fn test_cost_default_below_converted_threshold_keeps_base_style() {
+        // Converted = 5.0, below warn_threshold 10.0 → no escalation.
+        let ctx = ctx_with_cost(1.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                conversion_rate: Some(5.0),
+                warn_threshold: Some(10.0),
+                warn_style: Some("yellow".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            !result.contains('\x1b'),
+            "should not escalate when converted value below threshold: {result:?}"
+        );
+        assert!(result.contains("$5.00"));
+    }
+
+    #[test]
+    fn test_cost_format_threshold_uses_converted_value() {
+        // Same converted-value comparison must apply on the format-string code path.
+        let ctx = ctx_with_cost(1.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                format: Some("[$value]($style)".to_string()),
+                conversion_rate: Some(5.0),
+                warn_threshold: Some(4.0),
+                warn_style: Some("yellow".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected warn ANSI in format path from converted value: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_cost_default_critical_uses_converted_value() {
+        // Raw USD 3.0 is below critical_threshold 5.0; converted = 6.0 trips critical.
+        let ctx = ctx_with_cost(3.0);
+        let cfg = CshipConfig {
+            cost: Some(CostConfig {
+                conversion_rate: Some(2.0),
+                warn_threshold: Some(4.0),
+                warn_style: Some("yellow".to_string()),
+                critical_threshold: Some(5.0),
+                critical_style: Some("bold red".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&ctx, &cfg).unwrap();
+        assert!(
+            result.contains('\x1b'),
+            "expected critical ANSI from converted value: {result:?}"
+        );
+        assert!(result.contains("$6.00"));
     }
 
     #[test]

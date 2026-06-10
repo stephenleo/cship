@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate version format
         env:
           VERSION: ${{ github.event.inputs.version }}
@@ -58,7 +58,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -74,6 +74,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: test
+    if: "!cancelled() && needs.test.result == 'success'"
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -91,7 +92,7 @@ jobs:
           - target: aarch64-pc-windows-msvc
             runner: windows-11-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -115,7 +116,7 @@ jobs:
           if [[ "${{ matrix.target }}" == *windows* ]]; then EXT=".exe"; fi
           if [[ "${{ matrix.target }}" != *windows* ]]; then file "cship-${{ matrix.target }}"; fi
           test -s "cship-${{ matrix.target }}${EXT}" || { echo "ERROR: binary is empty"; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cship-${{ matrix.target }}
           path: cship-${{ matrix.target }}*
@@ -128,10 +129,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.version || github.ref_name }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
       - name: Extract changelog for this release
         shell: bash
         env:
@@ -149,7 +150,7 @@ jobs:
           if [ ! -s /tmp/release-notes.md ]; then
             echo "See commit history for changes in this release." > /tmp/release-notes.md
           fi
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.version || github.ref_name }}
           files: cship-*/cship-*
@@ -163,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.version || github.ref_name }}
       - name: Install Rust stable

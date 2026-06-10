@@ -3,8 +3,7 @@ layout: home
 
 hero:
   name: "⚓ CShip"
-  text: ""
-  tagline: Bring Starship's power to Claude Code Status Line.
+  tagline: "A beautiful, fully customizable statusline for Claude Code"
   actions:
     - theme: brand
       text: Get Started
@@ -113,7 +112,7 @@ symbol = " "   # nf-oct-cpu
 Browse [nerdfonts.com/cheat-sheet](https://www.nerdfonts.com/cheat-sheet) to find any icon and paste it directly into your `cship.toml`.
 :::
 
-→ The [Showcase](/showcase#_6-nerd-fonts) has a full Nerd Fonts config example.
+→ The [Showcase](/showcase#_7-nerd-fonts) has a full Nerd Fonts config example.
 
 ## Quick Start
 
