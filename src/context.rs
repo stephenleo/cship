@@ -107,6 +107,46 @@ pub struct Effort {
     pub level: Option<String>,
 }
 
+impl Context {
+    /// Strip terminal control characters from every untrusted string field.
+    ///
+    /// Called once at ingest so all downstream consumers (modules, passthrough,
+    /// `explain`, cache) receive terminal-safe values regardless of how they render.
+    /// Numeric/boolean fields cannot carry control bytes, so only string fields are
+    /// touched. See [`crate::ansi::sanitize_control`] for the threat model.
+    fn sanitize(&mut self) {
+        fn clean(opt: &mut Option<String>) {
+            if let Some(s) = opt {
+                *s = crate::ansi::sanitize_control(s);
+            }
+        }
+        clean(&mut self.cwd);
+        clean(&mut self.session_id);
+        clean(&mut self.transcript_path);
+        clean(&mut self.version);
+        if let Some(m) = &mut self.model {
+            clean(&mut m.id);
+            clean(&mut m.display_name);
+        }
+        if let Some(w) = &mut self.workspace {
+            clean(&mut w.current_dir);
+            clean(&mut w.project_dir);
+        }
+        if let Some(o) = &mut self.output_style {
+            clean(&mut o.name);
+        }
+        if let Some(v) = &mut self.vim {
+            clean(&mut v.mode);
+        }
+        if let Some(a) = &mut self.agent {
+            clean(&mut a.name);
+        }
+        if let Some(e) = &mut self.effort {
+            clean(&mut e.level);
+        }
+    }
+}
+
 /// Deserialize Claude Code session JSON from any reader.
 /// Uses exactly one `serde_json::from_str` call — no per-field parsing.
 ///
@@ -117,7 +157,8 @@ pub fn from_reader(mut reader: impl Read) -> anyhow::Result<Context> {
     if input.trim().is_empty() {
         anyhow::bail!("empty stdin: no Claude Code session JSON received");
     }
-    let ctx = serde_json::from_str(&input)?;
+    let mut ctx: Context = serde_json::from_str(&input)?;
+    ctx.sanitize();
     Ok(ctx)
 }
 
@@ -232,5 +273,77 @@ mod tests {
     fn test_whitespace_only_reader_returns_error() {
         let result = from_reader("   \n\t  ".as_bytes());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ingest_strips_control_chars_from_untrusted_fields() {
+        // Inject control bytes via unambiguous Rust escapes (ESC = \u{1b},
+        // BEL = \u{7}) into every untrusted field, then run the exact sanitize()
+        // pass from_reader() applies at ingest. Payloads mimic an OSC title-set,
+        // a CSI cursor-up, and an OSC 52 clipboard write smuggled in by a repo.
+        let mut ctx = Context {
+            cwd: Some("/repo\u{1b}]0;pwned\u{7}".to_string()),
+            workspace: Some(Workspace {
+                current_dir: Some("/a\u{1b}[1Ab".to_string()),
+                project_dir: Some("/p".to_string()),
+            }),
+            model: Some(Model {
+                id: Some("mX".to_string()),
+                display_name: Some("Opus\u{1b}]52;c;evil\u{7}".to_string()),
+            }),
+            vim: Some(Vim {
+                mode: Some("NORM\u{1b}AL".to_string()),
+            }),
+            agent: Some(Agent {
+                name: Some("age\u{7}nt".to_string()),
+            }),
+            effort: Some(Effort {
+                level: Some("high".to_string()),
+            }),
+            ..Default::default()
+        };
+        ctx.sanitize();
+        // Control bytes are gone; the inert printable remnants remain harmless.
+        assert_eq!(ctx.cwd.as_deref(), Some("/repo]0;pwned"));
+        let ws = ctx.workspace.unwrap();
+        assert_eq!(ws.current_dir.as_deref(), Some("/a[1Ab"));
+        assert_eq!(ws.project_dir.as_deref(), Some("/p"));
+        let model = ctx.model.unwrap();
+        assert_eq!(model.id.as_deref(), Some("mX"));
+        assert_eq!(model.display_name.as_deref(), Some("Opus]52;c;evil"));
+        assert_eq!(ctx.vim.unwrap().mode.as_deref(), Some("NORMAL"));
+        assert_eq!(ctx.agent.unwrap().name.as_deref(), Some("agent"));
+        assert_eq!(ctx.effort.unwrap().level.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn test_from_reader_decodes_then_strips_json_escaped_control() {
+        // End-to-end wiring: a JSON  escape decodes to a raw ESC byte,
+        // which from_reader()'s sanitize pass must then strip. The escape text is
+        // built with a doubled backslash so the JSON literally contains .
+        let json = format!(
+            r#"{{"cwd": "/repo{esc}]0;x", "model": {{"display_name": "Opus{esc}"}}}}"#,
+            esc = "\\u001b"
+        );
+        let ctx = from_reader(json.as_bytes()).unwrap();
+        assert_eq!(ctx.cwd.as_deref(), Some("/repo]0;x"));
+        assert_eq!(ctx.model.unwrap().display_name.as_deref(), Some("Opus"));
+    }
+
+    #[test]
+    fn test_ingest_preserves_clean_fields() {
+        // Sanitization must not alter legitimate values (regression guard).
+        let ctx: Context = serde_json::from_str(FULL_JSON).unwrap();
+        let mut sanitized = serde_json::from_str::<Context>(FULL_JSON).unwrap();
+        sanitized.sanitize();
+        assert_eq!(ctx.cwd, sanitized.cwd);
+        assert_eq!(
+            ctx.workspace.unwrap().current_dir,
+            sanitized.workspace.unwrap().current_dir
+        );
+        assert_eq!(
+            ctx.model.unwrap().display_name,
+            sanitized.model.unwrap().display_name
+        );
     }
 }

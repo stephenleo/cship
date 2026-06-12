@@ -100,6 +100,22 @@ pub fn resolve_threshold_style<'a>(
     style
 }
 
+/// Remove terminal control characters from an untrusted string.
+///
+/// Fields in the Claude Code session JSON (directory names, model names, vim mode,
+/// agent name, etc.) may contain attacker-influenced bytes — e.g. a malicious repo
+/// can hold a directory whose name embeds raw ESC sequences. Emitting those verbatim
+/// to the terminal enables escape-sequence injection (CWE-150): window-title spoofing,
+/// cursor repositioning to overwrite on-screen text, or OSC 52 clipboard writes.
+///
+/// We drop every Unicode `Cc` (control) character, which covers ESC (0x1b), BEL (0x07),
+/// backspace, CR/LF/TAB, and the C1 range (U+0080–U+009F). Styling escapes are added
+/// later by [`apply_style`] from trusted config, so removing control bytes from the
+/// raw value loses nothing legitimate while neutralizing injected sequences.
+pub fn sanitize_control(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
 /// Strip ANSI escape sequences from a string, returning plain text.
 /// Used by `cship explain` to display module values in a readable table.
 pub fn strip_ansi(s: &str) -> String {
@@ -430,6 +446,32 @@ mod tests {
             "unexpected ANSI for #xyz: {result:?}"
         );
         assert_eq!(result, "text");
+    }
+
+    #[test]
+    fn test_sanitize_control_strips_escape_sequences() {
+        // A directory name carrying an OSC title-set + cursor-move payload.
+        let malicious = "repo\x1b]0;pwned\x07\x1b[1Aclean";
+        let out = sanitize_control(malicious);
+        assert!(!out.contains('\x1b'), "ESC must be stripped: {out:?}");
+        assert!(!out.contains('\x07'), "BEL must be stripped: {out:?}");
+        // Only the control bytes are removed; the now-inert printable remnants
+        // ("]0;pwned", "[1A") stay but can no longer drive the terminal.
+        assert_eq!(out, "repo]0;pwned[1Aclean");
+    }
+
+    #[test]
+    fn test_sanitize_control_strips_c1_and_whitespace_controls() {
+        // C1 control (U+0085 NEL) plus CR/LF/TAB are all dropped.
+        let out = sanitize_control("a\u{0085}b\r\nc\td");
+        assert_eq!(out, "abcd");
+    }
+
+    #[test]
+    fn test_sanitize_control_preserves_unicode_and_spaces() {
+        // Normal text, spaces, and non-control Unicode are untouched.
+        let s = "my project — café 🚀";
+        assert_eq!(sanitize_control(s), s);
     }
 
     #[test]
