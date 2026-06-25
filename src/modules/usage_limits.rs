@@ -362,6 +362,7 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
 /// - `{pct}` — percentage used as integer (e.g. `"23"`)
 /// - `{remaining}` — percentage remaining as integer (e.g. `"77"`)
 /// - `{reset}` — time-until-reset string (e.g. `"4h12m"`)
+/// - `{reset_at}` — absolute local reset time (e.g. `"7:42 PM"` or `"Mon 9:00 AM"`)
 /// - `{pace}` — signed pace string (e.g. `"+20%"`, `"-15%"`, `"?"`)
 ///
 /// Per-model breakdowns (opus, sonnet, cowork, oauth_apps) are appended when
@@ -384,6 +385,7 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
     let five_h_pct = format!("{:.0}", data.five_hour_pct);
     let five_h_remaining = format!("{:.0}", (100.0 - data.five_hour_pct).max(0.0));
     let five_h_reset = format_reset(five_h_epoch, now);
+    let five_h_reset_at = format_reset_at(five_h_epoch, now);
     let five_h_pace = format_pace(calculate_pace(
         data.five_hour_pct,
         five_h_epoch,
@@ -394,6 +396,7 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
     let seven_d_pct = format!("{:.0}", data.seven_day_pct);
     let seven_d_remaining = format!("{:.0}", (100.0 - data.seven_day_pct).max(0.0));
     let seven_d_reset = format_reset(seven_d_epoch, now);
+    let seven_d_reset_at = format_reset_at(seven_d_epoch, now);
     let seven_d_pace = format_pace(calculate_pace(
         data.seven_day_pct,
         seven_d_epoch,
@@ -414,11 +417,13 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
         .replace("{pct}", &five_h_pct)
         .replace("{remaining}", &five_h_remaining)
         .replace("{reset}", &five_h_reset)
+        .replace("{reset_at}", &five_h_reset_at)
         .replace("{pace}", &five_h_pace);
     let seven_d_part = seven_d_fmt
         .replace("{pct}", &seven_d_pct)
         .replace("{remaining}", &seven_d_remaining)
         .replace("{reset}", &seven_d_reset)
+        .replace("{reset_at}", &seven_d_reset_at)
         .replace("{pace}", &seven_d_pace);
 
     let mut parts: Vec<String> = vec![five_h_part, seven_d_part];
@@ -457,6 +462,7 @@ fn format_single_model(
         Some(_) => format_reset(model_epoch, now),
         None => "?".to_string(),
     };
+    let reset_at_str = format_reset_at(model_epoch, now);
     let pace_str = format_pace(calculate_pace(pct, model_epoch, SEVEN_DAY_SECS, now));
     let default_fmt;
     let fmt: &str = match fmt_override {
@@ -470,6 +476,7 @@ fn format_single_model(
         fmt.replace("{pct}", &pct_str)
             .replace("{remaining}", &remaining_str)
             .replace("{reset}", &reset_str)
+            .replace("{reset_at}", &reset_at_str)
             .replace("{pace}", &pace_str),
     )
 }
@@ -602,6 +609,28 @@ fn format_reset(epoch: Option<u64>, now: u64) -> String {
         Some(e) if now >= e => "now".to_string(),
         Some(e) => format_remaining_secs(e - now),
     }
+}
+
+/// Format a resolved epoch as an absolute local clock time.
+/// `None` → `"?"`, past → `"now"`, same local date as `now` → `"7:42 PM"`,
+/// a later local date → `"Mon 9:00 AM"`.
+fn format_reset_at(epoch: Option<u64>, now: u64) -> String {
+    match epoch {
+        None => "?".to_string(),
+        Some(e) if now >= e => "now".to_string(),
+        Some(e) => match (epoch_to_local(e), epoch_to_local(now)) {
+            (Some(reset), Some(today)) if reset.date_naive() == today.date_naive() => {
+                reset.format("%-I:%M %p").to_string()
+            }
+            (Some(reset), _) => reset.format("%a %-I:%M %p").to_string(),
+            _ => "?".to_string(),
+        },
+    }
+}
+
+/// Convert Unix epoch seconds to the local-timezone equivalent.
+fn epoch_to_local(secs: u64) -> Option<chrono::DateTime<chrono::Local>> {
+    chrono::DateTime::from_timestamp(secs as i64, 0).map(|utc| utc.with_timezone(&chrono::Local))
 }
 
 /// Format a number of remaining seconds as a compact human-readable string.
@@ -1071,6 +1100,70 @@ mod tests {
         );
     }
 
+    // ── format_reset_at() tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_format_reset_at_none_returns_question_mark() {
+        assert_eq!(format_reset_at(None, now_epoch()), "?");
+    }
+
+    #[test]
+    fn test_format_reset_at_past_returns_now() {
+        let now = now_epoch();
+        assert_eq!(format_reset_at(Some(0), now), "now");
+        assert_eq!(format_reset_at(Some(now.saturating_sub(1)), now), "now");
+    }
+
+    #[test]
+    fn test_format_reset_at_same_day_is_clock_only() {
+        use chrono::Timelike;
+        let now = now_epoch();
+        let local_now = epoch_to_local(now).unwrap();
+        // One minute before local midnight on `now`'s own date — guaranteed same
+        // calendar date as `now` regardless of system timezone, and always in the
+        // future unless the test runs in the literal last minute of the day.
+        let end_of_day = local_now
+            .date_naive()
+            .and_hms_opt(23, 59, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .single()
+            .unwrap();
+        if local_now.hour() == 23 && local_now.minute() >= 59 {
+            return; // last minute of the day — skip to avoid the unrepresentable edge case
+        }
+        let result = format_reset_at(Some(end_of_day.timestamp() as u64), now);
+        assert!(
+            result.contains(':') && (result.contains("AM") || result.contains("PM")),
+            "expected clock-only format: {result}"
+        );
+        assert!(
+            !result
+                .split(' ')
+                .next()
+                .unwrap()
+                .chars()
+                .all(char::is_alphabetic),
+            "same-day format should not start with a weekday: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_reset_at_later_day_includes_weekday() {
+        let now = now_epoch();
+        // 30 days out: outside any plausible UTC offset, guaranteed different local date.
+        let result = format_reset_at(Some(now + 30 * 86400), now);
+        assert!(
+            result.contains(':') && (result.contains("AM") || result.contains("PM")),
+            "expected clock portion: {result}"
+        );
+        let weekday = result.split(' ').next().unwrap();
+        assert!(
+            weekday.chars().all(char::is_alphabetic) && weekday.len() == 3,
+            "expected 3-letter weekday prefix: {result}"
+        );
+    }
+
     #[test]
     fn test_resolve_epoch_from_iso_plus_offset() {
         // Anthropic API returns "+00:00" not "Z" — resolve_epoch must handle it
@@ -1134,6 +1227,45 @@ mod tests {
         assert!(
             result.contains("7d 45%/"),
             "expected custom 7d format: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_output_reset_at_placeholder() {
+        let data = sample_data();
+        let cfg = UsageLimitsConfig {
+            five_hour_format: Some("5h {pct}% at {reset_at}".into()),
+            seven_day_format: Some("7d {pct}% at {reset_at}".into()),
+            ..Default::default()
+        };
+        let result = format_output(&data, &cfg);
+        assert!(
+            !result.contains("{reset_at}"),
+            "placeholder should be substituted: {result:?}"
+        );
+        let weekday_count = result.matches(" at ").count();
+        assert_eq!(
+            weekday_count, 2,
+            "both sections should have a reset_at: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_single_model_reset_at_placeholder() {
+        let result = format_single_model(
+            "opus",
+            Some(50.0),
+            &Some("2099-01-01T00:00:00Z".into()),
+            Some("opus {pct}% at {reset_at}"),
+        )
+        .unwrap();
+        assert!(
+            !result.contains("{reset_at}"),
+            "placeholder should be substituted: {result:?}"
+        );
+        assert!(
+            result.contains(" at "),
+            "expected reset_at content: {result:?}"
         );
     }
 

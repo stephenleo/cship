@@ -406,6 +406,7 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `{pct}` | Percentage used as integer (e.g. `23`) |
 | `{remaining}` | Percentage remaining as integer (e.g. `77`) |
 | `{reset}` | Time-until-reset string (e.g. `4h12m`) |
+| `{reset_at}` | Absolute local reset time — clock-only if today (e.g. `7:42 PM`), weekday-prefixed otherwise (e.g. `Mon 9:00 AM`); `?` if unknown, `now` if already past |
 | `{pace}` | Signed headroom vs linear consumption — `+20%` (under pace), `-15%` (over pace), or `?` when unknown |
 
 **Placeholders specific to `extra_usage_format`** (the standard `{remaining}` percentage placeholder does **not** apply here — use `{remaining_credits}` instead):
@@ -422,8 +423,8 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 ```toml
 [cship.usage_limits]
 ttl                = 300       # 5 minutes; increase if you run many concurrent sessions
-five_hour_format   = "5h {pct}% ({pace}, {reset})"
-seven_day_format   = "7d {pct}% ({pace}, {reset})"
+five_hour_format   = "5h {pct}% resets at {reset_at} ({reset})"
+seven_day_format   = "7d {pct}% resets at {reset_at} ({reset})"
 opus_format        = "opus {pct}%"
 sonnet_format      = "sonnet {pct}%"
 extra_usage_format = "{active} extra {pct}% (${used}/${limit})"

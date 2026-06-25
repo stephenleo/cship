@@ -36,8 +36,8 @@ critical_threshold = 50
 critical_style     = "bold fg:#f7768e"
 
 [cship.usage_limits]
-five_hour_format   = " 5h {pct}% ({reset})"
-seven_day_format   = " 7d {pct}% ({reset})"
+five_hour_format   = " 5h {pct}% {reset_at} ({reset})"
+seven_day_format   = " 7d {pct}% {reset_at} ({reset})"
 sonnet_format      = "🎼 {pct}% ({reset})"
 extra_usage_format = "{active} {pct}% (${used}/${limit})"
 separator          = " "
