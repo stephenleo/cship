@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- Strip terminal control characters (ESC, BEL, C0/C1, DEL) from untrusted Claude Code session JSON fields at ingest, closing an escape-sequence injection vector (CWE-150) where a malicious directory or model name could spoof the terminal title, reposition the cursor, or write the clipboard via OSC 52. Legitimate values are unaffected; only control bytes are removed ([#191](https://github.com/stephenleo/cship/pull/191))
+
 ### Changed
 - **Breaking:** `$cship.cost.total_duration_ms` and `$cship.cost.total_api_duration_ms` now render human-readable durations (`45s`, `1m30s`, `2h15m30s`, or `750ms` for sub-second values) instead of raw milliseconds. If your config has `format = "[$value ms]($style)"`, drop the literal ` ms` — `$value` is no longer in milliseconds. Threshold configs (`warn_threshold = 30000.0`) keep working unchanged because comparisons still operate on raw milliseconds (issue #162).
 

@@ -160,3 +160,9 @@ Set `end_hour = 24` to mean "through end of day". Weekends always return nothing
 - If the cache seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
 
 You can see the current cache state by running `cship explain` — it shows the usage limits value being rendered and any warnings if the API call failed.
+
+## Why are some characters missing from my path or model name?
+
+cship strips terminal control characters (ESC, BEL, the C0/C1 ranges, and DEL — including tab, carriage return, and newline) from untrusted session JSON fields such as `cwd`, `transcript_path`, `model`, and `workspace` before rendering. This is a security measure: it prevents a malicious directory or model name from injecting raw escape sequences that could spoof your terminal title, move the cursor, or write to the clipboard via OSC 52 ([CWE-150](https://cwe.mitre.org/data/definitions/150.html)).
+
+Normal values are never affected — only control bytes are removed. If a path or name shows up with characters missing, it contained control bytes, which are stripped by design and cannot be disabled.
