@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [1.8.0] - 2026-06-29
 
 ### Security
 - Strip terminal control characters (ESC, BEL, C0/C1, DEL) from untrusted Claude Code session JSON fields at ingest, closing an escape-sequence injection vector (CWE-150) where a malicious directory or model name could spoof the terminal title, reposition the cursor, or write the clipboard via OSC 52. Legitimate values are unaffected; only control bytes are removed ([#191](https://github.com/stephenleo/cship/pull/191))
@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Breaking:** `$cship.cost.total_duration_ms` and `$cship.cost.total_api_duration_ms` now render human-readable durations (`45s`, `1m30s`, `2h15m30s`, or `750ms` for sub-second values) instead of raw milliseconds. If your config has `format = "[$value ms]($style)"`, drop the literal ` ms` — `$value` is no longer in milliseconds. Threshold configs (`warn_threshold = 30000.0`) keep working unchanged because comparisons still operate on raw milliseconds (issue #162).
 
 ### Added
+- Added the `{reset_at}` placeholder to `cship.usage_limits` (five-hour, seven-day, and per-model formats), rendering the absolute local clock time a window resets (`7:42 PM`, or `Mon 9:00 AM` when not today) alongside the existing relative `{reset}`. Mirrors `{reset}`'s handling of unknown/past resets (`?` / `now`) ([@jasonhumphrey](https://github.com/jasonhumphrey), [#192](https://github.com/stephenleo/cship/pull/192))
 - Added the `cship.effort` module (`$cship.effort` / `$cship.effort.level`), which displays the session's reasoning effort level (`low`/`medium`/`high`/`xhigh`/`max`) and reflects mid-session `/effort` changes. Supports per-level styling via `low_style` / `medium_style` / `high_style` / `xhigh_style` / `max_style`, each falling back to `style`. Renders nothing when the active model does not support the effort parameter ([#187](https://github.com/stephenleo/cship/issues/187))
 - `$cship.cost.total_duration` and `$cship.cost.total_api_duration` are accepted aliases for the `_ms` versions, in both format-string variables and TOML config keys. Use whichever spelling reads better in your config — they resolve to the same field (issue #162).
 - `cship.account` module for displaying the currently authenticated Anthropic account (work vs personal) — sources organization and account info from the `/api/oauth/profile` endpoint, with opt-in label mapping so org names can be replaced with user-defined labels (e.g. `"Fulcrum Genomics" = "work"`). Supports format string placeholders: `{label}`, `{organization}`, `{display_name}`, `{email}`, `{tier}`, `{type}`. Cached for 24 hours (configurable via `ttl`). ([@nh13](https://github.com/nh13), [#153](https://github.com/stephenleo/cship/pull/153))

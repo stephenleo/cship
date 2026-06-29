@@ -1,6 +1,6 @@
 [package]
 name          = "cship"
-version       = "1.7.1"
+version       = "1.8.0"
 edition       = "2024"
 description   = "A beautiful, fully customizable statusline for Claude Code — Starship-style TOML config, themeable colours, Nerd Font glyphs, and tunable cost/context/usage thresholds"
 license       = "Apache-2.0"
