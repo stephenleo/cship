@@ -61,17 +61,15 @@ mod unix_impl {
     use std::fs::OpenOptions;
     use std::os::fd::AsFd;
     use std::os::unix::fs::OpenOptionsExt;
+    use std::path::Path;
 
-    /// Walk self → parent → … (including pid 1) and return the width of the first
-    /// ancestor's controlling tty we can read.
+    /// Walk self → parent → … (up to 16 hops) and return the column count of the
+    /// first ancestor whose controlling terminal we can read.
     pub(super) fn detect() -> Option<u16> {
         let mut pid = std::process::id() as i32;
         for _ in 0..16 {
-            let (ppid, dev) = proc_info(pid)?;
-            // 0 and u32::MAX (== (dev_t)-1 / NODEV) both mean "no controlling tty".
-            if dev != 0
-                && dev != u64::from(u32::MAX)
-                && let Some(cols) = cols_for_dev(dev)
+            let (ppid, cols) = os::proc_info(pid)?;
+            if let Some(cols) = cols
                 && cols > 0
             {
                 tracing::debug!("cship: detected terminal width {cols} via pid {pid}");
@@ -85,39 +83,116 @@ mod unix_impl {
         None
     }
 
-    /// Open a tty device by its `dev_t` (without acquiring it as our controlling
-    /// terminal) and read its column count.
-    fn cols_for_dev(dev: u64) -> Option<u16> {
-        let path = ctty::get_path_for_dev(dev).ok()?;
+    /// Open a tty device by path *without* acquiring it as our controlling
+    /// terminal (`O_NOCTTY`) and read its column count via `TIOCGWINSZ`.
+    fn cols_for_path(path: &Path) -> Option<u16> {
         let f = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOCTTY)
-            .open(&path)
+            .open(path)
             .ok()?;
         let (terminal_size::Width(cols), terminal_size::Height(_)) =
             terminal_size::terminal_size_of(f.as_fd())?;
         Some(cols)
     }
 
-    /// `(parent pid, controlling-tty dev_t)` for `pid`.
+    /// macOS: read a process's parent pid and controlling-tty device via a
+    /// single `proc_pidinfo(PROC_PIDTBSDINFO)` call — the same source the
+    /// `libproc` crate wrapped — then resolve the device path with `devname(3)`.
+    /// (`libc` exposes the compact `proc_bsdinfo` struct but not the sprawling
+    /// `kinfo_proc` that `sysctl(KERN_PROC_PID)` would need hand-declared.)
     #[cfg(target_os = "macos")]
-    fn proc_info(pid: i32) -> Option<(i32, u64)> {
-        use libproc::libproc::bsd_info::BSDInfo;
-        use libproc::libproc::proc_pid::pidinfo;
-        let info = pidinfo::<BSDInfo>(pid, 0).ok()?;
-        Some((info.pbi_ppid as i32, info.e_tdev as u64))
+    mod os {
+        use std::ffi::CStr;
+        use std::path::PathBuf;
+
+        /// `(parent pid, controlling-tty columns)` for `pid`. Columns are `None`
+        /// when `pid` has no controlling tty or its winsize can't be read.
+        pub(super) fn proc_info(pid: i32) -> Option<(i32, Option<u16>)> {
+            let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+            let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+            // SAFETY: `info`/`size` are a correctly sized, writable out-buffer for
+            // one `proc_bsdinfo`, which is plain C data (so zeroed is a valid start).
+            let written = unsafe {
+                libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
+            };
+            // `proc_pidinfo` returns the byte count written; a short read means the
+            // process is gone or otherwise inaccessible.
+            if written != size {
+                return None;
+            }
+            Some((info.pbi_ppid as i32, tty_cols(info.e_tdev)))
+        }
+
+        /// Columns of the tty identified by `dev`, or `None` when `dev` is not a
+        /// controlling terminal or its winsize can't be read.
+        fn tty_cols(dev: u32) -> Option<u16> {
+            // A process with no controlling tty reports `e_tdev == 0` or `NODEV`
+            // (`(dev_t)-1`, which surfaces here as `u32::MAX`).
+            if dev == 0 || dev == u32::MAX {
+                return None;
+            }
+            // SAFETY: `devname` returns a pointer into a static buffer (valid
+            // until the next call) or null; we copy the string out immediately.
+            let name = unsafe {
+                let p = libc::devname(dev as libc::dev_t, libc::S_IFCHR);
+                if p.is_null() {
+                    return None;
+                }
+                CStr::from_ptr(p).to_str().ok()?.to_owned()
+            };
+            super::cols_for_path(&PathBuf::from("/dev").join(name))
+        }
     }
 
+    /// Linux: read a process's parent pid and controlling-tty width from
+    /// `/proc/<pid>/stat` + `/proc/<pid>/fd`, using only `std` (no extra crates).
     #[cfg(target_os = "linux")]
-    fn proc_info(pid: i32) -> Option<(i32, u64)> {
-        let stat = procfs::process::Process::new(pid).ok()?.stat().ok()?;
-        Some((stat.ppid, stat.tty_nr as u64))
+    mod os {
+        use std::path::{Path, PathBuf};
+
+        /// `(parent pid, controlling-tty columns)` for `pid`. Columns are `None`
+        /// when `pid` has no controlling tty (`tty_nr == 0`) or its winsize can't
+        /// be read.
+        pub(super) fn proc_info(pid: i32) -> Option<(i32, Option<u16>)> {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            // Format: `pid (comm) state ppid pgrp session tty_nr …`. `comm` is
+            // parenthesised and may itself contain spaces or parens, so the fixed
+            // fields are parsed *after the last ')'*.
+            let mut fields = stat[stat.rfind(')')? + 1..].split_whitespace();
+            let _state = fields.next()?;
+            let ppid: i32 = fields.next()?.parse().ok()?;
+            let _pgrp = fields.next()?;
+            let _session = fields.next()?;
+            let tty_nr: i64 = fields.next()?.parse().ok()?;
+
+            let cols = (tty_nr != 0)
+                .then(|| tty_path(pid).and_then(|p| super::cols_for_path(&p)))
+                .flatten();
+            Some((ppid, cols))
+        }
+
+        /// The controlling terminal's `/dev` path for `pid`, found by following
+        /// its standard descriptors to the first that points at a tty device.
+        /// `readlink` avoids the `/dev` scan a `tty_nr`→path mapping would need.
+        fn tty_path(pid: i32) -> Option<PathBuf> {
+            [0, 1, 2].into_iter().find_map(|fd| {
+                let target = std::fs::read_link(format!("/proc/{pid}/fd/{fd}")).ok()?;
+                is_tty_dev(&target).then_some(target)
+            })
+        }
+
+        fn is_tty_dev(path: &Path) -> bool {
+            matches!(path.to_str(), Some(s) if s.starts_with("/dev/pts/") || s.starts_with("/dev/tty"))
+        }
     }
 
-    // Other unixes (FreeBSD, etc.): no proc walk yet → fall back to config/80.
+    /// Other unixes (FreeBSD, etc.): no proc walk yet → fall back to config/80.
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    fn proc_info(_pid: i32) -> Option<(i32, u64)> {
-        None
+    mod os {
+        pub(super) fn proc_info(_pid: i32) -> Option<(i32, Option<u16>)> {
+            None
+        }
     }
 }
 

@@ -29,16 +29,11 @@ unicode-width      = "0.2"
 # Terminal-width detection for `$fill` right-alignment. Unix only: the statusline
 # child has no tty of its own, so we walk up to an ancestor's controlling tty and
 # read its window size. Windows has no equivalent and falls back to config/80.
+# Kept deliberately lean (`libc` + `std`, no build-time toolchain deps) — see
+# `src/terminal.rs`.
 [target.'cfg(unix)'.dependencies]
 libc          = "0.2"
-ctty          = "0.1"
 terminal_size = "0.4"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libproc = "0.14"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-procfs = "0.17"
 
 [dev-dependencies]
 rstest     = "0.26"
