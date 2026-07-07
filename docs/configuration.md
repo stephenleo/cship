@@ -86,10 +86,11 @@ Displays the active Claude model name.
 | `haiku_style` | `string` | — | Style applied when the key contains `"haiku"` (case-insensitive) |
 | `sonnet_style` | `string` | — | Style applied when the key contains `"sonnet"` (case-insensitive) |
 | `opus_style` | `string` | — | Style applied when the key contains `"opus"` (case-insensitive) |
+| `family_style` | `table` | — | Map of substring → style, for families beyond haiku/sonnet/opus (e.g. `fable`) |
 
 **Variables:** `$value` (display name, e.g. `Claude Sonnet 4.5`), `$symbol`, `$style`
 
-Per-family styles are matched case-insensitively against `model.id` (e.g. `claude-opus-4-7`). If `id` is absent, `display_name` is used as the key instead — so a display name like `"My Sonnet Setup"` will trigger `sonnet_style`. When no family style matches or is set, `style` is used as the fallback.
+Per-family styles are matched case-insensitively against `model.id` (e.g. `claude-opus-4-7`). If `id` is absent, `display_name` is used as the key instead — so a display name like `"My Sonnet Setup"` will trigger `sonnet_style`. `family_style` works the same way but lets you add arbitrary family names without waiting on a cship release — new model families can be styled the moment they ship. `haiku_style`/`sonnet_style`/`opus_style` take priority over a matching `family_style` entry. When no family style matches or is set, `style` is used as the fallback.
 
 ```toml
 [cship.model]
@@ -100,6 +101,17 @@ style  = "bold fg:#7aa2f7"
 haiku_style  = "green"
 sonnet_style = "cyan"
 opus_style   = "magenta"
+
+# Any other family
+family_style.fable = "yellow"
+```
+
+For multiple entries, `family_style` can also be written as its own table instead of repeated dotted keys:
+
+```toml
+[cship.model.family_style]
+fable = "yellow"
+mythos = "red"
 ```
 
 ---
