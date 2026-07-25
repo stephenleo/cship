@@ -213,7 +213,12 @@ fn build_filled_line(
 /// char's own display width and padding any leftover columns with spaces. This
 /// keeps alignment exact even when `symbol` is more than one column wide.
 fn render_fill(fill_char: &str, gap: usize) -> String {
-    let char_cols = crate::ansi::display_width(fill_char).max(1);
+    // A zero-width symbol (e.g. `""`) can't fill anything — repeating it stays
+    // empty and silently breaks alignment. Fall back to plain space padding.
+    let char_cols = crate::ansi::display_width(fill_char);
+    if char_cols == 0 {
+        return " ".repeat(gap);
+    }
     let reps = gap / char_cols;
     let mut s = fill_char.repeat(reps);
     let pad = gap - reps * char_cols;
@@ -567,6 +572,19 @@ mod tests {
         let out = build_filled_line(&pieces, 11, "··", None);
         assert_eq!(out, "A········ B");
         assert_eq!(crate::ansi::display_width(&out), 11);
+    }
+
+    #[test]
+    fn test_build_filled_line_empty_symbol_pads_with_spaces() {
+        // A zero-width symbol must not collapse the fill — the gap falls back to spaces.
+        let pieces = vec![
+            Piece::Text("A".into()),
+            Piece::Fill,
+            Piece::Text("B".into()),
+        ];
+        let out = build_filled_line(&pieces, 10, "", None);
+        assert_eq!(out, "A        B");
+        assert_eq!(crate::ansi::display_width(&out), 10);
     }
 
     #[test]
