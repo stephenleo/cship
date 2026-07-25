@@ -1,0 +1,5 @@
+[cship]
+lines = ["L $fill R"]
+
+[cship.fill]
+symbol = "-"

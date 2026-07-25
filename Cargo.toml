@@ -24,6 +24,16 @@ tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nu-ansi-term       = "0.50"
 chrono             = { version = "0.4", default-features = false, features = ["clock"] }
+unicode-width      = "0.2"
+
+# Terminal-width detection for `$fill` right-alignment. Unix only: the statusline
+# child has no tty of its own, so we walk up to an ancestor's controlling tty and
+# read its window size. Windows has no equivalent and falls back to config/80.
+# Kept deliberately lean (`libc` + `std`, no build-time toolchain deps) — see
+# `src/terminal.rs`.
+[target.'cfg(unix)'.dependencies]
+libc          = "0.2"
+terminal_size = "0.4"
 
 [dev-dependencies]
 rstest     = "0.26"

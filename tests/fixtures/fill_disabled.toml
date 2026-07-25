@@ -1,0 +1,6 @@
+[cship]
+lines = ["L $fill R"]
+
+[cship.fill]
+symbol   = "-"
+disabled = true
