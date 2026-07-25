@@ -90,7 +90,7 @@ Displays the active Claude model name.
 
 **Variables:** `$value` (display name, e.g. `Claude Sonnet 4.5`), `$symbol`, `$style`
 
-Per-family styles are matched case-insensitively against `model.id` (e.g. `claude-opus-4-7`). If `id` is absent, `display_name` is used as the key instead — so a display name like `"My Sonnet Setup"` will trigger `sonnet_style`. `family_style` works the same way but lets you add arbitrary family names without waiting on a cship release — new model families can be styled the moment they ship. `haiku_style`/`sonnet_style`/`opus_style` take priority over a matching `family_style` entry. When no family style matches or is set, `style` is used as the fallback.
+Per-family styles are matched case-insensitively against `model.id` (e.g. `claude-opus-4-7`). If `id` is absent, `display_name` is used as the key instead — so a display name like `"My Sonnet Setup"` will trigger `sonnet_style`. `family_style` works the same way but lets you add arbitrary family names without waiting on a cship release — new model families can be styled the moment they ship. `haiku_style`/`sonnet_style`/`opus_style` take priority over a matching `family_style` entry. When several `family_style` keys match the same model, the longest key wins. An empty key is ignored (it would otherwise match every model) with a one-time warning. When no family style matches or is set, `style` is used as the fallback.
 
 ```toml
 [cship.model]
