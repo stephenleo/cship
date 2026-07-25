@@ -65,6 +65,10 @@ pub struct ModelConfig {
     pub haiku_style: Option<String>,
     pub sonnet_style: Option<String>,
     pub opus_style: Option<String>,
+    /// Generic per-family styles, keyed by substring to match against `model.id`
+    /// (fallback: `display_name`). Lets users style new model families (e.g. `fable`)
+    /// without a cship code change.
+    pub family_style: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Configuration for `[cship.cost]` — convenience alias for total cost display.

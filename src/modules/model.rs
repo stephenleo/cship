@@ -1,5 +1,6 @@
 /// Resolve the effective style for the current model, preferring per-family styles over the
-/// base `style`. Family is detected from `model.id` (fallback: `display_name`) via substring.
+/// base `style`. Family is detected from `model.id` (fallback: `display_name`) via substring;
+/// `family_style` extends this to families beyond the hardcoded haiku/sonnet/opus.
 fn resolve_model_style<'a>(
     ctx: &'a crate::context::Context,
     model_cfg: Option<&'a crate::config::ModelConfig>,
@@ -20,7 +21,32 @@ fn resolve_model_style<'a>(
     } else {
         None
     };
-    family.or(cfg.style.as_deref())
+    // Fallback to user-configured family_style; longest matching key wins on overlap
+    let generic_family = family.or_else(|| {
+        cfg.family_style
+            .as_ref()
+            .and_then(|map| {
+                map.iter()
+                    .filter(|(f, _)| !f.is_empty() && key.contains(&f.to_lowercase()))
+                    .max_by_key(|(f, _)| f.len())
+                    .or_else(|| {
+                        if map.keys().any(|f| f.is_empty()) {
+                            // Empty key matches every model — ignore it, warn once
+                            static EMPTY_KEY_WARNED: std::sync::atomic::AtomicBool =
+                                std::sync::atomic::AtomicBool::new(false);
+                            if !EMPTY_KEY_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                tracing::warn!(
+                                    "cship.model: family_style has an empty key — ignoring it \
+                                     (an empty key would match every model)"
+                                );
+                            }
+                        }
+                        None
+                    })
+            })
+            .map(|(_, style)| style.as_str())
+    });
+    generic_family.or(cfg.style.as_deref())
 }
 
 /// Render the `[cship.model]` module.
@@ -334,6 +360,111 @@ mod tests {
             ..Default::default()
         };
         let cfg = all_family_cfg("dim cyan", "bold blue", "bold magenta", "bold red");
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Opus", Some("bold magenta")),
+        );
+    }
+
+    #[test]
+    fn test_family_style_empty_key_ignored_falls_back_to_base_style() {
+        let ctx = ctx_with_id("claude-fable-5", "Fable");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                style: Some("bold red".to_string()),
+                family_style: Some(
+                    [("".to_string(), "bold yellow".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Fable", Some("bold red")),
+        );
+    }
+
+    #[test]
+    fn test_family_style_longest_matching_key_wins_on_overlap() {
+        let ctx = ctx_with_id("claude-opus-4-7", "Opus");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                family_style: Some(
+                    [
+                        ("us".to_string(), "bold red".to_string()),
+                        ("opus".to_string(), "bold magenta".to_string()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Opus", Some("bold magenta")),
+        );
+    }
+
+    #[test]
+    fn test_family_style_map_styles_unknown_family() {
+        let ctx = ctx_with_id("claude-fable-5", "Fable");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                family_style: Some(
+                    [("fable".to_string(), "bold yellow".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Fable", Some("bold yellow")),
+        );
+    }
+
+    #[test]
+    fn test_family_style_map_key_matches_case_insensitively() {
+        let ctx = ctx_with_id("claude-fable-5", "Fable");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                family_style: Some(
+                    [("Fable".to_string(), "bold yellow".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&ctx, &cfg).unwrap(),
+            ansi::apply_style("Fable", Some("bold yellow")),
+        );
+    }
+
+    #[test]
+    fn test_legacy_family_style_takes_priority_over_family_style_map() {
+        let ctx = ctx_with_id("claude-opus-4-7", "Opus");
+        let cfg = CshipConfig {
+            model: Some(ModelConfig {
+                opus_style: Some("bold magenta".to_string()),
+                family_style: Some(
+                    [("opus".to_string(), "bold yellow".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
         assert_eq!(
             render(&ctx, &cfg).unwrap(),
             ansi::apply_style("Opus", Some("bold magenta")),
