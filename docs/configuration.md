@@ -11,6 +11,16 @@ CShip is configured via a TOML file. The config discovery order is:
 
 The recommended file is `~/.config/cship.toml`.
 
+## Editor Schema
+
+Add a `$schema` key to get autocomplete and validation for the `[cship]` section in editors that support JSON Schema for TOML (e.g. VS Code's [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml)):
+
+```toml
+"$schema" = 'https://cship.dev/config-schema.json'
+```
+
+Run `cship config-schema` to print the same schema locally.
+
 ## Layout
 
 The `[cship]` section controls the overall layout:

@@ -25,6 +25,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nu-ansi-term       = "0.50"
 chrono             = { version = "0.4", default-features = false, features = ["clock"] }
 unicode-width      = "0.2"
+schemars           = "1"
 
 # Terminal-width detection for `$fill` right-alignment. Unix only: the statusline
 # child has no tty of its own, so we walk up to an ancestor's controlling tty and

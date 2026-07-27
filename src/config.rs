@@ -1,7 +1,8 @@
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 /// Root configuration for CShip, loaded from the `[cship]` section of `starship.toml`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct CshipConfig {
     /// `lines` array — each element is a format string for one statusline row.
     /// Example: `["$cship.model $git_branch", "$cship.cost"]`
@@ -41,7 +42,7 @@ pub struct CshipConfig {
 /// Mirrors Starship's `[fill]` module: `$fill` expands to fill the remaining
 /// horizontal space with `symbol`. Multiple `$fill` tokens on one line split the
 /// space evenly, so the content after the last `$fill` is right-aligned.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct FillConfig {
     /// Character used to fill the gap. Defaults to `"."` (matching Starship).
     pub symbol: Option<String>,
@@ -54,7 +55,7 @@ pub struct FillConfig {
 
 /// Per-module config fields shared by all native CShip modules.
 /// These map to `[cship.model]` in `starship.toml`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct ModelConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -72,7 +73,7 @@ pub struct ModelConfig {
 }
 
 /// Configuration for `[cship.cost]` — convenience alias for total cost display.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct CostConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -107,7 +108,7 @@ pub struct CostConfig {
 
 /// Unified configuration for individual sub-field modules
 /// (e.g. `[cship.cost.total_cost_usd]`, `[cship.context_window.used_percentage]`).
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct SubfieldConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -182,7 +183,7 @@ macro_rules! impl_has_threshold_style {
 
 /// Configuration for `[cship.context_bar]` — visual progress bar with thresholds.
 /// Implemented in Story 2.2. Defined here so all Epic 2 config is available.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct ContextBarConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -207,7 +208,7 @@ pub struct ContextBarConfig {
 
 /// Configuration for `[cship.context_window]` sub-field modules.
 /// Implemented in Story 2.2. Defined here so all Epic 2 config is available.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct ContextWindowConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -257,7 +258,7 @@ impl HasThresholdStyle for ContextWindowConfig {
 
 /// Configuration for `[cship.vim]` — vim mode display.
 /// Implemented in Story 2.3. Defined here so all Epic 2 config is available.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct VimConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -270,7 +271,7 @@ pub struct VimConfig {
 
 /// Configuration for `[cship.agent]` — agent name display.
 /// Implemented in Story 2.3. Defined here so all Epic 2 config is available.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct AgentConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -284,7 +285,7 @@ pub struct AgentConfig {
 /// Per-level styles (`low_style`, `medium_style`, …) are matched against the
 /// effort level (`low`/`medium`/`high`/`xhigh`/`max`); each falls back to the
 /// base `style` when unset, mirroring `[cship.model]`'s per-family styles.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct EffortConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -300,7 +301,7 @@ pub struct EffortConfig {
 
 /// Configuration for session identity modules (cwd, session_id, transcript_path, etc.).
 /// Implemented in Story 2.4. Defined here so all Epic 2 config is available.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct SessionConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -311,7 +312,7 @@ pub struct SessionConfig {
 
 /// Configuration for workspace modules (workspace.current_dir, workspace.project_dir).
 /// Implemented in Story 2.4. Defined here so all Epic 2 config is available.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct WorkspaceConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -322,7 +323,7 @@ pub struct WorkspaceConfig {
 
 /// Configuration for `[cship.usage_limits]`.
 /// Story 5.1 defines the struct; Stories 5.2 and 5.3 implement the render logic.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct UsageLimitsConfig {
     pub disabled: Option<bool>,
     pub style: Option<String>,
@@ -377,7 +378,7 @@ pub struct UsageLimitsConfig {
 /// Configuration for `[cship.peak_usage]` — peak-time indicator.
 /// Shows when Anthropic's peak-time rate limiting is likely active
 /// based on current time relative to US Pacific business hours.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct PeakUsageConfig {
     pub disabled: Option<bool>,
     pub symbol: Option<String>,
@@ -391,7 +392,7 @@ pub struct PeakUsageConfig {
 }
 
 /// Configuration for `[cship.starship_prompt]` — renders full starship prompt as a token.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct StarshipPromptConfig {
     pub disabled: Option<bool>,
 }
@@ -410,7 +411,7 @@ pub struct StarshipPromptConfig {
 /// - `{email}` — account `email` (PII; opt in explicitly).
 /// - `{tier}` — organization `rate_limit_tier` (e.g. `"default_claude_max_5x"`).
 /// - `{type}` — organization `organization_type` (e.g. `"claude_team"`, `"personal"`).
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, JsonSchema)]
 pub struct AccountConfig {
     pub style: Option<String>,
     pub symbol: Option<String>,
@@ -547,9 +548,25 @@ pub fn load_with_source(
 /// Private wrapper so `toml::from_str` can extract `[cship]` sections
 /// from a full `starship.toml` that contains many other sections.
 /// Serde silently ignores all non-`cship` top-level keys.
-#[derive(Debug, Deserialize, Default)]
+///
+/// Also doubles as the root of the published JSON Schema (`schema_json()`) — the
+/// `schemars` title/description below describe that public artifact, not this
+/// internal wrapper.
+#[derive(Debug, Deserialize, Default, JsonSchema)]
+#[schemars(
+    title = "cship config schema",
+    description = "Schema for the `[cship]` section of starship.toml / cship.toml. See https://cship.dev/configuration for field docs."
+)]
 struct StarshipToml {
     cship: Option<CshipConfig>,
+}
+
+/// Generate the JSON Schema for the `[cship]` config section, for editor
+/// autocomplete/validation via `"$schema" = 'https://cship.dev/config-schema.json'`.
+/// Published to `docs/public/config-schema.json` — see `cship config-schema`.
+pub fn schema_json() -> String {
+    let schema = schemars::schema_for!(StarshipToml);
+    serde_json::to_string_pretty(&schema).expect("schema serializes to JSON")
 }
 
 /// Load `CshipConfig` from a `starship.toml`-format file at `path`.

@@ -28,3 +28,6 @@ jobs:
         run: cargo test
       - name: Release build
         run: cargo build --release
+      - name: Check config schema is up to date
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo run --release -- config-schema | diff - docs/public/config-schema.json

@@ -22,6 +22,8 @@ enum Commands {
     Explain,
     /// Remove cship binary and settings.json entry.
     Uninstall,
+    /// Print the JSON schema for the `[cship]` config section (editor autocomplete).
+    ConfigSchema,
 }
 
 fn main() {
@@ -49,6 +51,9 @@ fn main() {
         }
         Some(Commands::Uninstall) => {
             cship::uninstall::run();
+        }
+        Some(Commands::ConfigSchema) => {
+            println!("{}", cship::config::schema_json());
         }
         None => {
             let ctx = match cship::context::from_stdin() {

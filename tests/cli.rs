@@ -1154,3 +1154,23 @@ fn test_fill_disabled_collapses_to_nothing() {
         "disabled fill must not render: {stdout:?}"
     );
 }
+
+#[test]
+fn test_config_schema_prints_valid_json_schema() {
+    let output = cargo_bin_cmd!("cship")
+        .args(["config-schema"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("config-schema output must be valid JSON: {e}\n{stdout}"));
+    assert!(
+        schema["properties"]["cship"].is_object(),
+        "expected top-level cship property in schema: {stdout}"
+    );
+    assert!(
+        schema["$defs"]["ModelConfig"]["properties"]["family_style"].is_object(),
+        "expected ModelConfig.family_style in schema $defs: {stdout}"
+    );
+}
