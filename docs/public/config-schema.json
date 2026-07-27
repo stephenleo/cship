@@ -1,0 +1,1194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cship config schema",
+  "description": "Schema for the `[cship]` section of starship.toml / cship.toml. See https://cship.dev/configuration for field docs.",
+  "type": "object",
+  "properties": {
+    "cship": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CshipConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "CshipConfig": {
+      "description": "Root configuration for CShip, loaded from the `[cship]` section of `starship.toml`.",
+      "type": "object",
+      "properties": {
+        "lines": {
+          "description": "`lines` array — each element is a format string for one statusline row.\nExample: `[\"$cship.model $git_branch\", \"$cship.cost\"]`",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "description": "Starship-compatible top-level format string. Split on `$line_break` to produce\nmultiple rows. Takes priority over `lines` when both are set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Configuration for the `[cship.model]` section.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CostConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_bar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextBarConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextWindowConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vim": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VimConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffortConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage_limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageLimitsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "peak_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PeakUsageConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "starship_prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StarshipPromptConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccountConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fill": {
+          "description": "Configuration for the `$fill` layout token (`[cship.fill]`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FillConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "description": "Fallback terminal width (columns) used by `$fill` when auto-detection\nfails (e.g. Windows, or the web/desktop app). Auto-detection from the\ncontrolling terminal takes priority when available; this is the next\nfallback before the built-in default of 80.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "width_offset": {
+          "description": "Columns Claude Code reserves around the statusline, subtracted from the\ndetected/configured terminal width to get the usable `$fill` width.\nDefaults to 3 (≈2 on the left, 1 on the right).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "ModelConfig": {
+      "description": "Per-module config fields shared by all native CShip modules.\nThese map to `[cship.model]` in `starship.toml`.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "When `true`, prepends the module name as a label.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "haiku_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sonnet_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "opus_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "family_style": {
+          "description": "Generic per-family styles, keyed by substring to match against `model.id`\n(fallback: `display_name`). Lets users style new model families (e.g. `fable`)\nwithout a cship code change.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CostConfig": {
+      "description": "Configuration for `[cship.cost]` — convenience alias for total cost display.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Reserved — not yet rendered; included for config schema consistency with other modules.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "warn_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "warn_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "critical_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "currency_symbol": {
+          "description": "Currency symbol to display instead of `$`. Defaults to `$`.\nExample: `\"£\"` or `\"€\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conversion_rate": {
+          "description": "Multiplier applied to `total_cost_usd` before display. Defaults to `1.0` (no conversion).\nNote: `warn_threshold` and `critical_threshold` are compared against the converted value\n(`total_cost_usd * conversion_rate`) — configure them in your display currency.\nShould be positive; non-positive values are accepted but produce undefined threshold behavior.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "total_cost_usd": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_duration_ms": {
+          "description": "`total_duration` is an accepted alias — the rendered value is human-readable, not raw ms.\nDefine one or the other in TOML; if both are present, serde uses the last-parsed one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_api_duration_ms": {
+          "description": "`total_api_duration` is an accepted alias — same rationale as `total_duration`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_lines_added": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_lines_removed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SubfieldConfig": {
+      "description": "Unified configuration for individual sub-field modules\n(e.g. `[cship.cost.total_cost_usd]`, `[cship.context_window.used_percentage]`).",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "warn_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "warn_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "critical_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invert_threshold": {
+          "description": "When `true`, fires threshold styles when value is BELOW the threshold.\nUse for decreasing-health indicators like `remaining_percentage` (low = bad).\n\n**Threshold resolution when `invert_threshold = true`:**\n- `warn_threshold`, `warn_style`, `critical_threshold`, and `critical_style` are resolved\n  from **this sub-field config only** — parent [`ContextWindowConfig`] values are NOT\n  inherited. Rationale: parent thresholds live in the non-inverted domain (high = bad),\n  while this sub-field treats low as bad. Inheriting parent thresholds would invert the\n  semantics incorrectly.\n- Base `style` **still falls back to the parent** [`ContextWindowConfig`]`.style` when not\n  set on the sub-field. The style fallback is domain-independent and safe to inherit.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "ContextBarConfig": {
+      "description": "Configuration for `[cship.context_bar]` — visual progress bar with thresholds.\nImplemented in Story 2.2. Defined here so all Epic 2 config is available.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "warn_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "warn_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "critical_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "empty_style": {
+          "description": "Style applied when rendering the bar at 0% due to absent context data.\nExample: `\"dim\"` to visually distinguish the empty state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filled_char": {
+          "description": "Character used for filled (used) slots. Defaults to `\"█\"`.\nExample: `\"●\"` for filled circles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "empty_char": {
+          "description": "Character used for empty (unused) slots. Defaults to `\"░\"`.\nExample: `\"○\"` for hollow circles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ContextWindowConfig": {
+      "description": "Configuration for `[cship.context_window]` sub-field modules.\nImplemented in Story 2.2. Defined here so all Epic 2 config is available.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "warn_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "warn_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "critical_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "used_percentage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remaining_percentage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_input_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_output_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_usage_input_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_usage_output_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_usage_cache_creation_input_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_usage_cache_read_input_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "used_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubfieldConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "VimConfig": {
+      "description": "Configuration for `[cship.vim]` — vim mode display.\nImplemented in Story 2.3. Defined here so all Epic 2 config is available.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "normal_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "insert_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "AgentConfig": {
+      "description": "Configuration for `[cship.agent]` — agent name display.\nImplemented in Story 2.3. Defined here so all Epic 2 config is available.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "EffortConfig": {
+      "description": "Configuration for `[cship.effort]` — reasoning effort level display.\n\nPer-level styles (`low_style`, `medium_style`, …) are matched against the\neffort level (`low`/`medium`/`high`/`xhigh`/`max`); each falls back to the\nbase `style` when unset, mirroring `[cship.model]`'s per-family styles.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "low_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "medium_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "high_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "xhigh_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SessionConfig": {
+      "description": "Configuration for session identity modules (cwd, session_id, transcript_path, etc.).\nImplemented in Story 2.4. Defined here so all Epic 2 config is available.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "WorkspaceConfig": {
+      "description": "Configuration for workspace modules (workspace.current_dir, workspace.project_dir).\nImplemented in Story 2.4. Defined here so all Epic 2 config is available.",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "UsageLimitsConfig": {
+      "description": "Configuration for `[cship.usage_limits]`.\nStory 5.1 defines the struct; Stories 5.2 and 5.3 implement the render logic.",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "warn_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "warn_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "critical_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ttl": {
+          "description": "Cache refresh interval in seconds. Default: 60.\nIncrease to reduce API pressure with many concurrent sessions.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "format": {
+          "description": "Reserved — not yet rendered. Use `five_hour_format`, `seven_day_format`,\nand `separator` for per-section format control.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "five_hour_format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seven_day_format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "separator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "show_per_model": {
+          "description": "When `true`, `$cship.usage_limits` appends per-model breakdowns (opus, sonnet,\ncowork, oauth_apps) to the default `5h | 7d` output. The extra-usage section\nrenders unconditionally whenever the account has extra-usage data enabled.\nDefaults to `false` to preserve the pre-7.2 output shape `\"5h: X% | 7d: X%\"`.\nUsers who want the richer output set `show_per_model = true`, or reference the\ndedicated tokens (`$cship.usage_limits.opus`, `.sonnet`, etc.) directly — those\ntokens always render regardless of this flag.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "extra_usage_format": {
+          "description": "Format string for extra usage display. Shown when extra_usage.is_enabled is true.\nPlaceholders: {active}, {pct}, {used}, {limit}, {remaining_credits}\n`{pct}` is the integer percentage of extra-usage budget consumed; `{used}`,\n`{limit}`, and `{remaining_credits}` render as dollar amounts with two\ndecimal places (the API reports cents; cship divides by 100 for display).\n`{remaining_credits}` is named distinctly from the percentage-based `{remaining}`\nused in other format strings to avoid silent misinterpretation.\nDefault: \"{active} extra: {pct}% (${used}/${limit})\"",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "opus_format": {
+          "description": "Format string for 7-day Opus breakdown. Shown when API returns non-null data.\nPlaceholders: {pct}, {reset}, {remaining}, {pace}\nDefault: \"opus {pct}%\"",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sonnet_format": {
+          "description": "Format string for 7-day Sonnet breakdown.\nPlaceholders: {pct}, {reset}, {remaining}, {pace}\nDefault: \"sonnet {pct}%\"",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cowork_format": {
+          "description": "Format string for 7-day Cowork breakdown.\nPlaceholders: {pct}, {reset}, {remaining}, {pace}\nDefault: \"cowork {pct}%\"",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oauth_apps_format": {
+          "description": "Format string for 7-day OAuth apps breakdown.\nPlaceholders: {pct}, {reset}, {remaining}, {pace}\nDefault: \"oauth {pct}%\"",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PeakUsageConfig": {
+      "description": "Configuration for `[cship.peak_usage]` — peak-time indicator.\nShows when Anthropic's peak-time rate limiting is likely active\nbased on current time relative to US Pacific business hours.",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_hour": {
+          "description": "Start of peak window in US Pacific time (0–23). Default: 7.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "end_hour": {
+          "description": "End of peak window in US Pacific time, exclusive (0–24). Default: 17.\nUse 24 to mean \"through end of day\" (e.g., `start_hour = 0, end_hour = 24` = all day).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "StarshipPromptConfig": {
+      "description": "Configuration for `[cship.starship_prompt]` — renders full starship prompt as a token.",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "AccountConfig": {
+      "description": "Configuration for `[cship.account]` — displays the currently authenticated Anthropic account.\n\nSources account + organization metadata from the `/api/oauth/profile` endpoint so users\ncan see whether they're on their work or personal Claude account at a glance. Opt-in\nlabel mapping lets users hide raw org names / emails behind friendly labels.\n\n## Format placeholders\n- `{label}` — resolved user label (from `labels` map, keyed by organization name).\n  Falls back to `{organization}` when no mapping matches.\n- `{organization}` — raw organization `name` from the API (e.g. `\"Fulcrum Genomics\"`).\n- `{display_name}` — account `display_name` (e.g. `\"Nils\"`).\n- `{email}` — account `email` (PII; opt in explicitly).\n- `{tier}` — organization `rate_limit_tier` (e.g. `\"default_claude_max_5x\"`).\n- `{type}` — organization `organization_type` (e.g. `\"claude_team\"`, `\"personal\"`).",
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ttl": {
+          "description": "Cache TTL in seconds. Default: 86400 (24 hours). Profile data rarely changes.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "labels": {
+          "description": "Opt-in mapping from raw organization name → user-friendly label.\nExample: `{ \"Fulcrum Genomics\" = \"work\", \"Personal Workspace\" = \"personal\" }`\nWhen a rendered value uses `{label}` and this map is absent or doesn't contain\nthe organization, the raw organization name is used instead.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "FillConfig": {
+      "description": "Configuration for the `$fill` layout token (`[cship.fill]`).\n\nMirrors Starship's `[fill]` module: `$fill` expands to fill the remaining\nhorizontal space with `symbol`. Multiple `$fill` tokens on one line split the\nspace evenly, so the content after the last `$fill` is right-aligned.",
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "description": "Character used to fill the gap. Defaults to `\".\"` (matching Starship).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "style": {
+          "description": "Style applied to the fill characters. Defaults to `\"bold black\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "description": "When `true`, the `$fill` token itself renders as nothing. Any literal\nspaces written around it in the format string still remain.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
