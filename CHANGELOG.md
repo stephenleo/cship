@@ -4,9 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [1.8.1] - 2026-08-04
 
 ### Added
+- Published a JSON Schema for the `[cship]` config section at [https://cship.dev/config-schema.json](https://cship.dev/config-schema.json), giving editors autocomplete and validation for `cship.toml` / `starship.toml` via `"$schema" = 'https://cship.dev/config-schema.json'`. A `cship config-schema` subcommand emits the same schema locally ([#197](https://github.com/stephenleo/cship/pull/197), issue [#196](https://github.com/stephenleo/cship/issues/196))
+- Added the `family_style` map to `cship.model`, so model families cship does not hardcode (e.g. Fable) can be styled through config alone. Matching is case-insensitive, the longest matching key wins on overlap, and empty keys are ignored with a warn-once diagnostic. The legacy `haiku_style` / `sonnet_style` / `opus_style` entries still take priority ([#195](https://github.com/stephenleo/cship/pull/195))
 - Added the `$fill` layout token (`[cship.fill]`), mirroring Starship's `fill` module: it expands to fill the remaining width and right-aligns following content, with multiple `$fill` on a line splitting the space evenly. Configurable `symbol` / `style` / `disabled`. Because Claude Code does not expose the terminal width to statusline commands ([claude-code#22115](https://github.com/anthropics/claude-code/issues/22115)), width is recovered best-effort by reading the controlling terminal of an ancestor process on macOS/Linux, with a `[cship] width` → `80` fallback (and a `[cship] width_offset`, default 3, for the reserved margin). Windows and the web/desktop apps use the fallback.
 
 ## [1.8.0] - 2026-06-29
