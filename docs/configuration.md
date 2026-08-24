@@ -531,6 +531,16 @@ Displays which Anthropic account the active Claude Code session is signed in to 
 | `{tier}` | Organization rate-limit tier (e.g. `default_claude_max_5x`) |
 | `{type}` | Organization type (e.g. `claude_team`, `personal`) |
 
+**Launcher-provided account (`CSHIP_ACCOUNT`):** Before the OAuth fetch, the module checks the `CSHIP_ACCOUNT` environment variable. When set, it is parsed as compact JSON with the same fields the profile exposes — `organization_name`, `organization_tier`, `organization_type`, `account_display_name`, `account_email` (all optional, non-secret) — and rendered directly, skipping the keychain read and the network call. When absent or unparseable, the module falls back to the OAuth fetch above.
+
+This lets a multi-account launcher supply the account for a session whose token the module can't use: Claude Code strips `CLAUDE_CODE_OAUTH_TOKEN` from the status subprocess, so a launcher that injects a per-session token would otherwise be reported as the last interactive login. The launcher resolves the account at launch (where it holds the token) and passes the non-secret result here — a tool-agnostic contract; a token is never placed in the variable.
+
+Because field values render verbatim, a launcher can also embed ANSI color in them (a different color per profile, or per plan tier) when one fixed `style` isn't enough.
+
+```
+CSHIP_ACCOUNT='{"organization_name":"Acme Corp","organization_tier":"Team","account_display_name":"work"}'
+```
+
 **Prerequisites:** Requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2, install `libsecret-tools` and store your token with `secret-tool`. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, or unreachable API).
 
 ```toml
