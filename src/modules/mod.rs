@@ -57,6 +57,10 @@ pub const ALL_NATIVE_MODULES: &[&str] = &[
     "cship.usage_limits.cowork",
     "cship.usage_limits.oauth_apps",
     "cship.usage_limits.extra_usage",
+    "cship.usage_limits.five_hour",
+    "cship.usage_limits.seven_day",
+    "cship.usage_limits.session",
+    "cship.usage_limits.weekly",
     "cship.peak_usage",
     "cship.account",
 ];
@@ -137,6 +141,12 @@ pub fn render_module(
         "cship.usage_limits.cowork" => usage_limits::render_cowork(ctx, cfg),
         "cship.usage_limits.oauth_apps" => usage_limits::render_oauth_apps(ctx, cfg),
         "cship.usage_limits.extra_usage" => usage_limits::render_extra_usage(ctx, cfg),
+        "cship.usage_limits.five_hour" | "cship.usage_limits.session" => {
+            usage_limits::render_five_hour(ctx, cfg)
+        }
+        "cship.usage_limits.seven_day" | "cship.usage_limits.weekly" => {
+            usage_limits::render_seven_day(ctx, cfg)
+        }
         "cship.peak_usage" => peak_usage::render(ctx, cfg),
         "cship.account" => account::render(ctx, cfg),
         other => {

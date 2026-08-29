@@ -267,21 +267,28 @@ fn error_hint_for(
                         .as_deref()
                         .map(std::path::Path::new)
                         .and_then(|p| crate::cache::read_usage_limits(p, true, None));
-                    let is_per_model_subtoken = matches!(
+                    // Sub-tokens that require a standard 5h/7d signal and so are
+                    // inherently absent on Enterprise (per-window and per-model).
+                    let is_plan_specific_subtoken = matches!(
                         top,
                         "usage_limits.per_model"
                             | "usage_limits.opus"
                             | "usage_limits.sonnet"
                             | "usage_limits.cowork"
                             | "usage_limits.oauth_apps"
+                            | "usage_limits.five_hour"
+                            | "usage_limits.seven_day"
+                            | "usage_limits.session"
+                            | "usage_limits.weekly"
                     );
                     match cached {
                         Some(d)
                             if crate::modules::usage_limits::lacks_standard_signal(&d)
-                                && is_per_model_subtoken =>
+                                && is_plan_specific_subtoken =>
                         {
                             (
-                                "per-model breakdowns are unavailable on this plan".into(),
+                                "the 5h/7d and per-model breakdowns are unavailable on this plan"
+                                    .into(),
                                 "Claude Enterprise reports usage via monthly credits (`extra_usage`) only. Use `$cship.usage_limits` or `$cship.usage_limits.extra_usage` instead.".into(),
                             )
                         }

@@ -1051,6 +1051,29 @@
             "string",
             "null"
           ]
+        },
+        "bar_width": {
+          "description": "Width (in characters) of the `{bar}` placeholder available in\n`five_hour_format` / `seven_day_format` and the per-period tokens\n(`$cship.usage_limits.session`/`.weekly`, a.k.a. `.five_hour`/`.seven_day`).\nDefault: 10.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "bar_filled_char": {
+          "description": "Filled character for the `{bar}` placeholder. Default: \"█\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bar_empty_char": {
+          "description": "Empty character for the `{bar}` placeholder. Default: \"░\".",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

@@ -218,6 +218,70 @@ pub fn render_per_model(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     Some(apply_threshold(&content, &data, cfg))
 }
 
+/// Which standard usage window a per-period token renders.
+enum Period {
+    FiveHour,
+    SevenDay,
+}
+
+/// Render a single standard window (5h or 7d) as its own token, colored by *that
+/// window's* utilization — unlike `$cship.usage_limits`, whose threshold color keys
+/// off `max(5h, 7d)`. This lets `session` and `weekly` sit on separate lines, each
+/// escalating independently. Returns `None` on plans without standard 5h/7d
+/// windows (e.g. Enterprise) — unlike `render`, it does not fall back to the
+/// extra-usage section, since this token is specifically the 5h/7d window.
+fn render_period(ctx: &Context, cfg: &CshipConfig, period: Period) -> Option<String> {
+    let data = resolve_data(ctx, cfg)?;
+    if lacks_standard_signal(&data) {
+        return None;
+    }
+    let default_ul_cfg = UsageLimitsConfig::default();
+    let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
+    let now = now_epoch();
+
+    let (pct, epoch, window_secs, fmt) = match period {
+        Period::FiveHour => (
+            data.five_hour_pct,
+            resolve_epoch(data.five_hour_resets_at_epoch, &data.five_hour_resets_at),
+            FIVE_HOUR_SECS,
+            ul_cfg
+                .five_hour_format
+                .as_deref()
+                .unwrap_or("5h: {pct}% resets in {reset}"),
+        ),
+        Period::SevenDay => (
+            data.seven_day_pct,
+            resolve_epoch(data.seven_day_resets_at_epoch, &data.seven_day_resets_at),
+            SEVEN_DAY_SECS,
+            ul_cfg
+                .seven_day_format
+                .as_deref()
+                .unwrap_or("7d: {pct}% resets in {reset}"),
+        ),
+    };
+
+    let content = format_period_part(fmt, pct, epoch, window_secs, now, ul_cfg);
+    Some(crate::ansi::apply_style_with_threshold(
+        &content,
+        Some(pct),
+        ul_cfg.style.as_deref(),
+        ul_cfg.warn_threshold,
+        ul_cfg.warn_style.as_deref(),
+        ul_cfg.critical_threshold,
+        ul_cfg.critical_style.as_deref(),
+    ))
+}
+
+/// Render only the 5-hour (session) window, colored by its own utilization.
+pub fn render_five_hour(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    render_period(ctx, cfg, Period::FiveHour)
+}
+
+/// Render only the 7-day (weekly) window, colored by its own utilization.
+pub fn render_seven_day(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
+    render_period(ctx, cfg, Period::SevenDay)
+}
+
 /// Render a single model's usage (opus, sonnet, cowork, or oauth).
 fn render_model(
     ctx: &Context,
@@ -356,6 +420,68 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     })
 }
 
+/// Reset-window lengths, used for pace calculation.
+const FIVE_HOUR_SECS: u64 = 18_000;
+const SEVEN_DAY_SECS: u64 = 604_800;
+
+/// Default `{bar}` width in characters when `bar_width` is unset.
+const DEFAULT_BAR_WIDTH: usize = 10;
+
+/// Upper bound on `{bar}` width. A statusline is narrow, and this caps the
+/// string `render_bar` allocates from an over-large `bar_width`.
+const MAX_BAR_WIDTH: usize = 200;
+
+/// Render a proportional Unicode bar for `pct` (0..=100) using the module's bar config.
+///
+/// Mirrors `context_bar`'s fill math (kept in sync deliberately): the fill count
+/// floors via `as usize` truncation (a visual approximation) while the `{pct}` text
+/// rounds. Width is clamped to `MAX_BAR_WIDTH`. Fill/empty glyphs and width are
+/// configurable via `bar_filled_char` / `bar_empty_char` / `bar_width`.
+fn render_bar(pct: f64, cfg: &UsageLimitsConfig) -> String {
+    let width = cfg
+        .bar_width
+        .map(|w| (w as usize).min(MAX_BAR_WIDTH))
+        .unwrap_or(DEFAULT_BAR_WIDTH);
+    let filled = (((pct / 100.0) * width as f64) as usize).min(width);
+    let empty = width - filled;
+    let filled_char = cfg.bar_filled_char.as_deref().unwrap_or("█");
+    let empty_char = cfg.bar_empty_char.as_deref().unwrap_or("░");
+    filled_char.repeat(filled) + &empty_char.repeat(empty)
+}
+
+/// Substitute all per-period placeholders (including `{bar}`) into `fmt`.
+///
+/// `window_secs` is the reset-window length used for the `{pace}` calculation
+/// (`FIVE_HOUR_SECS` for the 5h window, `SEVEN_DAY_SECS` for the 7d window).
+fn format_period_part(
+    fmt: &str,
+    pct: f64,
+    epoch: Option<u64>,
+    window_secs: u64,
+    now: u64,
+    cfg: &UsageLimitsConfig,
+) -> String {
+    let pct_str = format!("{:.0}", pct);
+    let remaining_str = format!("{:.0}", (100.0 - pct).max(0.0));
+    let reset_str = format_reset(epoch, now);
+    let reset_at_str = format_reset_at(epoch, now);
+    let pace_str = format_pace(calculate_pace(pct, epoch, window_secs, now));
+    let out = fmt
+        .replace("{pct}", &pct_str)
+        .replace("{remaining}", &remaining_str)
+        .replace("{reset}", &reset_str)
+        .replace("{reset_at}", &reset_at_str)
+        .replace("{pace}", &pace_str);
+    // Substitute `{bar}` last, and only when referenced: the (potentially large)
+    // bar string is then built solely when needed, and its glyphs are never
+    // re-scanned for the other placeholders.
+    if out.contains("{bar}") {
+        out.replace("{bar}", &render_bar(pct, cfg))
+    } else {
+        out
+    }
+}
+
 /// Format usage data using configurable format strings.
 ///
 /// Placeholders in format strings (all occurrences are substituted):
@@ -364,6 +490,7 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
 /// - `{reset}` — time-until-reset string (e.g. `"4h12m"`)
 /// - `{reset_at}` — absolute local reset time (e.g. `"7:42 PM"` or `"Mon 9:00 AM"`)
 /// - `{pace}` — signed pace string (e.g. `"+20%"`, `"-15%"`, `"?"`)
+/// - `{bar}` — proportional Unicode bar for this period (e.g. `"████░░░░░░"`)
 ///
 /// Per-model breakdowns (opus, sonnet, cowork, oauth_apps) are appended when
 /// the API returns non-null data. Extra usage is appended when enabled.
@@ -376,33 +503,8 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
     let sep = cfg.separator.as_deref().unwrap_or(" | ");
     let now = now_epoch();
 
-    const FIVE_HOUR_SECS: u64 = 18_000;
-    const SEVEN_DAY_SECS: u64 = 604_800;
-
     let five_h_epoch = resolve_epoch(data.five_hour_resets_at_epoch, &data.five_hour_resets_at);
     let seven_d_epoch = resolve_epoch(data.seven_day_resets_at_epoch, &data.seven_day_resets_at);
-
-    let five_h_pct = format!("{:.0}", data.five_hour_pct);
-    let five_h_remaining = format!("{:.0}", (100.0 - data.five_hour_pct).max(0.0));
-    let five_h_reset = format_reset(five_h_epoch, now);
-    let five_h_reset_at = format_reset_at(five_h_epoch, now);
-    let five_h_pace = format_pace(calculate_pace(
-        data.five_hour_pct,
-        five_h_epoch,
-        FIVE_HOUR_SECS,
-        now,
-    ));
-
-    let seven_d_pct = format!("{:.0}", data.seven_day_pct);
-    let seven_d_remaining = format!("{:.0}", (100.0 - data.seven_day_pct).max(0.0));
-    let seven_d_reset = format_reset(seven_d_epoch, now);
-    let seven_d_reset_at = format_reset_at(seven_d_epoch, now);
-    let seven_d_pace = format_pace(calculate_pace(
-        data.seven_day_pct,
-        seven_d_epoch,
-        SEVEN_DAY_SECS,
-        now,
-    ));
 
     let five_h_fmt = cfg
         .five_hour_format
@@ -413,18 +515,22 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
         .as_deref()
         .unwrap_or("7d: {pct}% resets in {reset}");
 
-    let five_h_part = five_h_fmt
-        .replace("{pct}", &five_h_pct)
-        .replace("{remaining}", &five_h_remaining)
-        .replace("{reset}", &five_h_reset)
-        .replace("{reset_at}", &five_h_reset_at)
-        .replace("{pace}", &five_h_pace);
-    let seven_d_part = seven_d_fmt
-        .replace("{pct}", &seven_d_pct)
-        .replace("{remaining}", &seven_d_remaining)
-        .replace("{reset}", &seven_d_reset)
-        .replace("{reset_at}", &seven_d_reset_at)
-        .replace("{pace}", &seven_d_pace);
+    let five_h_part = format_period_part(
+        five_h_fmt,
+        data.five_hour_pct,
+        five_h_epoch,
+        FIVE_HOUR_SECS,
+        now,
+        cfg,
+    );
+    let seven_d_part = format_period_part(
+        seven_d_fmt,
+        data.seven_day_pct,
+        seven_d_epoch,
+        SEVEN_DAY_SECS,
+        now,
+        cfg,
+    );
 
     let mut parts: Vec<String> = vec![five_h_part, seven_d_part];
 
@@ -926,6 +1032,201 @@ mod tests {
             result.contains('\x1b'),
             "expected ANSI codes for critical: {result:?}"
         );
+    }
+
+    // ── {bar} placeholder + per-period token tests ───────────────────────────
+
+    #[test]
+    fn test_render_bar_fills_proportionally() {
+        let cfg = UsageLimitsConfig::default();
+        assert_eq!(render_bar(0.0, &cfg), "░░░░░░░░░░");
+        assert_eq!(render_bar(50.0, &cfg), "█████░░░░░");
+        assert_eq!(render_bar(100.0, &cfg), "██████████");
+    }
+
+    #[test]
+    fn test_render_bar_clamps_and_floors() {
+        let cfg = UsageLimitsConfig::default();
+        // Over 100 must not overflow the width.
+        assert_eq!(render_bar(150.0, &cfg), "██████████");
+        // 99.5% floors to 9 filled (visual approximation), not 10.
+        assert_eq!(render_bar(99.5, &cfg), "█████████░");
+    }
+
+    #[test]
+    fn test_render_bar_custom_width_and_chars() {
+        let cfg = UsageLimitsConfig {
+            bar_width: Some(4),
+            bar_filled_char: Some("#".to_string()),
+            bar_empty_char: Some("-".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(render_bar(50.0, &cfg), "##--");
+    }
+
+    #[test]
+    fn test_format_period_part_substitutes_bar() {
+        let cfg = UsageLimitsConfig {
+            bar_width: Some(10),
+            ..Default::default()
+        };
+        let out = format_period_part("5h {bar} {pct}%", 40.0, None, FIVE_HOUR_SECS, 0, &cfg);
+        assert_eq!(out, "5h ████░░░░░░ 40%");
+    }
+
+    /// Builds a Context whose stdin rate_limits carry the given 5h/7d percentages.
+    fn ctx_with_pcts(five: f64, seven: f64) -> (tempfile::TempDir, Context) {
+        use crate::context::{RateLimitPeriod, RateLimits};
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("test.jsonl");
+        let ctx = Context {
+            transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: Some(RateLimits {
+                five_hour: Some(RateLimitPeriod {
+                    used_percentage: Some(five),
+                    resets_at: Some(9_999_999_999),
+                }),
+                seven_day: Some(RateLimitPeriod {
+                    used_percentage: Some(seven),
+                    resets_at: Some(9_999_999_999),
+                }),
+            }),
+            ..Default::default()
+        };
+        (dir, ctx)
+    }
+
+    /// A per-period token is colored by its OWN percentage, not `max(5h, 7d)`:
+    /// with 5h high and 7d low, the 5h token escalates while the 7d token stays base.
+    #[test]
+    fn test_per_period_tokens_color_independently() {
+        let (_dir, ctx) = ctx_with_pcts(85.0, 20.0);
+        let cfg = CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                // base style unset → below-threshold periods render without ANSI
+                warn_threshold: Some(50.0),
+                warn_style: Some("bold".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let five = render_five_hour(&ctx, &cfg).unwrap();
+        let seven = render_seven_day(&ctx, &cfg).unwrap();
+        assert!(
+            five.contains('\x1b'),
+            "5h at 85% should be styled (warn): {five:?}"
+        );
+        assert!(
+            !seven.contains('\x1b'),
+            "7d at 20% should be unstyled despite high 5h: {seven:?}"
+        );
+    }
+
+    /// `session`/`weekly` are aliases of `five_hour`/`seven_day`.
+    #[test]
+    fn test_period_token_aliases_match() {
+        let (_dir, ctx) = ctx_with_pcts(42.0, 38.0);
+        let cfg = CshipConfig {
+            usage_limits: Some(UsageLimitsConfig::default()),
+            ..Default::default()
+        };
+        let five = crate::modules::render_module("cship.usage_limits.five_hour", &ctx, &cfg);
+        let session = crate::modules::render_module("cship.usage_limits.session", &ctx, &cfg);
+        let seven = crate::modules::render_module("cship.usage_limits.seven_day", &ctx, &cfg);
+        let weekly = crate::modules::render_module("cship.usage_limits.weekly", &ctx, &cfg);
+        assert_eq!(five, session);
+        assert_eq!(seven, weekly);
+        assert!(five.is_some() && seven.is_some());
+    }
+
+    /// `{bar}` is substituted inside the combined `$cship.usage_limits` output too,
+    /// not only the standalone per-window tokens.
+    #[test]
+    fn test_bar_substituted_in_combined_render() {
+        let (_dir, ctx) = ctx_with_pcts(50.0, 0.0);
+        let cfg = CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                five_hour_format: Some("5h {bar}".to_string()),
+                seven_day_format: Some("7d {bar}".to_string()),
+                bar_width: Some(10),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let out = render(&ctx, &cfg).unwrap();
+        // 5h at 50% → half-filled; 7d at 0% → empty. Pins each window's own pct.
+        assert!(
+            out.contains("5h █████░░░░░"),
+            "5h bar must reflect 50%: {out:?}"
+        );
+        assert!(
+            out.contains("7d ░░░░░░░░░░"),
+            "7d bar must reflect 0%: {out:?}"
+        );
+    }
+
+    /// `{bar}` is a per-window placeholder only: the per-model and extra-usage
+    /// formatters leave it literal (docs make this exact negative claim).
+    #[test]
+    fn test_bar_not_substituted_in_per_model_or_extra() {
+        use crate::usage_limits::UsageLimitsData;
+        // Per-model formatter.
+        let opus = format_single_model("opus", Some(40.0), &None, Some("opus {bar} {pct}%"))
+            .expect("opus pct present");
+        assert!(
+            opus.contains("{bar}") && opus.contains("40%"),
+            "opus_format must not expand {{bar}}: {opus:?}"
+        );
+        // Extra-usage formatter.
+        let data = UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_utilization: Some(25.0),
+            extra_usage_used_credits: Some(500.0),
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig {
+            extra_usage_format: Some("extra {bar} {pct}%".to_string()),
+            ..Default::default()
+        };
+        let extra = format_extra_usage(&data, &cfg).expect("extra usage enabled");
+        assert!(
+            extra.contains("{bar}"),
+            "extra_usage_format must not expand {{bar}}: {extra:?}"
+        );
+    }
+
+    #[test]
+    fn test_render_bar_zero_width_is_empty() {
+        let cfg = UsageLimitsConfig {
+            bar_width: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(render_bar(50.0, &cfg), "");
+    }
+
+    #[test]
+    fn test_render_bar_clamps_oversized_width() {
+        let cfg = UsageLimitsConfig {
+            bar_width: Some(1_000_000),
+            ..Default::default()
+        };
+        // Width is capped at MAX_BAR_WIDTH regardless of the configured value.
+        assert_eq!(render_bar(100.0, &cfg).chars().count(), MAX_BAR_WIDTH);
+    }
+
+    /// Enterprise-style plans (no standard 5h/7d signal) yield no per-period token.
+    #[test]
+    fn test_per_period_tokens_none_without_standard_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("test.jsonl");
+        let ctx = Context {
+            transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            rate_limits: None,
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+        assert!(render_seven_day(&ctx, &cfg).is_none());
     }
 
     // ── apply_threshold() extra_usage fallback tests ─────────────────────────
