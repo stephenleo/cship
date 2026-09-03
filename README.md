@@ -79,6 +79,14 @@ After installing with `cargo` on **Windows**, wire the statusline manually in `%
 }
 ```
 
+## 📦 Method 3: X-CMD install
+
+[x-cmd](https://www.x-cmd.com/) is a modern Shell toolkit that gives AI agents and developers powerful, portable, and composable command-line capabilities.
+
+```sh
+x eget use stephenleo/cship
+```
+
 ## ⚙️ Configuration
 
 - The default config file is `~/.config/cship.toml` (on Windows: `%USERPROFILE%\.config\cship.toml`).
