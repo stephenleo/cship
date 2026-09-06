@@ -6,13 +6,18 @@
 //!
 //! Render flow:
 //! 1. Check `disabled` flag → silent `None`
-//! 2. Read `transcript_path` for cache keying
-//! 3. Read OAuth token up front → compute fingerprint for cache identity
-//! 4. Cache hit (fingerprint must match) → render immediately
-//! 5. Cache miss → fetch via spawned thread with 2s timeout
-//! 6. On timeout, fall back to stale cache (still fingerprint-gated)
-//! 7. Format output (default or user-defined format string)
-//! 8. Apply style
+//! 2. Resolve the account profile via [`resolve_profile`] — preferring a
+//!    launcher-provided account from the `CSHIP_ACCOUNT` env var, else the
+//!    keychain token → OAuth `/api/oauth/profile` fetch (fingerprint-gated and cached)
+//! 3. Format output (default or user-defined format string)
+//! 4. Apply style
+//!
+//! The `CSHIP_ACCOUNT` path exists because a multi-account launcher can
+//! authenticate the session with an injected token that Claude Code strips from
+//! this statusline subprocess. The keychain path then reports the wrong
+//! (last-interactive) account. Such a launcher instead resolves the account at
+//! launch and passes it in `CSHIP_ACCOUNT` (compact non-secret JSON of the same
+//! shape as [`AccountProfile`]); this module simply renders it. Never a token.
 //!
 //! The OAuth token is never written to disk, stdout, or cache (NFR-S1/S3).
 
@@ -20,6 +25,10 @@ use crate::account::AccountProfile;
 use crate::cache;
 use crate::config::{AccountConfig, CshipConfig};
 use crate::context::Context;
+
+/// Env var a launcher may set to the current session's account as compact JSON
+/// (the [`AccountProfile`] shape). Preferred over the keychain/OAuth path.
+const ACCOUNT_ENV_VAR: &str = "CSHIP_ACCOUNT";
 
 /// Default format string — renders the resolved label (org name or mapped alias).
 const DEFAULT_FORMAT: &str = "{label}";
@@ -36,11 +45,61 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         return None;
     }
 
-    // Step 2: transcript_path is required for cache keying
+    // Step 2: resolve the account (CSHIP_ACCOUNT env var first, else keychain/OAuth).
+    let profile = resolve_profile(ctx, account_cfg)?;
+
+    // Step 3: build formatted output
+    let default_cfg = AccountConfig::default();
+    let cfg_ref = account_cfg.unwrap_or(&default_cfg);
+    let fmt = cfg_ref.format.as_deref().unwrap_or(DEFAULT_FORMAT);
+    let content = format_output(fmt, &profile, cfg_ref)?;
+
+    // Step 4: apply style (threshold styling not meaningful for account names)
+    let symbol = cfg_ref.symbol.as_deref().unwrap_or("");
+    let styled = crate::ansi::apply_style(&format!("{symbol}{content}"), cfg_ref.style.as_deref());
+    Some(styled)
+}
+
+/// Parse the launcher-provided account from [`ACCOUNT_ENV_VAR`], if present and
+/// well-formed. Returns `None` when the var is unset, empty, or not valid JSON —
+/// so the caller cleanly falls back to the keychain/OAuth path. The value is
+/// non-secret account identity only (never a token).
+fn account_from_env() -> Option<AccountProfile> {
+    parse_account_env(&std::env::var(ACCOUNT_ENV_VAR).ok()?)
+}
+
+/// Parse the `CSHIP_ACCOUNT` payload. Split from env access so the JSON contract
+/// is unit-testable. `None` for empty or malformed input (→ keychain fallback).
+fn parse_account_env(raw: &str) -> Option<AccountProfile> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    match serde_json::from_str::<AccountProfile>(raw) {
+        Ok(profile) => Some(profile),
+        Err(e) => {
+            tracing::warn!("cship.account: {ACCOUNT_ENV_VAR} set but not parseable: {e}");
+            None
+        }
+    }
+}
+
+/// Resolve the account profile to display, in preference order:
+///
+/// 1. The **`CSHIP_ACCOUNT` env var** — a launcher that injected a session token
+///    this subprocess cannot see resolves the account at launch and passes it here
+///    as compact JSON. No keychain read, no network call.
+/// 2. The **keychain token → OAuth `/api/oauth/profile`** fetch (fingerprint-gated
+///    and cached), which is correct for a plain `claude` with no launcher.
+fn resolve_profile(ctx: &Context, account_cfg: Option<&AccountConfig>) -> Option<AccountProfile> {
+    // Preference 1: launcher-provided account via env (tool-agnostic contract).
+    if let Some(profile) = account_from_env() {
+        return Some(profile);
+    }
+
+    // Preference 2: keychain token → OAuth fetch, with fingerprint-gated cache.
     let transcript_str = ctx.transcript_path.as_deref()?;
     let transcript_path = std::path::Path::new(transcript_str);
 
-    // Step 3: read OAuth token up front for fingerprint (cache identity check)
     let token = match crate::platform::get_oauth_token() {
         Ok(t) => t,
         Err(e) => {
@@ -50,34 +109,20 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     };
     let fp = crate::platform::token_fingerprint(&token);
 
-    // Step 4: cache hit (fingerprint must match) → render immediately
-    let profile =
-        if let Some(cached) = cache::read_account_profile(transcript_path, false, Some(&fp)) {
-            cached
-        } else {
-            // Step 5: cache miss → OAuth fetch with timeout
-            let ttl_secs = account_cfg.and_then(|c| c.ttl).unwrap_or(DEFAULT_TTL_SECS);
-            match super::fetch_with_timeout("cship.account", move || {
-                crate::account::fetch_account_profile(&token)
-            }) {
-                Some(fresh) => {
-                    cache::write_account_profile(transcript_path, &fresh, ttl_secs, Some(&fp));
-                    fresh
-                }
-                None => cache::read_account_profile(transcript_path, true, Some(&fp))?,
-            }
-        };
+    if let Some(cached) = cache::read_account_profile(transcript_path, false, Some(&fp)) {
+        return Some(cached);
+    }
 
-    // Step 6: build formatted output
-    let default_cfg = AccountConfig::default();
-    let cfg_ref = account_cfg.unwrap_or(&default_cfg);
-    let fmt = cfg_ref.format.as_deref().unwrap_or(DEFAULT_FORMAT);
-    let content = format_output(fmt, &profile, cfg_ref)?;
-
-    // Step 7: apply style (threshold styling not meaningful for account names)
-    let symbol = cfg_ref.symbol.as_deref().unwrap_or("");
-    let styled = crate::ansi::apply_style(&format!("{symbol}{content}"), cfg_ref.style.as_deref());
-    Some(styled)
+    let ttl_secs = account_cfg.and_then(|c| c.ttl).unwrap_or(DEFAULT_TTL_SECS);
+    match super::fetch_with_timeout("cship.account", move || {
+        crate::account::fetch_account_profile(&token)
+    }) {
+        Some(fresh) => {
+            cache::write_account_profile(transcript_path, &fresh, ttl_secs, Some(&fp));
+            Some(fresh)
+        }
+        None => cache::read_account_profile(transcript_path, true, Some(&fp)),
+    }
 }
 
 /// Substitute placeholders in `fmt` using fields from `profile` and optional labels map.
@@ -152,6 +197,21 @@ mod tests {
         let cfg = AccountConfig::default();
         let out = format_output(DEFAULT_FORMAT, &profile(), &cfg).unwrap();
         assert_eq!(out, "Fulcrum Genomics");
+    }
+
+    #[test]
+    fn test_parse_account_env_reads_launcher_json() {
+        let raw = r#"{"organization_name":"FG Partners","organization_tier":"tier_x","organization_type":"claude_team","account_display_name":"partners"}"#;
+        let parsed = parse_account_env(raw).expect("valid CSHIP_ACCOUNT parses");
+        assert_eq!(parsed.organization_name.as_deref(), Some("FG Partners"));
+        assert_eq!(parsed.organization_tier.as_deref(), Some("tier_x"));
+    }
+
+    #[test]
+    fn test_parse_account_env_rejects_empty_and_malformed() {
+        assert!(parse_account_env("").is_none());
+        assert!(parse_account_env("   ").is_none());
+        assert!(parse_account_env("{not json").is_none());
     }
 
     #[test]
