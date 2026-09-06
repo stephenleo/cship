@@ -784,22 +784,21 @@ mod tests {
         let _ = asserted_at_least_once;
     }
 
+    /// Both `CSHIP_ACCOUNT` cases live in one test: `set_var` is process-global,
+    /// so two tests mutating it run concurrently on cargo's worker threads and
+    /// clobber each other (this raced on Windows CI). One test = sequential.
+    /// ponytail: unsafe because `std::env::set_var` is process-global; scoped
+    /// tightly around the two `error_hint_for` calls that need it.
     #[test]
-    fn test_error_hint_account_malformed_env_names_env_as_cause() {
-        // No other test in this file touches CSHIP_ACCOUNT, so set/unset here
-        // doesn't race with a sibling test's own use of the var.
-        // ponytail: unsafe because std::env::set_var is process-global; scoped
-        // tightly around the single assertion this test needs.
+    fn test_error_hint_account_env_var_cases() {
+        let ctx = crate::context::Context::default();
+        let cfg = crate::config::CshipConfig::default();
+
+        // Set-but-unparseable CSHIP_ACCOUNT is named as the root cause.
         unsafe {
             std::env::set_var("CSHIP_ACCOUNT", "{not json");
         }
-        let ctx = crate::context::Context::default();
-        let cfg = crate::config::CshipConfig::default();
         let (error, remediation) = error_hint_for("account", &ctx, &cfg);
-        unsafe {
-            std::env::remove_var("CSHIP_ACCOUNT");
-        }
-
         assert!(
             error.contains("CSHIP_ACCOUNT"),
             "expected CSHIP_ACCOUNT named as the cause, got: {error}"
@@ -808,22 +807,16 @@ mod tests {
             remediation.contains("CSHIP_ACCOUNT"),
             "expected remediation to mention CSHIP_ACCOUNT, got: {remediation}"
         );
-    }
 
-    #[test]
-    fn test_error_hint_account_empty_env_falls_back_to_credential_probe() {
         // Empty CSHIP_ACCOUNT must not trigger the malformed-env hint; it
         // falls through to the normal credential probe.
         unsafe {
             std::env::set_var("CSHIP_ACCOUNT", "   ");
         }
-        let ctx = crate::context::Context::default();
-        let cfg = crate::config::CshipConfig::default();
         let (error, _) = error_hint_for("account", &ctx, &cfg);
         unsafe {
             std::env::remove_var("CSHIP_ACCOUNT");
         }
-
         assert!(
             !error.contains("CSHIP_ACCOUNT"),
             "empty CSHIP_ACCOUNT should not be reported as malformed, got: {error}"
