@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.8.2] - 2026-09-06
+
+### Added
+- Added `$cship.usage_limits.session` and `$cship.usage_limits.weekly` tokens (aliases `.five_hour` / `.seven_day`) that render a single standard window colored by that window's own utilization, rather than `max(5h, 7d)` as `$cship.usage_limits` does, so the session and weekly limits can live on separate lines and escalate independently. Each per-window format string also accepts a `{bar}` placeholder with `bar_width` / `bar_filled_char` / `bar_empty_char` config, mirroring `context_bar` ([#202](https://github.com/stephenleo/cship/pull/202))
+- Added the `CSHIP_ACCOUNT` environment variable as a higher-priority account source: a compact JSON payload matching the account profile shape. Multi-account launchers that inject a per-session OAuth token can pass the resolved identity here instead of relying on the keychain path, which reports the last interactive login. Falls back to the keychain/OAuth path when the variable is absent or malformed. Non-secret identity only; never a token ([#201](https://github.com/stephenleo/cship/pull/201))
+
+### Fixed
+- `cship explain` now checks `CSHIP_ACCOUNT` first in the `account` hint, so a set-but-unparseable value is reported as the cause instead of the misleading "no credential found" / re-authenticate hint. A set-but-empty `CSHIP_ACCOUNT` now warns instead of failing silently ([#204](https://github.com/stephenleo/cship/pull/204))
+
 ## [1.8.1] - 2026-08-04
 
 ### Added
