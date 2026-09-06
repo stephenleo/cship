@@ -70,8 +70,9 @@ fn account_from_env() -> Option<AccountProfile> {
 
 /// Parse the `CSHIP_ACCOUNT` payload. Split from env access so the JSON contract
 /// is unit-testable. `None` for empty or malformed input (→ keychain fallback).
-fn parse_account_env(raw: &str) -> Option<AccountProfile> {
+pub(crate) fn parse_account_env(raw: &str) -> Option<AccountProfile> {
     if raw.trim().is_empty() {
+        tracing::warn!("cship.account: {ACCOUNT_ENV_VAR} set but empty");
         return None;
     }
     match serde_json::from_str::<AccountProfile>(raw) {
@@ -209,6 +210,8 @@ mod tests {
 
     #[test]
     fn test_parse_account_env_rejects_empty_and_malformed() {
+        // Both cases return None (fall back to keychain); tracing::warn! fires for
+        // both since a set-but-unusable CSHIP_ACCOUNT is worth surfacing.
         assert!(parse_account_env("").is_none());
         assert!(parse_account_env("   ").is_none());
         assert!(parse_account_env("{not json").is_none());

@@ -507,7 +507,7 @@ specific diagnostics.
 
 ## `[cship.account]` — Authenticated Account
 
-Displays which Anthropic account the active Claude Code session is signed in to — handy for telling work and personal accounts apart at a glance. Profile data is fetched once from the OAuth `/api/oauth/profile` endpoint and cached for 24 hours (the profile rarely changes). The OAuth token is held only for the duration of the fetch — never written to disk, cache, stdout, or stderr.
+Displays which Anthropic account the active Claude Code session is signed in to — handy for telling work and personal accounts apart at a glance. Unless `CSHIP_ACCOUNT` is set (see below), profile data is fetched once from the OAuth `/api/oauth/profile` endpoint and cached for 24 hours (the profile rarely changes). The OAuth token is held only for the duration of the fetch — never written to disk, cache, stdout, or stderr.
 
 **Token:** `$cship.account`
 
@@ -541,7 +541,7 @@ Because field values render verbatim, a launcher can also embed ANSI color in th
 CSHIP_ACCOUNT='{"organization_name":"Acme Corp","organization_tier":"Team","account_display_name":"work"}'
 ```
 
-**Prerequisites:** Requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2, install `libsecret-tools` and store your token with `secret-tool`. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, or unreachable API).
+**Prerequisites:** Unless `CSHIP_ACCOUNT` is set, requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2, install `libsecret-tools` and store your token with `secret-tool`. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, unreachable API, or a malformed `CSHIP_ACCOUNT` value).
 
 ```toml
 [cship.account]
