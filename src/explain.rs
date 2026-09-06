@@ -307,6 +307,18 @@ fn error_hint_for(
             }
         }
         "account" => {
+            // CSHIP_ACCOUNT takes priority over the keychain in the render path
+            // (see modules::account::resolve_profile), so a set-but-unparseable
+            // value is the real root cause here, not a missing/expired credential.
+            if let Ok(raw) = std::env::var("CSHIP_ACCOUNT")
+                && !raw.trim().is_empty()
+                && crate::modules::account::parse_account_env(&raw).is_none()
+            {
+                return (
+                    "account returned no data — CSHIP_ACCOUNT is set but not valid JSON".into(),
+                    "Check the CSHIP_ACCOUNT value passed by your launcher; it must be compact JSON matching the account profile shape (e.g. organization_name, account_display_name).".into(),
+                );
+            }
             // The account module renders nothing when the OAuth credential is
             // missing/malformed, or when it is present but the profile fetch
             // failed (and no fingerprint-matching stale cache is available).
@@ -763,5 +775,51 @@ mod tests {
         // If every iteration's OAuth probe was unreliable, the test is
         // a no-op — same trade-off as the sibling test above.
         let _ = asserted_at_least_once;
+    }
+
+    #[test]
+    fn test_error_hint_account_malformed_env_names_env_as_cause() {
+        // No other test in this file touches CSHIP_ACCOUNT, so set/unset here
+        // doesn't race with a sibling test's own use of the var.
+        // ponytail: unsafe because std::env::set_var is process-global; scoped
+        // tightly around the single assertion this test needs.
+        unsafe {
+            std::env::set_var("CSHIP_ACCOUNT", "{not json");
+        }
+        let ctx = crate::context::Context::default();
+        let cfg = crate::config::CshipConfig::default();
+        let (error, remediation) = error_hint_for("account", &ctx, &cfg);
+        unsafe {
+            std::env::remove_var("CSHIP_ACCOUNT");
+        }
+
+        assert!(
+            error.contains("CSHIP_ACCOUNT"),
+            "expected CSHIP_ACCOUNT named as the cause, got: {error}"
+        );
+        assert!(
+            remediation.contains("CSHIP_ACCOUNT"),
+            "expected remediation to mention CSHIP_ACCOUNT, got: {remediation}"
+        );
+    }
+
+    #[test]
+    fn test_error_hint_account_empty_env_falls_back_to_credential_probe() {
+        // Empty CSHIP_ACCOUNT must not trigger the malformed-env hint; it
+        // falls through to the normal credential probe.
+        unsafe {
+            std::env::set_var("CSHIP_ACCOUNT", "   ");
+        }
+        let ctx = crate::context::Context::default();
+        let cfg = crate::config::CshipConfig::default();
+        let (error, _) = error_hint_for("account", &ctx, &cfg);
+        unsafe {
+            std::env::remove_var("CSHIP_ACCOUNT");
+        }
+
+        assert!(
+            !error.contains("CSHIP_ACCOUNT"),
+            "empty CSHIP_ACCOUNT should not be reported as malformed, got: {error}"
+        );
     }
 }
