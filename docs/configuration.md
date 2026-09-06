@@ -400,8 +400,29 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 | `$cship.usage_limits.cowork` | 7-day Cowork utilization only |
 | `$cship.usage_limits.oauth_apps` | 7-day OAuth-apps utilization only |
 | `$cship.usage_limits.extra_usage` | Extra-credits display (only when the account has extra usage enabled) |
+| `$cship.usage_limits.session` (alias `.five_hour`) | Only the 5h window, colored by *its own* utilization |
+| `$cship.usage_limits.weekly` (alias `.seven_day`) | Only the 7d window, colored by *its own* utilization |
 
 The sub-tokens let you place sections independently in your `lines` layout — e.g., keep the 5h/7d pair on one row and push per-model onto a second row.
+
+Unlike `$cship.usage_limits` (whose threshold color keys off the *higher* of the two windows), the `session` and `weekly` tokens each escalate independently on their own percentage. Combined with the `{bar}` placeholder and `bar_width`, this lets you render a separate progress bar per window — one line for the 5h session, one for the 7d week — each turning yellow/red on its own:
+
+```toml
+[cship]
+lines = [
+  "$cship.usage_limits.session",
+  "$cship.usage_limits.weekly",
+]
+
+[cship.usage_limits]
+five_hour_format   = "5h {bar} {pct}%"
+seven_day_format   = "7d {bar} {pct}%"
+bar_width          = 20
+warn_threshold     = 50
+warn_style         = "yellow"
+critical_threshold = 80
+critical_style     = "bold red"
+```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -417,6 +438,9 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `extra_usage_format` | `string` | `"{active} extra: {pct}% (${used}/${limit})"` | Format for the extra-usage section |
 | `show_per_model` | `bool` | `false` | When `true`, `$cship.usage_limits` appends the per-model breakdown (opus, sonnet, cowork, oauth) to the default `5h \| 7d` output. The extra-usage section always renders when enabled, regardless of this flag. Default is `false` so existing status bars retain their pre-1.5 shape. |
 | `separator` | `string` | `" \| "` | String placed between sections |
+| `bar_width` | `integer` | `10` | Width (chars) of the `{bar}` placeholder |
+| `bar_filled_char` | `string` | `"█"` | Filled character for `{bar}` |
+| `bar_empty_char` | `string` | `"░"` | Empty character for `{bar}` |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
@@ -432,6 +456,7 @@ The sub-tokens let you place sections independently in your `lines` layout — e
 | `{reset}` | Time-until-reset string (e.g. `4h12m`) |
 | `{reset_at}` | Absolute local reset time — clock-only if today (e.g. `7:42 PM`), weekday-prefixed otherwise (e.g. `Mon 9:00 AM`); `?` if unknown, `now` if already past |
 | `{pace}` | Signed headroom vs linear consumption — `+20%` (under pace), `-15%` (over pace), or `?` when unknown |
+| `{bar}` | Proportional Unicode bar for this window (e.g. `████░░░░░░`), sized by `bar_width`. **`five_hour_format` / `seven_day_format` only** (and the `session` / `weekly` tokens); not substituted in the per-model or extra-usage formats. |
 
 **Placeholders specific to `extra_usage_format`** (the standard `{remaining}` percentage placeholder does **not** apply here — use `{remaining_credits}` instead):
 

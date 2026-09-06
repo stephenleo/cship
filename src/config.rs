@@ -373,6 +373,15 @@ pub struct UsageLimitsConfig {
     /// Placeholders: {pct}, {reset}, {remaining}, {pace}
     /// Default: "oauth {pct}%"
     pub oauth_apps_format: Option<String>,
+    /// Width (in characters) of the `{bar}` placeholder available in
+    /// `five_hour_format` / `seven_day_format` and the per-period tokens
+    /// (`$cship.usage_limits.session`/`.weekly`, a.k.a. `.five_hour`/`.seven_day`).
+    /// Default: 10.
+    pub bar_width: Option<u32>,
+    /// Filled character for the `{bar}` placeholder. Default: "█".
+    pub bar_filled_char: Option<String>,
+    /// Empty character for the `{bar}` placeholder. Default: "░".
+    pub bar_empty_char: Option<String>,
 }
 
 /// Configuration for `[cship.peak_usage]` — peak-time indicator.

@@ -81,6 +81,33 @@ extra_usage_format = "{active} ${used}/${limit}"
 
 ---
 
+## How do I show the session and weekly limits on separate lines, each with its own bar and color?
+
+`$cship.usage_limits` renders both windows together and colors the whole segment off the *higher* of the two (so a hot 5h window turns the 7d text red as well). The per-window tokens render each window on its own and color it off **its own** utilization:
+
+- `$cship.usage_limits.session` — the 5-hour window (alias `.five_hour`)
+- `$cship.usage_limits.weekly` — the 7-day window (alias `.seven_day`)
+
+Combine them with the `{bar}` placeholder (available in `five_hour_format` / `seven_day_format`, sized by `bar_width`) to get an independent progress bar per window:
+
+```toml
+[cship]
+lines = ["$cship.usage_limits.session", "$cship.usage_limits.weekly"]
+
+[cship.usage_limits]
+five_hour_format   = "5h {bar} {pct}%"
+seven_day_format   = "7d {bar} {pct}%"
+bar_width          = 20
+warn_threshold     = 50
+warn_style         = "yellow"
+critical_threshold = 80
+critical_style     = "bold red"
+```
+
+Now the 5h bar can be green while the 7d bar is red (or vice versa), each escalating on its own percentage.
+
+---
+
 ## I'm on a Claude Enterprise plan and `cship.usage_limits` shows nothing — why?
 
 Claude Enterprise reports usage through `extra_usage` (monthly credit pool)
