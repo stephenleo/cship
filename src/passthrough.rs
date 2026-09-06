@@ -381,7 +381,10 @@ mod tests {
 
     #[test]
     fn test_render_passthrough_returns_none_for_nonexistent_module() {
-        // starship exits non-zero for unknown module names → None
+        // starship exits non-zero for unknown module names → None.
+        // Resolves `starship` from PATH, so it must hold the mutex: sibling tests
+        // point PATH at mock starship scripts that print output.
+        let _guard = PATH_MUTEX.lock().unwrap();
         let result = render_passthrough("__cship_nonexistent_xyz__", &Context::default());
         assert!(result.is_none());
     }

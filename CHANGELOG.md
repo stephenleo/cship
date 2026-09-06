@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.8.3] - 2026-09-06
+
+### Fixed
+- Fixed two test-suite race conditions that made CI intermittently red. The `CSHIP_ACCOUNT` error-hint tests mutated the same process-global env var from parallel worker threads and were merged into one sequential test; `test_render_passthrough_returns_none_for_nonexistent_module` resolved `starship` from `PATH` without holding `PATH_MUTEX`, so sibling tests pointing `PATH` at mock `starship` scripts could make it observe real output ([#206](https://github.com/stephenleo/cship/pull/206))
+
 ## [1.8.2] - 2026-09-06
 
 ### Added
