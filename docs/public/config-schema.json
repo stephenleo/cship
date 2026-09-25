@@ -554,6 +554,14 @@
             "string",
             "null"
           ]
+        },
+        "full_at": {
+          "description": "Percentage at which the bar is drawn full. Defaults to `100`; set it lower to\nfinish the bar before Claude Code auto-compacts. It only rescales the bar:\nthresholds still compare the real percentage. Values at or below 0 are ignored.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
         }
       }
     },

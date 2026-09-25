@@ -202,6 +202,7 @@ Renders a visual ASCII progress bar showing context window usage.
 | `filled_char` | `string` | `"█"` | Character used for the filled portion. Any Unicode character is allowed. |
 | `empty_char` | `string` | `"░"` | Character used for the empty portion. Any Unicode character is allowed. |
 | `filled_text` | `string` | — | Text revealed one character per slot as the bar fills, in place of `filled_char`. The bar is as wide as the text, so `width` is ignored. Zero-width characters such as combining accents join the character before them, and the track keeps the text's display width (with a single-column `empty_char`). Text with no visible characters is ignored. Emoji made of several characters (skin tones, flags, joined emoji) aren't supported. |
+| `full_at` | `float` | `100` | % at which the bar is drawn full. Set it to your auto-compact point (e.g. `95`) to finish the bar before Claude Code auto-compacts. Thresholds still compare the real percentage. |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
@@ -226,11 +227,12 @@ filled_char = "●"
 empty_char  = "○"
 ```
 
-To reveal text as the context window fills (`CONTEXT░░░░░░░ 50%`):
+To reveal text as the context window fills (`CONTEXT░░░░░░░ 50%`), complete by 95%:
 
 ```toml
 [cship.context_bar]
 filled_text = "CONTEXT WINDOW"
+full_at     = 95
 ```
 
 ---

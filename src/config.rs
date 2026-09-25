@@ -213,6 +213,10 @@ pub struct ContextBarConfig {
     /// they can reveal in pieces and shift the bar's width.
     /// Example: `"CONTEXT WINDOW"` renders `CONTEXT░░░░░░░ 50%` at 50%.
     pub filled_text: Option<String>,
+    /// Percentage at which the bar is drawn full. Defaults to `100`; set it lower to
+    /// finish the bar before Claude Code auto-compacts. It only rescales the bar:
+    /// thresholds still compare the real percentage. Values at or below 0 are ignored.
+    pub full_at: Option<f64>,
 }
 
 /// Configuration for `[cship.context_window]` sub-field modules.

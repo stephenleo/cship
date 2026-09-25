@@ -51,11 +51,24 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         Some(slots) => slots.len(),
         None => bar_cfg.and_then(|c| c.width).unwrap_or(DEFAULT_BAR_WIDTH) as usize,
     };
+    let full_at = match bar_cfg.and_then(|c| c.full_at) {
+        Some(pct) if pct > 0.0 => pct,
+        Some(_) => {
+            // A full_at at or below 0 would never fill the bar sensibly — ignore it, warn once
+            static FULL_AT_WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !FULL_AT_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!("cship.context_bar: full_at must be above 0 — ignoring it");
+            }
+            100.0
+        }
+        None => 100.0,
+    };
     // Floor via `as usize` truncation — NOT round. The percentage text uses {:.0} (round).
     // At boundary values like 99.5%, bar shows 9/10 filled while text shows "100%".
     // This is intentional: the bar is a visual approximation, the number is canonical.
-    let filled = ((used_pct / 100.0) * width as f64) as usize;
-    let filled = filled.min(width); // guard floating-point edge at 100%
+    let filled = ((used_pct / full_at) * width as f64) as usize;
+    let filled = filled.min(width); // cap once used_pct reaches full_at
     let empty = width - filled;
 
     let filled_char = bar_cfg
@@ -566,5 +579,38 @@ mod tests {
         };
         let expected = apply_style("CONTEXT░░░░░░░ 50%", Some("yellow"));
         assert_eq!(render_bar(50.0, bar), expected);
+    }
+
+    #[test]
+    fn test_context_bar_full_at_fills_the_bar_early() {
+        let bar = || ContextBarConfig {
+            full_at: Some(95.0),
+            ..Default::default()
+        };
+        assert_eq!(render_bar(90.0, bar()), "█████████░ 90%"); // 90/95 of 10 → 9
+        assert_eq!(render_bar(95.0, bar()), "██████████ 95%");
+        assert_eq!(render_bar(100.0, bar()), "██████████ 100%"); // capped at the width
+    }
+
+    #[test]
+    fn test_context_bar_non_positive_full_at_is_ignored() {
+        let bar = ContextBarConfig {
+            full_at: Some(0.0),
+            ..Default::default()
+        };
+        assert_eq!(render_bar(50.0, bar), "█████░░░░░ 50%");
+    }
+
+    #[test]
+    fn test_context_bar_full_at_does_not_move_the_thresholds() {
+        let bar = || ContextBarConfig {
+            full_at: Some(95.0),
+            critical_threshold: Some(98.0),
+            critical_style: Some("red".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(render_bar(96.0, bar()), "██████████ 96%"); // full, not yet critical
+        let expected = apply_style("██████████ 98%", Some("red"));
+        assert_eq!(render_bar(98.0, bar()), expected);
     }
 }
