@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+- Added `filled_text` to `cship.context_bar`, which fills the bar with successive characters of a string instead of repeating `filled_char`, so the bar can spell out a word or phrase as the context window fills (`CONTEXT░░░░░░░ 50%`). The bar is as wide as the text; zero-width characters such as combining accents join the character before them, and the track keeps the text's display width, so with a single-column `empty_char` wide characters don't make the bar grow as it fills. A `filled_text` with no visible characters is ignored with a warn-once diagnostic.
+
 ## [1.8.3] - 2026-09-06
 
 ### Fixed

@@ -204,6 +204,15 @@ pub struct ContextBarConfig {
     /// Character used for empty (unused) slots. Defaults to `"░"`.
     /// Example: `"○"` for hollow circles.
     pub empty_char: Option<String>,
+    /// Text revealed one character per slot as the bar fills, in place of `filled_char`.
+    /// The bar is as wide as the text, so `width` is ignored. Zero-width characters (such
+    /// as combining accents) join the character before them, and the track keeps the
+    /// text's display width, so with a single-column `empty_char` the bar doesn't change
+    /// width as it fills. Text with no visible characters is ignored. Emoji made of
+    /// several characters (skin tones, flags, joined emoji like 👨‍👩‍👦) aren't supported:
+    /// they can reveal in pieces and shift the bar's width.
+    /// Example: `"CONTEXT WINDOW"` renders `CONTEXT░░░░░░░ 50%` at 50%.
+    pub filled_text: Option<String>,
 }
 
 /// Configuration for `[cship.context_window]` sub-field modules.

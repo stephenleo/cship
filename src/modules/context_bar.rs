@@ -9,6 +9,7 @@ const DEFAULT_EMPTY_CHAR: &str = "░";
 /// Format: `{bar} {used_percentage:.0}%` e.g. `███░░░░░░░ 35%`
 /// Bar width is configurable via `[cship.context_bar].width` (default 10).
 /// Fill characters are configurable via `filled_char` (default `"█"`) and `empty_char` (default `"░"`).
+/// `filled_text` reveals text one character per slot instead of repeating `filled_char`.
 ///
 /// Source: epics.md#Story 2.2, prd.md#FR8
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
@@ -31,7 +32,25 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         None => (0.0f64, true),
     };
 
-    let width = bar_cfg.and_then(|c| c.width).unwrap_or(DEFAULT_BAR_WIDTH) as usize;
+    let slots = match bar_cfg.and_then(|c| c.filled_text.as_deref()) {
+        Some(text) if crate::ansi::display_width(text) == 0 => {
+            // Text with no visible characters would render no bar at all — ignore it, warn once
+            static EMPTY_TEXT_WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !EMPTY_TEXT_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    "cship.context_bar: filled_text has no visible characters — ignoring it"
+                );
+            }
+            None
+        }
+        Some(text) => Some(text_slots(text)),
+        None => None,
+    };
+    let width = match &slots {
+        Some(slots) => slots.len(),
+        None => bar_cfg.and_then(|c| c.width).unwrap_or(DEFAULT_BAR_WIDTH) as usize,
+    };
     // Floor via `as usize` truncation — NOT round. The percentage text uses {:.0} (round).
     // At boundary values like 99.5%, bar shows 9/10 filled while text shows "100%".
     // This is intentional: the bar is a visual approximation, the number is canonical.
@@ -45,7 +64,16 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let empty_char = bar_cfg
         .and_then(|c| c.empty_char.as_deref())
         .unwrap_or(DEFAULT_EMPTY_CHAR);
-    let bar: String = filled_char.repeat(filled) + &empty_char.repeat(empty);
+    // The track takes the hidden text's display width, so with a single-column
+    // empty_char, wide characters don't make the bar grow as it fills.
+    let (filled_part, track_width) = match &slots {
+        Some(slots) => (
+            slots[..filled].concat(),
+            crate::ansi::display_width(&slots[filled..].concat()),
+        ),
+        None => (filled_char.repeat(filled), empty),
+    };
+    let bar = filled_part + &empty_char.repeat(track_width);
     let bar_content = format!("{bar} {:.0}%", used_pct);
 
     let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
@@ -102,9 +130,27 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     ))
 }
 
+/// Splits `text` into one slot per visible character: zero-width characters, such as
+/// combining accents, join the character before them. Note: emoji made of several
+/// characters (skin tones, flags, joined emoji like 👨‍👩‍👦) aren't supported: they split
+/// into several slots, so they can reveal in pieces and shift the bar's width. Splitting
+/// into grapheme clusters would need a new dependency.
+fn text_slots(text: &str) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let mut slots: Vec<String> = Vec::new();
+    for c in text.chars() {
+        match slots.last_mut() {
+            Some(last) if c.width() == Some(0) => last.push(c),
+            _ => slots.push(c.to_string()),
+        }
+    }
+    slots
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ansi::apply_style;
     use crate::config::{ContextBarConfig, CshipConfig};
     use crate::context::{Context, ContextWindow};
 
@@ -446,5 +492,79 @@ mod tests {
         let empty: usize = result.chars().filter(|&c| c == '░').count();
         assert_eq!(filled, 5, "expected 5 filled circles: {result:?}");
         assert_eq!(empty, 5, "expected 5 default empty chars: {result:?}");
+    }
+
+    fn render_bar(pct: f64, bar: ContextBarConfig) -> String {
+        let cfg = CshipConfig {
+            context_bar: Some(bar),
+            ..Default::default()
+        };
+        render(&ctx_with_pct(pct), &cfg).unwrap()
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_reveals_one_char_per_slot() {
+        let bar = || ContextBarConfig {
+            filled_text: Some("CONTEXT WINDOW".to_string()),
+            width: Some(4), // ignored: the bar is as wide as the text
+            ..Default::default()
+        };
+        assert_eq!(render_bar(0.0, bar()), "░░░░░░░░░░░░░░ 0%");
+        assert_eq!(render_bar(50.0, bar()), "CONTEXT░░░░░░░ 50%");
+        assert_eq!(render_bar(100.0, bar()), "CONTEXT WINDOW 100%");
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_keeps_its_width_with_wide_chars() {
+        let bar = || ContextBarConfig {
+            filled_text: Some("日本語テキスト".to_string()),
+            ..Default::default()
+        };
+        // 7 characters, each two columns wide: the track stands in for the hidden ones
+        assert_eq!(render_bar(0.0, bar()), format!("{} 0%", "░".repeat(14)));
+        assert_eq!(
+            render_bar(50.0, bar()),
+            format!("日本語{} 50%", "░".repeat(8))
+        );
+        assert_eq!(render_bar(100.0, bar()), "日本語テキスト 100%");
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_joins_combining_marks() {
+        let bar = || ContextBarConfig {
+            filled_text: Some("cafe\u{301} bar".to_string()),
+            ..Default::default()
+        };
+        // 8 slots: the accent joins its "e"
+        assert_eq!(render_bar(50.0, bar()), "cafe\u{301}░░░░ 50%");
+        assert_eq!(render_bar(100.0, bar()), "cafe\u{301} bar 100%");
+    }
+
+    #[test]
+    fn test_context_bar_invisible_filled_text_keeps_default_bar() {
+        for text in ["", "\u{301}"] {
+            let bar = ContextBarConfig {
+                filled_text: Some(text.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(
+                render_bar(50.0, bar),
+                "█████░░░░░ 50%",
+                "filled_text {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_with_format_uses_the_threshold_style() {
+        let bar = ContextBarConfig {
+            filled_text: Some("CONTEXT WINDOW".to_string()),
+            format: Some("[$value]($style)".to_string()),
+            warn_threshold: Some(50.0),
+            warn_style: Some("yellow".to_string()),
+            ..Default::default()
+        };
+        let expected = apply_style("CONTEXT░░░░░░░ 50%", Some("yellow"));
+        assert_eq!(render_bar(50.0, bar), expected);
     }
 }

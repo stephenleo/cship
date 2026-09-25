@@ -547,6 +547,13 @@
             "string",
             "null"
           ]
+        },
+        "filled_text": {
+          "description": "Text revealed one character per slot as the bar fills, in place of `filled_char`.\nThe bar is as wide as the text, so `width` is ignored. Zero-width characters (such\nas combining accents) join the character before them, and the track keeps the\ntext's display width, so with a single-column `empty_char` the bar doesn't change\nwidth as it fills. Text with no visible characters is ignored. Emoji made of\nseveral characters (skin tones, flags, joined emoji like 👨‍👩‍👦) aren't supported:\nthey can reveal in pieces and shift the bar's width.\nExample: `\"CONTEXT WINDOW\"` renders `CONTEXT░░░░░░░ 50%` at 50%.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
