@@ -217,6 +217,16 @@ pub struct ContextBarConfig {
     /// finish the bar before Claude Code auto-compacts. It only rescales the bar:
     /// thresholds still compare the real percentage. Values at or below 0 are ignored.
     pub full_at: Option<f64>,
+    /// Style for the filled slots, in place of the threshold style. Setting this or
+    /// `track_style` styles each part on its own, so the threshold style then covers
+    /// only the percentage. Style the bar through these fields rather than in `format`:
+    /// `$style` is left empty (`$symbol` takes the threshold style itself), and a style
+    /// written directly in `format` doesn't reach the bar.
+    /// Not used when context data is absent; `empty_style` covers that state.
+    pub filled_style: Option<String>,
+    /// Style for the empty slots (the track), in place of the threshold style.
+    /// See `filled_style`.
+    pub track_style: Option<String>,
 }
 
 /// Configuration for `[cship.context_window]` sub-field modules.

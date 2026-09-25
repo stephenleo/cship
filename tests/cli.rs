@@ -323,6 +323,28 @@ fn test_context_bar_renders_block_chars_and_percentage() {
 }
 
 #[test]
+fn test_context_bar_filled_text_reveals_styled_text_from_toml() {
+    let json = std::fs::read_to_string("tests/fixtures/context_high.json").unwrap();
+    // context_high.json: used_percentage = 90.0; with full_at = 95, 13 of 14 characters show
+    let output = cship()
+        .args(["--config", "tests/fixtures/context_bar_filled_text.toml"])
+        .write_stdin(json)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\x1b[1mCONTEXT WINDO\x1b[0m"),
+        "expected bold revealed text: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("\x1b[2m░\x1b[0m"),
+        "expected dimmed track: {stdout:?}"
+    );
+    assert!(stdout.contains("90%"), "expected '90%': {stdout:?}");
+}
+
+#[test]
 fn test_context_bar_warn_threshold_applies_ansi_style() {
     let json = std::fs::read_to_string("tests/fixtures/context_warn.json").unwrap();
     // context_warn.json: used_percentage = 75.0 > warn_threshold 70.0 → ANSI codes

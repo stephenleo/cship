@@ -10,6 +10,7 @@ const DEFAULT_EMPTY_CHAR: &str = "░";
 /// Bar width is configurable via `[cship.context_bar].width` (default 10).
 /// Fill characters are configurable via `filled_char` (default `"█"`) and `empty_char` (default `"░"`).
 /// `filled_text` reveals text one character per slot instead of repeating `filled_char`.
+/// `filled_style` / `track_style` style the filled slots and the track on their own.
 ///
 /// Source: epics.md#Story 2.2, prd.md#FR8
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
@@ -86,8 +87,9 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         ),
         None => (filled_char.repeat(filled), empty),
     };
-    let bar = filled_part + &empty_char.repeat(track_width);
-    let bar_content = format!("{bar} {:.0}%", used_pct);
+    let empty_part = empty_char.repeat(track_width);
+    let percentage = format!("{:.0}%", used_pct);
+    let bar_content = format!("{filled_part}{empty_part} {percentage}");
 
     let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
     let style = bar_cfg.and_then(|c| c.style.as_deref());
@@ -111,6 +113,46 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let warn_style = bar_cfg.and_then(|c| c.warn_style.as_deref());
     let critical_threshold = bar_cfg.and_then(|c| c.critical_threshold);
     let critical_style = bar_cfg.and_then(|c| c.critical_style.as_deref());
+
+    // Per-part styles paint the filled slots, the track and the percentage on their own,
+    // with the threshold style on the percentage. Nothing may wrap the painted parts: an
+    // outer style's attributes (e.g. bold) would leak into any part that doesn't reset them.
+    let filled_style = bar_cfg.and_then(|c| c.filled_style.as_deref());
+    let track_style = bar_cfg.and_then(|c| c.track_style.as_deref());
+    if filled_style.is_some() || track_style.is_some() {
+        let threshold_style = crate::ansi::resolve_threshold_style(
+            Some(used_pct),
+            style,
+            warn_threshold,
+            warn_style,
+            critical_threshold,
+            critical_style,
+        );
+        // An empty part (the text at 0%, the track at 100%) is left out rather than
+        // painted as a bare pair of escape codes.
+        let paint = |part: &str, style: Option<&str>| match part {
+            "" => String::new(),
+            _ => crate::ansi::apply_style(part, style),
+        };
+        let painted = format!(
+            "{}{} {}",
+            paint(&filled_part, filled_style.or(threshold_style)),
+            paint(&empty_part, track_style.or(threshold_style)),
+            crate::ansi::apply_style(&percentage, threshold_style),
+        );
+        // `$style` stays empty so it can't wrap the painted parts; `$symbol` takes the
+        // threshold style itself.
+        let symbol = symbol.map(|s| paint(s, threshold_style));
+        return match bar_cfg.and_then(|c| c.format.as_deref()) {
+            Some(fmt) => {
+                // Start the bar from a reset, so a style written directly in `format`
+                // (e.g. `[$value](bold)`) doesn't carry into the parts.
+                let painted = crate::ansi::after_reset(&painted);
+                crate::format::apply_module_format(fmt, Some(&painted), symbol.as_deref(), None)
+            }
+            None => Some(painted),
+        };
+    }
 
     // Format string takes priority if configured (AC2)
     if let Some(fmt) = bar_cfg.and_then(|c| c.format.as_deref()) {
@@ -612,5 +654,159 @@ mod tests {
         assert_eq!(render_bar(96.0, bar()), "██████████ 96%"); // full, not yet critical
         let expected = apply_style("██████████ 98%", Some("red"));
         assert_eq!(render_bar(98.0, bar()), expected);
+    }
+
+    #[test]
+    fn test_context_bar_part_styles_paint_each_part_separately() {
+        let bar = ContextBarConfig {
+            filled_style: Some("bold".to_string()),
+            track_style: Some("dimmed".to_string()),
+            style: Some("red".to_string()),
+            ..Default::default()
+        };
+        let expected = format!(
+            "{}{} {}",
+            apply_style("█████", Some("bold")),
+            apply_style("░░░░░", Some("dimmed")),
+            apply_style("50%", Some("red")),
+        );
+        assert_eq!(render_bar(50.0, bar), expected);
+    }
+
+    #[test]
+    fn test_context_bar_unset_part_style_falls_back_to_threshold_style() {
+        let bar = ContextBarConfig {
+            filled_style: Some("bold".to_string()),
+            critical_threshold: Some(90.0),
+            critical_style: Some("red".to_string()),
+            ..Default::default()
+        };
+        let red = |s: &str| apply_style(s, Some("red"));
+        let expected = format!(
+            "{}{} {}",
+            apply_style("█████████", Some("bold")),
+            red("░"),
+            red("95%")
+        );
+        assert_eq!(render_bar(95.0, bar), expected);
+    }
+
+    #[test]
+    fn test_context_bar_format_style_does_not_wrap_part_styles() {
+        let bar = ContextBarConfig {
+            track_style: Some("dimmed".to_string()),
+            style: Some("bold".to_string()),
+            format: Some("[$value]($style)".to_string()),
+            ..Default::default()
+        };
+        let bold = |s: &str| apply_style(s, Some("bold"));
+        let parts = format!(
+            "{}{} {}",
+            bold("█████"),
+            apply_style("░░░░░", Some("dimmed")),
+            bold("50%")
+        );
+        assert_eq!(render_bar(50.0, bar), crate::ansi::after_reset(&parts));
+    }
+
+    #[test]
+    fn test_context_bar_part_styles_give_the_symbol_the_threshold_style() {
+        let bar = ContextBarConfig {
+            filled_style: Some("bold".to_string()),
+            symbol: Some("CTX ".to_string()),
+            format: Some("[$symbol$value]($style)".to_string()),
+            critical_threshold: Some(90.0),
+            critical_style: Some("red".to_string()),
+            ..Default::default()
+        };
+        let red = |s: &str| apply_style(s, Some("red"));
+        let bold = apply_style("█████████", Some("bold"));
+        let parts = format!("{bold}{} {}", red("░"), red("95%"));
+        let expected = format!("{}{}", red("CTX "), crate::ansi::after_reset(&parts));
+        assert_eq!(render_bar(95.0, bar), expected);
+    }
+
+    #[test]
+    fn test_context_bar_part_styles_survive_a_style_written_in_format() {
+        let bar = ContextBarConfig {
+            filled_style: Some("bold".to_string()),
+            track_style: Some("dimmed".to_string()),
+            format: Some("[$value](fg:#FFFFFF)".to_string()),
+            ..Default::default()
+        };
+        let result = render_bar(50.0, bar);
+        assert!(
+            result.contains(&apply_style("█████", Some("bold"))),
+            "{result:?}"
+        );
+        assert!(
+            result.contains(&apply_style("░░░░░", Some("dimmed"))),
+            "{result:?}"
+        );
+    }
+
+    /// The visible characters of `s` a terminal would draw bold. Handles the plain SGR
+    /// codes these tests use (`1` bold, `0` reset, named colours).
+    fn bold_chars(s: &str) -> String {
+        let (mut bold, mut out, mut rest) = (false, String::new(), s);
+        while let Some(c) = rest.chars().next() {
+            if let Some(seq) = rest.strip_prefix("\x1b[") {
+                let end = seq.find('m').unwrap();
+                for code in seq[..end].split(';') {
+                    match code {
+                        "0" => bold = false,
+                        "1" => bold = true,
+                        _ => {}
+                    }
+                }
+                rest = &seq[end + 1..];
+            } else {
+                if bold {
+                    out.push(c);
+                }
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_context_bar_style_written_in_format_does_not_reach_the_parts() {
+        let bar = || ContextBarConfig {
+            filled_text: Some("CONTEXT WINDOW".to_string()),
+            filled_style: Some("red".to_string()),
+            format: Some("[$value](bold)".to_string()),
+            ..Default::default()
+        };
+        for pct in [0.0, 50.0, 100.0] {
+            assert_eq!(bold_chars(&render_bar(pct, bar())), "", "at {pct}%");
+        }
+    }
+
+    #[test]
+    fn test_context_bar_part_styles_leave_out_empty_parts() {
+        let bar = || ContextBarConfig {
+            filled_style: Some("bold".to_string()),
+            track_style: Some("dimmed".to_string()),
+            ..Default::default()
+        };
+        let empty = format!("{} 0%", apply_style("░░░░░░░░░░", Some("dimmed")));
+        let full = format!("{} 100%", apply_style("██████████", Some("bold")));
+        assert_eq!(render_bar(0.0, bar()), empty);
+        assert_eq!(render_bar(100.0, bar()), full);
+    }
+
+    #[test]
+    fn test_context_bar_part_styles_not_used_without_context_data() {
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                track_style: Some("bold".to_string()),
+                empty_style: Some("dimmed".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&Context::default(), &cfg).unwrap();
+        assert_eq!(result, apply_style("░░░░░░░░░░ 0%", Some("dimmed")));
     }
 }

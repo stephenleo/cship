@@ -203,6 +203,8 @@ Renders a visual ASCII progress bar showing context window usage.
 | `empty_char` | `string` | `"░"` | Character used for the empty portion. Any Unicode character is allowed. |
 | `filled_text` | `string` | — | Text revealed one character per slot as the bar fills, in place of `filled_char`. The bar is as wide as the text, so `width` is ignored. Zero-width characters such as combining accents join the character before them, and the track keeps the text's display width (with a single-column `empty_char`). Text with no visible characters is ignored. Emoji made of several characters (skin tones, flags, joined emoji) aren't supported. |
 | `full_at` | `float` | `100` | % at which the bar is drawn full. Set it to your auto-compact point (e.g. `95`) to finish the bar before Claude Code auto-compacts. Thresholds still compare the real percentage. |
+| `filled_style` | `string` | — | Style for the filled portion, in place of the threshold style |
+| `track_style` | `string` | — | Style for the empty portion (the track), in place of the threshold style |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
@@ -233,6 +235,15 @@ To reveal text as the context window fills (`CONTEXT░░░░░░░ 50%`),
 [cship.context_bar]
 filled_text = "CONTEXT WINDOW"
 full_at     = 95
+```
+
+`filled_style` and `track_style` style the two parts of the bar on their own; the threshold style then covers only the percentage. Set them instead of styling `$value` in `format`: `$style` is left empty (`$symbol` takes the threshold style itself), and a style written directly in `format` doesn't reach the bar. For a bar whose text sits on a dark track:
+
+```toml
+[cship.context_bar]
+filled_text  = "CONTEXT WINDOW"
+filled_style = "bold fg:#FFFFFF bg:#4C4C4C"
+track_style  = "fg:#929292 bg:#000000"
 ```
 
 ---

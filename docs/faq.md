@@ -210,3 +210,19 @@ You can see the current cache state by running `cship explain` — it shows the 
 cship strips terminal control characters (ESC, BEL, the C0/C1 ranges, and DEL — including tab, carriage return, and newline) from untrusted session JSON fields such as `cwd`, `transcript_path`, `model`, and `workspace` before rendering. This is a security measure: it prevents a malicious directory or model name from injecting raw escape sequences that could spoof your terminal title, move the cursor, or write to the clipboard via OSC 52 ([CWE-150](https://cwe.mitre.org/data/definitions/150.html)).
 
 Normal values are never affected — only control bytes are removed. If a path or name shows up with characters missing, it contained control bytes, which are stripped by design and cannot be disabled.
+
+---
+
+## How do I make the context bar spell out a word?
+
+Set `filled_text` in `[cship.context_bar]`: the bar fills with successive characters of that text instead of repeating `filled_char`, and `full_at` sets the percentage at which it's complete — for example just before Claude Code auto-compacts. `full_at` only rescales the bar; `warn_threshold` and `critical_threshold` still compare the real percentage.
+
+```toml
+[cship.context_bar]
+filled_text  = "CONTEXT WINDOW"   # CONTEXT░░░░░░░ at 50%
+full_at      = 95
+filled_style = "bold"
+track_style  = "fg:#929292"
+```
+
+`filled_style` and `track_style` style the text and the track on their own, and the threshold style (`style`, `warn_style`, `critical_style`) then covers only the percentage. Style the bar through these fields rather than in a `format` string: with either set, `$style` is left empty (`$symbol` takes the threshold style itself), and a style written directly in `format` (e.g. `[$value](fg:#FFFFFF)`) doesn't reach the bar.

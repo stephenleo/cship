@@ -562,6 +562,20 @@
             "null"
           ],
           "format": "double"
+        },
+        "filled_style": {
+          "description": "Style for the filled slots, in place of the threshold style. Setting this or\n`track_style` styles each part on its own, so the threshold style then covers\nonly the percentage. Style the bar through these fields rather than in `format`:\n`$style` is left empty (`$symbol` takes the threshold style itself), and a style\nwritten directly in `format` doesn't reach the bar.\nNot used when context data is absent; `empty_style` covers that state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "track_style": {
+          "description": "Style for the empty slots (the track), in place of the threshold style.\nSee `filled_style`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

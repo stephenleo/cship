@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - Added `filled_text` to `cship.context_bar`, which fills the bar with successive characters of a string instead of repeating `filled_char`, so the bar can spell out a word or phrase as the context window fills (`CONTEXT░░░░░░░ 50%`). The bar is as wide as the text; zero-width characters such as combining accents join the character before them, and the track keeps the text's display width, so with a single-column `empty_char` wide characters don't make the bar grow as it fills. A `filled_text` with no visible characters is ignored with a warn-once diagnostic.
 - Added `full_at` to `cship.context_bar`, the percentage at which the bar is drawn full (default `100`). Claude Code auto-compacts before the context window reaches 100%, so a bar scaled to 100% never completes; set `full_at` to your auto-compact point to fill it in time. Thresholds still compare the real percentage, and a `full_at` at or below 0 is ignored with a warn-once diagnostic.
+- Added `filled_style` and `track_style` to `cship.context_bar`, which style the filled slots and the track on their own instead of sharing one style with the percentage. The threshold style then covers only the percentage, and each unset part style falls back to it. With neither set, the bar renders exactly as before.
 
 ## [1.8.3] - 2026-09-06
 
