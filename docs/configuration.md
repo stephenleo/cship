@@ -387,7 +387,7 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 **Data sources (in priority order):**
 
 1. **stdin `rate_limits`** — Claude Code (v2.1+) sends `rate_limits` directly in the session JSON for Pro/Max subscribers. When present, cship uses this data immediately with zero latency and no credential setup required.
-2. **OAuth API fetch** — Falls back to fetching from `https://api.anthropic.com/api/oauth/usage` using your OAuth token (stored in the OS credential store). Results are cached for the configured TTL (default 60s).
+2. **OAuth API fetch** — Falls back to fetching from `https://api.anthropic.com/api/oauth/usage` using your OAuth token (stored in the OS credential store). This fetch is coordinated across every concurrent `cship` process that uses the same Claude config directory, so running more sessions doesn't multiply API calls; results are shared for the configured TTL (default 60s).
 
 **Tokens:**
 
@@ -445,7 +445,7 @@ critical_style     = "bold red"
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
 | `critical_style` | `string` | `"bold red"` | Style at critical level |
-| `ttl` | `integer` | `60` | Cache refresh interval in seconds. Increase to reduce API pressure when running multiple concurrent sessions. |
+| `ttl` | `integer` | `60` | OAuth usage refresh interval in seconds, shared across every concurrent `cship` process using the same Claude config directory — running more sessions does not multiply API calls. Increase to poll less often; decrease to poll more often. `0` would disable throttling, so it is treated as `1`. |
 
 **Placeholders** (available in all `*_format` strings):
 
@@ -471,7 +471,7 @@ critical_style     = "bold red"
 
 ```toml
 [cship.usage_limits]
-ttl                = 300       # 5 minutes; increase if you run many concurrent sessions
+ttl                = 300       # 5 minutes; shared across sessions, so raising it just polls less often overall
 five_hour_format   = "5h {pct}% resets at {reset_at} ({reset})"
 seven_day_format   = "7d {pct}% resets at {reset_at} ({reset})"
 opus_format        = "opus {pct}%"

@@ -4,17 +4,20 @@
 //! Path: `{dirname(transcript_path)}/cship/{transcript_stem}-starship-{module_name}`
 //! TTL: 5 seconds via file mtime. Format: raw UTF-8 text.
 //!
-//! ## Usage limits cache (Story 5.2)
-//! Path: `{dirname(transcript_path)}/cship/{transcript_stem}-usage-limits`
-//! TTL: 60 seconds + early invalidation when a usage window resets.
-//! Format: JSON envelope `{ "data": {...}, "expires_at": u64, "five_hour_resets_at": u64, "seven_day_resets_at": u64 }`
+//! ## Account profile cache
+//! Path: `{dirname(transcript_path)}/cship/{transcript_stem}-account-profile`
+//! TTL: caller-supplied (default 24h) via `write_account_profile`'s `ttl_secs`.
+//! Format: JSON envelope `{ "data": {...}, "expires_at": u64, "token_fingerprint": Option<String> }`
 //! The OAuth token is NEVER written to any cache file (NFR-S3).
+//!
+//! Note: account-wide OAuth usage-limits data is no longer cached here — see
+//! `usage_limits_state.rs` for that cross-process coordinator's own on-disk
+//! state file and TTL/backoff semantics.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::account::AccountProfile;
-use crate::usage_limits::UsageLimitsData;
 
 const PASSTHROUGH_TTL: Duration = Duration::from_secs(5);
 
@@ -54,29 +57,6 @@ pub fn write_passthrough(module_name: &str, transcript_path: &Path, content: &st
     }
 }
 
-// ── Usage limits cache ────────────────────────────────────────────────────────
-
-/// Cache envelope stored on disk for usage limits data.
-/// Envelope timestamps are Unix epoch seconds for cheap comparison.
-/// The `data` field preserves ISO 8601 strings for rendering (Story 5.3).
-#[derive(serde::Serialize, serde::Deserialize)]
-struct UsageLimitsCacheEnvelope {
-    data: UsageLimitsData,
-    expires_at: u64,
-    five_hour_resets_at: u64,
-    seven_day_resets_at: u64,
-    #[serde(default)]
-    token_fingerprint: Option<String>,
-}
-
-/// Derive the cache file path for usage limits.
-/// Example: `.../session.jsonl` → `.../cship/session-usage-limits`
-fn usage_limits_cache_path(transcript_path: &Path) -> Option<std::path::PathBuf> {
-    let dir = transcript_path.parent()?;
-    let stem = transcript_path.file_stem()?.to_str()?;
-    Some(dir.join("cship").join(format!("{stem}-usage-limits")))
-}
-
 /// Parse "YYYY-MM-DDTHH:MM:SSZ" to Unix epoch seconds using the Howard Hinnant
 /// civil-date algorithm. Returns `None` on any parse failure.
 pub(crate) fn iso8601_to_epoch(s: &str) -> Option<u64> {
@@ -113,121 +93,11 @@ fn now_epoch() -> u64 {
         .unwrap_or(0)
 }
 
-/// Convert an ISO 8601 `resets_at` string to epoch seconds for cache comparison.
-/// Returns `u64::MAX` when the input is empty or unparseable — meaning "no reset
-/// scheduled, never trigger early invalidation via this field."
-fn epoch_or_never(s: &str) -> u64 {
-    if s.is_empty() {
-        return u64::MAX;
-    }
-    iso8601_to_epoch(s).filter(|&e| e > 0).unwrap_or(u64::MAX)
-}
-
-/// Read a cached usage limits value.
-///
-/// When `allow_stale` is `false`, the cache is invalid (returns `None`) if:
-/// 1. Current time ≥ `expires_at` (60 s TTL since last write), OR
-/// 2. Current time ≥ `five_hour_resets_at` OR `seven_day_resets_at`
-///    (ensures the display refreshes immediately when a usage window resets)
-///
-/// When `allow_stale` is `true`, returns the most recently written data regardless
-/// of TTL or reset timestamps — used as a fallback when a live API fetch times out
-/// so the statusline shows something meaningful rather than going blank.
-pub fn read_usage_limits(
-    transcript_path: &Path,
-    allow_stale: bool,
-    expected_fingerprint: Option<&str>,
-) -> Option<UsageLimitsData> {
-    let path = usage_limits_cache_path(transcript_path)?;
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let envelope: UsageLimitsCacheEnvelope = serde_json::from_str(&raw).ok()?;
-    // Fingerprint mismatch always invalidates — stale data from wrong account is harmful
-    if let Some(expected) = expected_fingerprint
-        && envelope.token_fingerprint.as_deref() != Some(expected)
-    {
-        return None;
-    }
-    if allow_stale {
-        return Some(envelope.data);
-    }
-    let now = now_epoch();
-    if now >= envelope.expires_at {
-        return None; // TTL expired
-    }
-    if now >= envelope.five_hour_resets_at || now >= envelope.seven_day_resets_at {
-        return None; // usage window reset — stale data
-    }
-    Some(envelope.data)
-}
-
-/// Write usage limits data to the cache file.
-/// Sets `expires_at` to now + `ttl_secs` seconds (default 60).
-/// Silently no-ops on any I/O error — cache write failure must never surface to the user.
-/// The OAuth token is never present in the written data (NFR-S3).
-pub fn write_usage_limits(
-    transcript_path: &Path,
-    data: &UsageLimitsData,
-    ttl_secs: u64,
-    token_fingerprint: Option<&str>,
-) {
-    let Some(path) = usage_limits_cache_path(transcript_path) else {
-        return;
-    };
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let now = now_epoch();
-    let envelope = UsageLimitsCacheEnvelope {
-        data: data.clone(),
-        expires_at: now + ttl_secs,
-        five_hour_resets_at: epoch_or_never(&data.five_hour_resets_at),
-        seven_day_resets_at: epoch_or_never(&data.seven_day_resets_at),
-        token_fingerprint: token_fingerprint.map(String::from),
-    };
-    if let Ok(json) = serde_json::to_string(&envelope) {
-        let _ = std::fs::write(path, json);
-    }
-}
-
-// ── Negative cache marker ────────────────────────────────────────────────────
-
-/// Path for the negative cache marker (same directory as usage-limits cache).
-fn negative_marker_path(transcript_path: &Path) -> Option<std::path::PathBuf> {
-    let dir = transcript_path.parent()?;
-    let stem = transcript_path.file_stem()?.to_str()?;
-    Some(dir.join("cship").join(format!("{stem}-usage-limits-fail")))
-}
-
-/// Returns `true` if a recent failure marker exists and hasn't expired.
-pub fn read_negative_marker(transcript_path: &Path) -> bool {
-    let Some(path) = negative_marker_path(transcript_path) else {
-        return false;
-    };
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return false;
-    };
-    let Ok(expires_at) = raw.trim().parse::<u64>() else {
-        return false;
-    };
-    now_epoch() < expires_at
-}
-
-/// Write a failure marker that expires in `cooldown_secs`.
-pub fn write_negative_marker(transcript_path: &Path, cooldown_secs: u64) {
-    let Some(path) = negative_marker_path(transcript_path) else {
-        return;
-    };
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = std::fs::write(path, (now_epoch() + cooldown_secs).to_string());
-}
-
 // ── Account profile cache ────────────────────────────────────────────────────
 //
 // The `/api/oauth/profile` endpoint returns static-ish data (organization name,
 // account display name, tier). It only changes when the user switches orgs, so
-// we cache much more aggressively than usage_limits — default TTL is 24h.
+// this cache uses a long default TTL of 24h.
 //
 // Cache layout mirrors `usage_limits`: a JSON envelope keyed by transcript_path,
 // stored alongside other cship caches in `{dirname}/cship/{stem}-account-profile`.
@@ -410,197 +280,9 @@ mod tests {
         assert!(result.is_none(), "stale cache should return None");
     }
 
-    // ── Usage limits cache tests ──────────────────────────────────────────────
-
-    fn sample_data() -> UsageLimitsData {
-        UsageLimitsData {
-            five_hour_pct: 23.4,
-            seven_day_pct: 45.1,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn test_usage_limits_cache_hit_within_ttl() {
-        let (dir, transcript) = temp_transcript("s5_2_hit");
-        write_usage_limits(&transcript, &sample_data(), 60, None);
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(result.is_some(), "fresh cache should return Some");
-        let data = result.unwrap();
-        assert!((data.five_hour_pct - 23.4).abs() < f64::EPSILON);
-        assert!((data.seven_day_pct - 45.1).abs() < f64::EPSILON);
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_cache_miss_nonexistent_file() {
-        let (_dir, transcript) = temp_transcript("s5_2_miss");
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(
-            result.is_none(),
-            "nonexistent cache file should return None"
-        );
-    }
-
-    #[test]
-    fn test_usage_limits_cache_file_path_and_json_structure() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 60, None);
-        let expected_path = dir.path().join("cship").join("transcript-usage-limits");
-        assert!(expected_path.exists(), "cache file at: {expected_path:?}");
-        let raw = std::fs::read_to_string(&expected_path).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert!(v["data"]["five_hour_pct"].is_number());
-        assert!(v["data"]["seven_day_pct"].is_number());
-        assert!(v["data"]["five_hour_resets_at"].is_string());
-        assert!(v["data"]["seven_day_resets_at"].is_string());
-        assert!(v["expires_at"].is_number());
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_ttl_invalidation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        // Write a valid cache entry first
-        write_usage_limits(&transcript, &sample_data(), 60, None);
-        // Overwrite with an expired envelope (expires_at = 0, resets_at far future)
-        let path = dir.path().join("cship").join("transcript-usage-limits");
-        let expired = serde_json::json!({
-            "data": {
-                "five_hour_pct": 23.4,
-                "seven_day_pct": 45.1,
-                "five_hour_resets_at": "2099-01-01T00:00:00Z",
-                "seven_day_resets_at": "2099-01-01T00:00:00Z"
-            },
-            "expires_at": 0_u64,
-            "five_hour_resets_at": 9_999_999_999_u64,
-            "seven_day_resets_at": 9_999_999_999_u64
-        });
-        std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(result.is_none(), "expired TTL should return None");
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_resets_at_early_invalidation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        // five_hour_resets_at is in the past — should invalidate even within 60s TTL
-        let data = UsageLimitsData {
-            five_hour_pct: 50.0,
-            seven_day_pct: 10.0,
-            five_hour_resets_at: "2000-01-01T00:00:00Z".into(), // past
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(), // future
-            ..Default::default()
-        };
-        write_usage_limits(&transcript, &data, 60, None);
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(
-            result.is_none(),
-            "past five_hour_resets_at should invalidate cache"
-        );
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_write_creates_directory() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("deep").join("nested").join("t.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 60, None);
-        let cache_file = dir
-            .path()
-            .join("deep")
-            .join("nested")
-            .join("cship")
-            .join("t-usage-limits");
-        assert!(
-            cache_file.exists(),
-            "directory should be created: {cache_file:?}"
-        );
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_seven_day_resets_at_early_invalidation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        // seven_day_resets_at is in the past, five_hour is in the future
-        let data = UsageLimitsData {
-            five_hour_pct: 50.0,
-            seven_day_pct: 10.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(), // future
-            seven_day_resets_at: "2000-01-01T00:00:00Z".into(), // past
-            ..Default::default()
-        };
-        write_usage_limits(&transcript, &data, 60, None);
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(
-            result.is_none(),
-            "past seven_day_resets_at should invalidate cache"
-        );
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_empty_resets_at_does_not_invalidate() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        // Both resets_at are empty (API returned null) — cache should still be valid within TTL
-        let data = UsageLimitsData {
-            five_hour_pct: 50.0,
-            seven_day_pct: 10.0,
-            ..Default::default()
-        };
-        write_usage_limits(&transcript, &data, 60, None);
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(
-            result.is_some(),
-            "empty resets_at should not trigger early invalidation"
-        );
-        drop(dir);
-    }
-
-    #[test]
-    fn test_read_usage_limits_allow_stale_returns_expired_data() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        // Write a valid cache entry, then overwrite with expired TTL
-        write_usage_limits(&transcript, &sample_data(), 60, None);
-        let path = dir.path().join("cship").join("transcript-usage-limits");
-        let expired = serde_json::json!({
-            "data": {
-                "five_hour_pct": 77.0,
-                "seven_day_pct": 88.0,
-                "five_hour_resets_at": "2099-01-01T00:00:00Z",
-                "seven_day_resets_at": "2099-01-01T00:00:00Z"
-            },
-            "expires_at": 0_u64,           // expired
-            "five_hour_resets_at": 9_999_999_999_u64,
-            "seven_day_resets_at": 9_999_999_999_u64
-        });
-        std::fs::write(&path, serde_json::to_string(&expired).unwrap()).unwrap();
-        // Normal read returns None (TTL expired)
-        assert!(
-            read_usage_limits(&transcript, false, None).is_none(),
-            "normal read should be None"
-        );
-        // Stale read returns data regardless
-        let stale = read_usage_limits(&transcript, true, None);
-        assert!(stale.is_some(), "stale read should return data");
-        assert!((stale.unwrap().five_hour_pct - 77.0).abs() < f64::EPSILON);
-        drop(dir);
-    }
-
-    #[test]
-    fn test_read_usage_limits_allow_stale_returns_none_when_no_file() {
-        let (_dir, transcript) = temp_transcript("stale_miss");
-        assert!(read_usage_limits(&transcript, true, None).is_none());
-    }
+    // ── iso8601_to_epoch() tests ──────────────────────────────────────────────
+    // (still used by usage_limits_state::earliest_future_reset and
+    // modules::usage_limits::resolve_epoch)
 
     #[test]
     fn test_iso8601_to_epoch_known_value() {
@@ -630,78 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn test_usage_limits_cache_backwards_compat_old_format() {
-        // Old cache JSON (pre-extra-usage/per-model) must still deserialize.
-        // The old format lacks extra_usage_*, seven_day_opus_*, etc. fields —
-        // #[serde(default)] on UsageLimitsData ensures they deserialize as None.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        // Write a cache file mimicking the old format (only original fields)
-        let path = dir.path().join("cship").join("transcript-usage-limits");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let old_cache = serde_json::json!({
-            "data": {
-                "five_hour_pct": 42.0,
-                "seven_day_pct": 18.0,
-                "five_hour_resets_at": "2099-01-01T00:00:00Z",
-                "seven_day_resets_at": "2099-01-01T00:00:00Z"
-            },
-            "expires_at": now + 300,
-            "five_hour_resets_at": 9_999_999_999_u64,
-            "seven_day_resets_at": 9_999_999_999_u64
-        });
-        std::fs::write(&path, serde_json::to_string(&old_cache).unwrap()).unwrap();
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(
-            result.is_some(),
-            "old-format cache should still deserialize"
-        );
-        let data = result.unwrap();
-        assert!((data.five_hour_pct - 42.0).abs() < f64::EPSILON);
-        assert!((data.seven_day_pct - 18.0).abs() < f64::EPSILON);
-        // All new fields should be None (backwards-compatible defaults)
-        assert!(data.extra_usage_enabled.is_none());
-        assert!(data.extra_usage_monthly_limit.is_none());
-        assert!(data.extra_usage_used_credits.is_none());
-        assert!(data.extra_usage_utilization.is_none());
-        assert!(data.seven_day_opus_pct.is_none());
-        assert!(data.seven_day_opus_resets_at.is_none());
-        assert!(data.seven_day_sonnet_pct.is_none());
-        assert!(data.seven_day_sonnet_resets_at.is_none());
-        assert!(data.seven_day_cowork_pct.is_none());
-        assert!(data.seven_day_cowork_resets_at.is_none());
-        assert!(data.seven_day_oauth_apps_pct.is_none());
-        assert!(data.seven_day_oauth_apps_resets_at.is_none());
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_early_invalidation_with_plus_offset_resets_at() {
-        // Real API returns "+00:00" format — early invalidation must fire correctly
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        // five_hour_resets_at is in the past but uses +00:00 format
-        let data = UsageLimitsData {
-            five_hour_pct: 50.0,
-            seven_day_pct: 10.0,
-            five_hour_resets_at: "2000-01-01T00:00:00+00:00".into(), // past, +00:00 format
-            seven_day_resets_at: "2099-01-01T00:00:00+00:00".into(), // future
-            ..Default::default()
-        };
-        write_usage_limits(&transcript, &data, 60, None);
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(
-            result.is_none(),
-            "past five_hour_resets_at (+00:00 format) should invalidate cache"
-        );
-        drop(dir);
-    }
-
-    #[test]
     fn test_iso8601_to_epoch_fractional_seconds() {
         // Sub-second precision must parse to the same epoch as the whole-second form
         assert_eq!(
@@ -714,29 +324,6 @@ mod tests {
             Some(946_684_801),
             "fractional seconds are truncated, not rounded"
         );
-    }
-
-    #[test]
-    fn test_usage_limits_custom_ttl_sets_expires_at() {
-        // Issue #95: configurable TTL — verify custom TTL is respected in cache envelope
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 300, None);
-        let path = dir.path().join("cship").join("transcript-usage-limits");
-        let raw = std::fs::read_to_string(&path).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let expires_at = v["expires_at"].as_u64().unwrap();
-        let now = now_epoch();
-        // expires_at should be approximately now + 300 (±2s tolerance for test execution)
-        assert!(
-            expires_at >= now + 298 && expires_at <= now + 302,
-            "expected expires_at ~now+300, got delta={}",
-            expires_at.saturating_sub(now)
-        );
-        // Cache should still be valid (not expired within the custom window)
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(result.is_some(), "cache with 300s TTL should be valid");
-        drop(dir);
     }
 
     // ── Account profile cache tests ───────────────────────────────────────────
@@ -821,76 +408,7 @@ mod tests {
         drop(dir);
     }
 
-    // ── Token fingerprint tests ──────────────────────────────────────────────
-
-    #[test]
-    fn test_usage_limits_fingerprint_match_returns_data() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 60, Some("fp_work_account"));
-        let result = read_usage_limits(&transcript, false, Some("fp_work_account"));
-        assert!(result.is_some(), "matching fingerprint should return data");
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_fingerprint_mismatch_returns_none() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 60, Some("fp_work_account"));
-        let result = read_usage_limits(&transcript, false, Some("fp_personal_acct"));
-        assert!(
-            result.is_none(),
-            "mismatched fingerprint should return None"
-        );
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_fingerprint_mismatch_even_when_stale_allowed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        write_usage_limits(&transcript, &sample_data(), 60, Some("fp_work_account"));
-        let result = read_usage_limits(&transcript, true, Some("fp_personal_acct"));
-        assert!(
-            result.is_none(),
-            "fingerprint mismatch should invalidate even with allow_stale"
-        );
-        drop(dir);
-    }
-
-    #[test]
-    fn test_usage_limits_old_cache_no_fingerprint_treated_as_miss() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let transcript = dir.path().join("transcript.jsonl");
-        let path = dir.path().join("cship").join("transcript-usage-limits");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let now = now_epoch();
-        let old_cache = serde_json::json!({
-            "data": {
-                "five_hour_pct": 42.0,
-                "seven_day_pct": 18.0,
-                "five_hour_resets_at": "2099-01-01T00:00:00Z",
-                "seven_day_resets_at": "2099-01-01T00:00:00Z"
-            },
-            "expires_at": now + 300,
-            "five_hour_resets_at": 9_999_999_999_u64,
-            "seven_day_resets_at": 9_999_999_999_u64
-        });
-        std::fs::write(&path, serde_json::to_string(&old_cache).unwrap()).unwrap();
-        // Old cache without fingerprint must be a miss when caller provides a fingerprint
-        let result = read_usage_limits(&transcript, false, Some("fp_any"));
-        assert!(
-            result.is_none(),
-            "old cache without fingerprint should be treated as miss"
-        );
-        let result = read_usage_limits(&transcript, false, None);
-        assert!(
-            result.is_some(),
-            "old cache should still work when no fingerprint expected"
-        );
-        drop(dir);
-    }
+    // ── Token fingerprint tests (account profile) ────────────────────────────
 
     #[test]
     fn test_account_profile_fingerprint_match_returns_data() {

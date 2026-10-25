@@ -198,10 +198,13 @@ Set `end_hour = 24` to mean "through end of day". Weekends always return nothing
   ```
 - Run `cship explain` to confirm cship is receiving a valid JSON context.
 
-**Usage limits** data is cached:
-- Cache TTL: **configurable (default 60 seconds)**, or until the rate-limit reset window passes (whichever comes first). Set `[cship.usage_limits] ttl` to increase the cache interval if you run many concurrent sessions.
-- The first call in a session always fetches fresh data; subsequent calls within the configured TTL return the cached value.
-- If the cache seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
+**Usage limits** data is fetched from the Anthropic API and shared between sessions:
+- **Refresh interval:** `[cship.usage_limits] ttl` (default **60 seconds**). All `cship` processes that use the same Claude config directory share one fetch schedule and one state file, so running more sessions doesn't multiply API calls, and a new session within the interval shows the last fetched data instead of fetching again.
+- **Where it lives:** `<CLAUDE_CONFIG_DIR or ~/.claude>/cship/cache/usage-limits-state-v3.json`, plus a `usage-limits-fetch.lock` file next to it. Both are owner-only on Unix. Deleting them is safe; cship recreates them on the next fetch.
+- **Errors back off instead of retrying every render.** A rate limit (HTTP 429) waits for the server's `Retry-After` (up to 15 minutes), a server error (5xx) waits longer after each repeat, a network error retries after 30 seconds (or `ttl`, if that is longer), and a rejected token (HTTP 401) stops fetching until you log in again and the token changes. Last known data keeps rendering in the meantime. Retries never come sooner than `ttl`.
+- **Window resets:** when a usage window is about to reset, the next fetch is scheduled for a few seconds after the reset so the new window appears promptly. A reset never causes two fetches closer than 30 seconds apart (or `ttl`, if that is shorter).
+- **Session-only:** the OAuth fetch only runs for a normal Claude Code session (one that provides a `transcript_path`), so running `cship` by hand with arbitrary input never reads your credential or calls the API.
+- If the data seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
 
 You can see the current cache state by running `cship explain` — it shows the usage limits value being rendered and any warnings if the API call failed.
 

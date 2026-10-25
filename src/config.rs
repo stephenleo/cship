@@ -331,8 +331,12 @@ pub struct UsageLimitsConfig {
     pub warn_style: Option<String>,
     pub critical_threshold: Option<f64>,
     pub critical_style: Option<String>,
-    /// Cache refresh interval in seconds. Default: 60.
-    /// Increase to reduce API pressure with many concurrent sessions.
+    /// Requested OAuth usage refresh interval, in seconds. Default: 60.
+    /// This is shared across every concurrent cship process using the same
+    /// Claude config directory
+    /// (via a cross-process coordinator), so running more sessions does not
+    /// multiply API calls. Increase to poll the API less often; decrease to
+    /// poll more often.
     pub ttl: Option<u64>,
     /// Reserved — not yet rendered. Use `five_hour_format`, `seven_day_format`,
     /// and `separator` for per-section format control.
@@ -689,6 +693,24 @@ mod tests {
             msg.contains("cannot read config file"),
             "error message: {msg}"
         );
+    }
+
+    /// `ttl = 0` must not make config loading fail (that would blank the whole
+    /// statusline); the usage_limits coordinator clamps it instead.
+    #[test]
+    fn test_ttl_zero_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let cship_path = dir.path().join("cship.toml");
+        let mut f = std::fs::File::create(&cship_path).unwrap();
+        writeln!(
+            f,
+            "[usage_limits]
+ttl = 0"
+        )
+        .unwrap();
+
+        let cfg = discover_and_load(None, cship_path.to_str()).unwrap();
+        assert_eq!(cfg.usage_limits.and_then(|c| c.ttl), Some(0));
     }
 
     #[test]

@@ -118,6 +118,48 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Resolve the Claude Code configuration directory, checked in priority order:
+/// 1. `CLAUDE_CONFIG_DIR` env var — points directly at the config dir (not its parent).
+/// 2. `home_dir()/.claude` — `home_dir()` already checks `CLAUDE_HOME`, `HOME`, `USERPROFILE`.
+pub(crate) fn claude_config_dir() -> Option<std::path::PathBuf> {
+    claude_config_dir_from(
+        std::env::var("CLAUDE_CONFIG_DIR")
+            .ok()
+            .filter(|d| !d.is_empty()),
+        home_dir(),
+    )
+}
+
+/// Pure decision logic behind `claude_config_dir()`, taking the two inputs
+/// explicitly so it's directly unit-testable without mutating process-wide
+/// env vars (which would race against any other test that reads
+/// `HOME`/`USERPROFILE`, e.g. via `get_oauth_token()`, when the suite runs
+/// with the default multi-threaded test runner).
+fn claude_config_dir_from(
+    explicit_config_dir: Option<String>,
+    home: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if let Some(dir) = explicit_config_dir {
+        return Some(std::path::PathBuf::from(dir));
+    }
+    home.map(|h| h.join(".claude"))
+}
+
+/// Shared, cross-process cache directory for cship's own state (currently just
+/// the usage-limits coordinator). Lives under the Claude config dir so it moves
+/// with `CLAUDE_CONFIG_DIR` overrides and is naturally per-user.
+pub(crate) fn cship_shared_cache_dir() -> Option<std::path::PathBuf> {
+    cship_shared_cache_dir_from(claude_config_dir())
+}
+
+/// Pure decision logic behind `cship_shared_cache_dir()` — see
+/// `claude_config_dir_from` for why this takes its input explicitly.
+fn cship_shared_cache_dir_from(
+    config_dir: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    config_dir.map(|d| d.join("cship").join("cache"))
+}
+
 #[cfg(target_os = "windows")]
 pub fn get_oauth_token() -> Result<String, String> {
     let home = home_dir().ok_or_else(|| {
@@ -346,5 +388,56 @@ mod tests {
     #[test]
     fn test_token_fingerprint_empty_returns_empty() {
         assert_eq!(token_fingerprint(""), "");
+    }
+
+    // ── claude_config_dir / cship_shared_cache_dir ───────────────────────────
+    //
+    // Exercised via the `_from` pure-function variants rather than by
+    // mutating real `CLAUDE_CONFIG_DIR`/`CLAUDE_HOME`/`HOME`/`USERPROFILE`
+    // env vars: `cargo test` runs this crate's tests in parallel threads of
+    // one process by default, and env vars are process-global, so mutating
+    // them here would race against any other test that reads them
+    // transitively (e.g. `get_oauth_token()` via `home_dir()`) — verified
+    // empirically: an env-var-mutating version of these tests intermittently
+    // broke an unrelated `usage_limits` test on a machine with real Claude
+    // Code credentials on disk. Testing the pure `_from` functions directly
+    // gets the same coverage with no shared mutable state and no
+    // `temp-env`/`serial_test` dependency.
+
+    #[test]
+    fn test_claude_config_dir_prefers_claude_config_dir_env() {
+        assert_eq!(
+            claude_config_dir_from(
+                Some("/explicit/config".to_string()),
+                Some(std::path::PathBuf::from("/other/home")),
+            ),
+            Some(std::path::PathBuf::from("/explicit/config"))
+        );
+    }
+
+    #[test]
+    fn test_claude_config_dir_falls_back_to_home_dir_slash_claude() {
+        assert_eq!(
+            claude_config_dir_from(None, Some(std::path::PathBuf::from("/parent"))),
+            Some(std::path::PathBuf::from("/parent/.claude"))
+        );
+    }
+
+    #[test]
+    fn test_cship_shared_cache_dir_is_claude_config_dir_slash_cship_slash_cache() {
+        assert_eq!(
+            cship_shared_cache_dir_from(Some(std::path::PathBuf::from("/explicit/config"))),
+            Some(std::path::PathBuf::from("/explicit/config/cship/cache"))
+        );
+    }
+
+    #[test]
+    fn test_claude_config_dir_none_when_no_env_vars_set() {
+        assert_eq!(claude_config_dir_from(None, None), None);
+    }
+
+    #[test]
+    fn test_cship_shared_cache_dir_none_when_config_dir_none() {
+        assert_eq!(cship_shared_cache_dir_from(None), None);
     }
 }

@@ -977,7 +977,7 @@
           ]
         },
         "ttl": {
-          "description": "Cache refresh interval in seconds. Default: 60.\nIncrease to reduce API pressure with many concurrent sessions.",
+          "description": "Requested OAuth usage refresh interval, in seconds. Default: 60.\nThis is shared across every concurrent cship process using the same\nClaude config directory\n(via a cross-process coordinator), so running more sessions does not\nmultiply API calls. Increase to poll the API less often; decrease to\npoll more often.",
           "type": [
             "integer",
             "null"

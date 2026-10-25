@@ -2,6 +2,7 @@
 name          = "cship"
 version       = "1.8.3"
 edition       = "2024"
+rust-version  = "1.89" # File::try_lock (usage_limits_state)
 description   = "A beautiful, fully customizable statusline for Claude Code — Starship-style TOML config, themeable colours, Nerd Font glyphs, and tunable cost/context/usage thresholds"
 license       = "Apache-2.0"
 repository    = "https://github.com/stephenleo/cship"
