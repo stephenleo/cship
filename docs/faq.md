@@ -62,6 +62,8 @@ The CShip `usage_limits` module fetches data from the Anthropic API using your C
 
 **macOS:** CShip reads the OAuth token from the macOS Keychain automatically — no manual setup required.
 
+**Multiple accounts (`CLAUDE_CONFIG_DIR`):** CShip reads the credential of the session's own config dir, the same way Claude Code stores it: `$CLAUDE_CONFIG_DIR/.credentials.json` on Linux/WSL2 and Windows, and the Keychain item `Claude Code-credentials-<hash>` on macOS (unsuffixed `Claude Code-credentials` when `CLAUDE_CONFIG_DIR` is unset). So `usage_limits` and `account` follow whichever account the session runs as.
+
 ---
 
 ## What do `{pace}` and `{active}` mean in the usage_limits format strings?
