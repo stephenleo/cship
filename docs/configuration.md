@@ -403,6 +403,8 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 | `$cship.usage_limits.session` (alias `.five_hour`) | Only the 5h window, colored by *its own* utilization |
 | `$cship.usage_limits.weekly` (alias `.seven_day`) | Only the 7d window, colored by *its own* utilization |
 
+Claude Code sends no `rate_limits.five_hour` for an account without a 5-hour limit, and the usage API returns `five_hour: null`. In that case `$cship.usage_limits` leaves out the 5h part and `$cship.usage_limits.session` renders nothing.
+
 The sub-tokens let you place sections independently in your `lines` layout — e.g., keep the 5h/7d pair on one row and push per-model onto a second row.
 
 Unlike `$cship.usage_limits` (whose threshold color keys off the *higher* of the two windows), the `session` and `weekly` tokens each escalate independently on their own percentage. Combined with the `{bar}` placeholder and `bar_width`, this lets you render a separate progress bar per window — one line for the 5h session, one for the 7d week — each turning yellow/red on its own:
