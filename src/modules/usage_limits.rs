@@ -116,6 +116,7 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
             seven_day_pct: stdin.seven_day_pct,
             five_hour_resets_at_epoch: stdin.five_hour_resets_at_epoch,
             seven_day_resets_at_epoch: stdin.seven_day_resets_at_epoch,
+            five_hour_absent: stdin.five_hour_absent,
             ..full
         }),
         // Stdin only (no per-model/extra)
@@ -233,6 +234,9 @@ enum Period {
 fn render_period(ctx: &Context, cfg: &CshipConfig, period: Period) -> Option<String> {
     let data = resolve_data(ctx, cfg)?;
     if lacks_standard_signal(&data) {
+        return None;
+    }
+    if matches!(period, Period::FiveHour) && data.five_hour_absent {
         return None;
     }
     let default_ul_cfg = UsageLimitsConfig::default();
@@ -387,19 +391,15 @@ where
 ///
 /// Only falls back to `None` (triggering the OAuth path) when `ctx.rate_limits` is absent.
 /// Partial data (absent `five_hour`, `seven_day`, or `used_percentage`) uses placeholder values:
-/// - absent period → pct `0.0` (renders as `"0%"`) and epoch `None` (renders as `"?"`)
+/// - absent `five_hour` → `five_hour_absent`, so the 5h segment is not rendered
+/// - absent `seven_day` → pct `0.0` (renders as `"0%"`) and epoch `None` (renders as `"?"`)
 /// - absent `used_percentage` within a present period → pct `0.0`
 fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     let rl = ctx.rate_limits.as_ref()?; // None here → use OAuth path
 
     let (five_pct, five_epoch) = match rl.five_hour.as_ref() {
         Some(five) => (five.used_percentage.unwrap_or(0.0), five.resets_at),
-        None => {
-            tracing::warn!(
-                "rate_limits.five_hour absent from stdin; rendering with placeholder values"
-            );
-            (0.0, None)
-        }
+        None => (0.0, None),
     };
     let (seven_pct, seven_epoch) = match rl.seven_day.as_ref() {
         Some(seven) => (seven.used_percentage.unwrap_or(0.0), seven.resets_at),
@@ -416,6 +416,7 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
         seven_day_pct: seven_pct,
         five_hour_resets_at_epoch: five_epoch,
         seven_day_resets_at_epoch: seven_epoch,
+        five_hour_absent: rl.five_hour.is_none(),
         ..Default::default()
     })
 }
@@ -532,7 +533,11 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
         cfg,
     );
 
-    let mut parts: Vec<String> = vec![five_h_part, seven_d_part];
+    let mut parts: Vec<String> = Vec::new();
+    if !data.five_hour_absent {
+        parts.push(five_h_part);
+    }
+    parts.push(seven_d_part);
 
     if cfg.show_per_model.unwrap_or(false) {
         let per_model = format_per_model(data, cfg);
@@ -1870,12 +1875,43 @@ mod tests {
         let result = data_from_stdin_rate_limits(&ctx);
         assert!(result.is_some());
         let data = result.unwrap();
-        assert!(
-            (data.five_hour_pct - 0.0).abs() < f64::EPSILON,
-            "absent five_hour → 0.0 placeholder"
-        );
+        assert!(data.five_hour_absent, "absent five_hour → five_hour_absent");
         assert!((data.seven_day_pct - 75.0).abs() < f64::EPSILON);
         assert_eq!(data.five_hour_resets_at_epoch, None);
+    }
+
+    fn ctx_without_five_hour() -> (tempfile::TempDir, Context) {
+        let (dir, mut ctx) = ctx_with_pcts(0.0, 33.0);
+        ctx.rate_limits.as_mut().unwrap().five_hour = None;
+        (dir, ctx)
+    }
+
+    fn five_hour_cfg() -> CshipConfig {
+        CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                five_hour_format: Some("5h {pct}% ({reset})".into()),
+                seven_day_format: Some("7d {pct}%".into()),
+                separator: Some(" ".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_render_omits_five_hour_when_absent() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        let out = render(&ctx, &five_hour_cfg()).unwrap();
+        assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
+        assert!(out.contains("7d 33%"), "7d segment should remain: {out:?}");
+    }
+
+    #[test]
+    fn test_render_five_hour_token_none_when_absent() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        let cfg = five_hour_cfg();
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+        assert!(render_seven_day(&ctx, &cfg).unwrap().contains("7d 33%"));
     }
 
     // ── render() stdin integration tests (story 2-4, AC2 & AC4) ──────────────

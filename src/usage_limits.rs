@@ -26,6 +26,9 @@ pub struct UsageLimitsData {
     /// Unix epoch seconds for the seven-day window reset; `Some` only on the stdin path.
     #[serde(default)]
     pub seven_day_resets_at_epoch: Option<u64>,
+    /// True when the source reported no five-hour window at all (plans without a 5h limit).
+    #[serde(default)]
+    pub five_hour_absent: bool,
     // Extra usage (OAuth API only; absent on stdin path)
     #[serde(default)]
     pub extra_usage_enabled: Option<bool>,
@@ -99,6 +102,7 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
     let (cowork_pct, cowork_reset) = map_period(&api.seven_day_cowork);
     let (oauth_apps_pct, oauth_apps_reset) = map_period(&api.seven_day_oauth_apps);
 
+    let five_hour_absent = api.five_hour.is_none();
     let (five_h_pct, five_h_reset) = api
         .five_hour
         .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
@@ -115,6 +119,7 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
         seven_day_resets_at: seven_d_reset,
         five_hour_resets_at_epoch: None,
         seven_day_resets_at_epoch: None,
+        five_hour_absent,
         extra_usage_enabled: api.extra_usage.as_ref().and_then(|e| e.is_enabled),
         extra_usage_monthly_limit: api.extra_usage.as_ref().and_then(|e| e.monthly_limit),
         extra_usage_used_credits: api.extra_usage.as_ref().and_then(|e| e.used_credits),
@@ -162,6 +167,13 @@ pub fn fetch_usage_limits(token: &str) -> Result<UsageLimitsData, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_api_response_null_five_hour_is_absent() {
+        let json = r#"{"five_hour":null,"seven_day":{"utilization":33.0,"resets_at":null}}"#;
+        let data = parse_api_response(json).unwrap();
+        assert!(data.five_hour_absent);
+    }
 
     #[test]
     fn test_fetch_parses_extra_usage_fields() {
