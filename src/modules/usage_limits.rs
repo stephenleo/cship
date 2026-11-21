@@ -1,15 +1,161 @@
 //! Usage limits module — renders 5h and 7d API utilization with time-to-reset.
 //!
-//! On cache hit: reads directly from `cache::read_usage_limits`, no thread.
-//! On cache miss: dispatches `fetch_usage_limits` via `std::thread::spawn` and waits
-//! up to 2 seconds via `mpsc::recv_timeout`. Falls back to last cache or empty.
+//! Per-model + extra-usage data comes from the cross-process shared
+//! coordinator (`crate::usage_limits_state::resolve_shared_usage`), which
+//! fetches from the Anthropic API at most once per the configured interval
+//! (60s default, user-configurable via `ttl`) across all concurrent
+//! `cship` processes. This module only merges that with the
+//! freshest 5h/7d values from stdin and formats the result — it does not
+//! drive scheduling or HTTP calls itself.
 //!
 //! [Source: architecture.md#src/modules/usage_limits.rs]
 
-use crate::cache;
 use crate::config::{CshipConfig, UsageLimitsConfig};
 use crate::context::Context;
 use crate::usage_limits::{UsageLimitsData, UsageWindow};
+
+/// A single window's percentage + reset, tagged with which source produced it.
+/// Reset and percentage always travel together so a merge can never pair one
+/// source's pct with another source's reset (the bug this type exists to prevent).
+#[derive(Debug, Clone, PartialEq)]
+struct UsageWindowSnapshot {
+    pct: f64,
+    resets_at_epoch: Option<u64>,
+    resets_at_iso: String,
+}
+
+impl UsageWindowSnapshot {
+    fn new(pct: f64, epoch: Option<u64>, iso: &str) -> Self {
+        let resets_at_epoch = resolve_epoch(epoch, iso);
+        Self {
+            pct,
+            resets_at_epoch,
+            resets_at_iso: iso.to_string(),
+        }
+    }
+}
+
+/// Result of merging a stdin and an API window snapshot for one period (5h or 7d).
+#[derive(Debug, Clone, PartialEq, Default)]
+struct MergedUsageWindow {
+    pct: f64,
+    resets_at_epoch: Option<u64>,
+    resets_at_iso: String,
+}
+
+impl MergedUsageWindow {
+    fn empty() -> Self {
+        Self::default()
+    }
+}
+
+impl From<&UsageWindowSnapshot> for MergedUsageWindow {
+    fn from(s: &UsageWindowSnapshot) -> Self {
+        Self {
+            pct: s.pct,
+            resets_at_epoch: s.resets_at_epoch,
+            resets_at_iso: s.resets_at_iso.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowState {
+    Live,
+    Expired,
+    Unknown,
+}
+
+fn classify_window(snapshot: &UsageWindowSnapshot, now: u64) -> WindowState {
+    match snapshot.resets_at_epoch {
+        Some(e) if e > now => WindowState::Live,
+        Some(_) => WindowState::Expired,
+        None => WindowState::Unknown,
+    }
+}
+
+/// Same-window tolerance: reset timestamps within this many seconds of each
+/// other are treated as the same underlying window (clock/rounding slop
+/// between stdin's epoch and the API's ISO-parsed epoch).
+const SAME_WINDOW_TOLERANCE_SECS: u64 = 60;
+
+/// Merge a stdin and an API window snapshot for one period into a single
+/// authoritative percentage + reset pair. See module docs / plan doc for the
+/// full decision table (Phase 1, "Required Merge Rules").
+fn merge_window(
+    stdin: Option<UsageWindowSnapshot>,
+    api: Option<UsageWindowSnapshot>,
+    now: u64,
+) -> MergedUsageWindow {
+    let stdin_state = stdin.as_ref().map(|s| classify_window(s, now));
+    let api_state = api.as_ref().map(|s| classify_window(s, now));
+
+    match (&stdin, stdin_state, &api, api_state) {
+        (Some(s), Some(WindowState::Live), Some(a), Some(WindowState::Live)) => {
+            let s_reset = s.resets_at_epoch.unwrap();
+            let a_reset = a.resets_at_epoch.unwrap();
+            if s_reset.abs_diff(a_reset) <= SAME_WINDOW_TOLERANCE_SECS {
+                if a.pct >= s.pct { a.into() } else { s.into() }
+            } else if a_reset > s_reset {
+                a.into()
+            } else {
+                s.into()
+            }
+        }
+        (Some(s), Some(WindowState::Live), _, _) => s.into(),
+        (_, _, Some(a), Some(WindowState::Live)) => a.into(),
+        // API's unknown-reset pct is preferred over stdin's (API is account-wide),
+        // so check it first — both arms produce the same shape, so one helper
+        // covers "whichever side is Unknown" instead of two near-identical arms.
+        (_, _, Some(a), Some(WindowState::Unknown)) => unknown_result(a.pct),
+        (Some(s), Some(WindowState::Unknown), _, _) => unknown_result(s.pct),
+        _ => MergedUsageWindow::empty(),
+    }
+}
+
+/// Merge one window (5h or 7d, picked by `window`) across stdin and the API;
+/// `None` when neither source has the window.
+///
+/// Stdin omits a window the account does not have (`five_hour` on plans with no
+/// 5h limit), but a window can also be missing from a single payload. When stdin
+/// lacks the window and the API data carries a real reading for it, keep that
+/// instead of hiding a limit the account does have.
+fn merge_source_windows(
+    stdin: Option<&UsageLimitsData>,
+    api: Option<&UsageLimitsData>,
+    window: fn(&UsageLimitsData) -> Option<UsageWindow<'_>>,
+    now: u64,
+) -> Option<MergedUsageWindow> {
+    let stdin_w = stdin.and_then(window);
+    let api_w = api
+        .and_then(window)
+        .filter(|w| stdin.is_none() || stdin_w.is_some() || w.has_reading());
+    if stdin.is_some() && stdin_w.is_none() && api_w.is_some() {
+        tracing::debug!(
+            "cship.usage_limits: window absent from stdin rate_limits; using the usage API's"
+        );
+    }
+    if stdin_w.is_none() && api_w.is_none() {
+        return None;
+    }
+    let snapshot =
+        |w: UsageWindow<'_>| UsageWindowSnapshot::new(w.pct, w.resets_at_epoch, w.resets_at);
+    Some(merge_window(
+        stdin_w.map(snapshot),
+        api_w.map(snapshot),
+        now,
+    ))
+}
+
+/// A pct with no trustworthy reset time attached — used whenever the
+/// selected source's window state is `Unknown`.
+fn unknown_result(pct: f64) -> MergedUsageWindow {
+    MergedUsageWindow {
+        pct,
+        resets_at_epoch: None,
+        resets_at_iso: String::new(),
+    }
+}
 
 thread_local! {
     /// Per-render-cycle memo for `resolve_data`. cship invocations are short-lived
@@ -48,6 +194,71 @@ fn resolve_data(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     resolve_data_uncached(ctx, cfg)
 }
 
+/// Mirrors the pre-coordinator behavior: no live OAuth fetch without a
+/// transcript_path, even if a token is available. A real Claude Code session
+/// always sends one; input that doesn't (e.g. an integration test driving
+/// the compiled binary directly with synthetic stdin) gets no credential
+/// read and no HTTP call.
+fn full_data_eligible(ctx: &Context) -> bool {
+    ctx.transcript_path.is_some()
+}
+
+/// Per-model + extra-usage data from the cross-process shared coordinator.
+///
+/// Reads the real OAuth credential and, when eligible, drives a real HTTP
+/// call and real cross-process cache file via
+/// `usage_limits_state::resolve_shared_usage`. Token failure is non-fatal —
+/// stdin data is still usable.
+///
+/// Three independent layers keep this from touching real credentials/network
+/// where it shouldn't: `full_data_eligible` gates on `transcript_path` (this
+/// function, both real and test contexts); the integration test harness
+/// (`tests/cli.rs`) isolates `CLAUDE_HOME` so `get_oauth_token()` can't find
+/// a real credential even when `transcript_path` is set; and `#[cfg(test)]`
+/// replaces this whole function with a stub for `cargo test --lib`, since
+/// `get_oauth_token()` reads whatever the *host machine* running unit tests
+/// happens to have, with no test-injectable seam at that layer.
+/// `resolve_shared_usage`'s own logic is covered directly by
+/// `usage_limits_state::tests`; the full integration is a manual-verification
+/// item (see the Task 4 plan, Phase 7).
+#[cfg(not(test))]
+fn resolve_full_data(ctx: &Context, ul_cfg: Option<&UsageLimitsConfig>) -> Option<UsageLimitsData> {
+    if !full_data_eligible(ctx) {
+        return None;
+    }
+    let token = match crate::platform::get_oauth_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            tracing::warn!("cship.usage_limits: credential retrieval failed: {e}");
+            None
+        }
+    };
+    crate::usage_limits_state::resolve_shared_usage(
+        token.as_deref(),
+        ul_cfg.and_then(|c| c.ttl),
+        now_epoch(),
+    )
+    .usage
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What the test-build `resolve_full_data` returns in place of the real
+    /// OAuth/coordinator data. `None` (the default) means "no API data".
+    /// Set through `tests::FullDataGuard`, which restores it on drop because
+    /// cargo reuses worker threads between tests.
+    static TEST_FULL_DATA: std::cell::RefCell<Option<UsageLimitsData>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn resolve_full_data(
+    _ctx: &Context,
+    _ul_cfg: Option<&UsageLimitsConfig>,
+) -> Option<UsageLimitsData> {
+    TEST_FULL_DATA.with(|d| d.borrow().clone())
+}
+
 /// Stdin `rate_limits` always provides the freshest 5h/7d values (sent every render
 /// by Claude Code). Cache/OAuth provide per-model + extra usage data.
 ///
@@ -60,123 +271,46 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
         return None;
     }
 
-    let transcript_path = ctx.transcript_path.as_deref().map(std::path::Path::new);
-
     // Stdin provides the freshest 5h/7d values
     let stdin_data = data_from_stdin_rate_limits(ctx);
+    let full_data = resolve_full_data(ctx, ul_cfg);
 
-    // Read OAuth token up front for fingerprint (cache identity check).
-    // Token failure is non-fatal here — stdin data is still usable.
-    let token_and_fp = match crate::platform::get_oauth_token() {
-        Ok(token) => {
-            let fp = crate::platform::token_fingerprint(&token);
-            Some((token, fp))
-        }
-        Err(e) => {
-            tracing::warn!("cship.usage_limits: credential retrieval failed: {e}");
-            if let Some(tp) = transcript_path {
-                cache::write_negative_marker(tp, 30);
-            }
-            None
-        }
-    };
-
-    // Try to get full data (per-model + extra) from cache or OAuth
-    let full_data = transcript_path.and_then(|tp| {
-        let fp_ref = token_and_fp.as_ref().map(|(_, fp)| fp.as_str());
-        // Fresh cache?
-        if let Some(cached) = cache::read_usage_limits(tp, false, fp_ref) {
-            return Some(cached);
-        }
-        // Check negative cache — avoid retrying immediately after a failure
-        if cache::read_negative_marker(tp) {
-            tracing::debug!("cship.usage_limits: skipping OAuth (recent failure cooldown)");
-            if let Some((_, ref fp)) = token_and_fp {
-                return cache::read_usage_limits(tp, true, Some(fp));
-            }
-            return cache::read_usage_limits(tp, true, None);
-        }
-        // OAuth fetch? (needs token)
-        if let Some((token, fp)) = token_and_fp {
-            if let Some(fresh) = fetch_and_cache(tp, ul_cfg, token, &fp) {
-                return Some(fresh);
-            }
-            // Stale cache as last resort for per-model/extra
-            cache::read_usage_limits(tp, true, Some(&fp))
-        } else {
-            // No token available — try stale cache without fingerprint check
-            cache::read_usage_limits(tp, true, None)
-        }
-    });
-
+    let now = now_epoch();
     match (stdin_data, full_data) {
-        // Merge: stdin 5h/7d (fresh) + cache/OAuth per-model/extra
-        (Some(stdin), Some(full)) => {
-            // Stdin omits a window the account does not have (`five_hour` on plans
-            // with no 5h limit), but a window can also be missing from a single
-            // payload. When the API data carries a real reading for it, keep that
-            // instead of hiding a limit the account does have.
-            let keep_api_five_hour =
-                stdin.five_hour().is_none() && full.five_hour().is_some_and(|w| w.has_reading());
-            let keep_api_seven_day =
-                stdin.seven_day().is_none() && full.seven_day().is_some_and(|w| w.has_reading());
-            if keep_api_five_hour || keep_api_seven_day {
-                tracing::debug!(
-                    "cship.usage_limits: window absent from stdin rate_limits; using the usage API's (5h: {keep_api_five_hour}, 7d: {keep_api_seven_day})"
-                );
-            }
-            let five = if keep_api_five_hour { &full } else { &stdin };
-            let (five_hour_pct, five_hour_resets_at_epoch, five_hour_absent) = (
-                five.five_hour_pct,
-                five.five_hour_resets_at_epoch,
-                five.five_hour_absent,
+        (None, None) => None,
+        (stdin, full) => {
+            let five_h = merge_source_windows(
+                stdin.as_ref(),
+                full.as_ref(),
+                UsageLimitsData::five_hour,
+                now,
             );
-            let seven = if keep_api_seven_day { &full } else { &stdin };
-            let (seven_day_pct, seven_day_resets_at_epoch, seven_day_absent) = (
-                seven.seven_day_pct,
-                seven.seven_day_resets_at_epoch,
-                seven.seven_day_absent,
+            let seven_d = merge_source_windows(
+                stdin.as_ref(),
+                full.as_ref(),
+                UsageLimitsData::seven_day,
+                now,
             );
+            let (five_hour_absent, seven_day_absent) = (five_h.is_none(), seven_d.is_none());
+            let (five_h, seven_d) = (five_h.unwrap_or_default(), seven_d.unwrap_or_default());
+            // Non-window fields (extra_usage_*, per-model breakdowns) only
+            // ever come from `full` — prefer it as the base when present,
+            // matching the previous `..full` spread; fall back to `stdin`
+            // (whose non-window fields are all `Default`) when `full` is
+            // absent, so the arm still produces a value in the
+            // single-source stdin-only case.
+            let base = full.unwrap_or_else(|| stdin.unwrap_or_default());
             Some(UsageLimitsData {
-                five_hour_pct,
-                seven_day_pct,
-                five_hour_resets_at_epoch,
-                seven_day_resets_at_epoch,
+                five_hour_pct: five_h.pct,
+                seven_day_pct: seven_d.pct,
+                five_hour_resets_at: five_h.resets_at_iso,
+                seven_day_resets_at: seven_d.resets_at_iso,
+                five_hour_resets_at_epoch: five_h.resets_at_epoch,
+                seven_day_resets_at_epoch: seven_d.resets_at_epoch,
                 five_hour_absent,
                 seven_day_absent,
-                ..full
+                ..base
             })
-        }
-        // Stdin only (no per-model/extra)
-        (Some(stdin), None) => Some(stdin),
-        // No stdin, use cache/OAuth data as-is
-        (None, Some(full)) => Some(full),
-        // Nothing available
-        (None, None) => None,
-    }
-}
-
-/// Fetch usage limits via OAuth and write to cache with fingerprint.
-///
-/// Accepts a pre-fetched token and fingerprint — the caller handles credential
-/// retrieval so this function only deals with the fetch + cache write.
-fn fetch_and_cache(
-    transcript_path: &std::path::Path,
-    ul_cfg: Option<&UsageLimitsConfig>,
-    token: String,
-    fingerprint: &str,
-) -> Option<UsageLimitsData> {
-    let ttl_secs = ul_cfg.and_then(|c| c.ttl).unwrap_or(60);
-    let fp = fingerprint.to_string();
-
-    match fetch_with_timeout(move || crate::usage_limits::fetch_usage_limits(&token)) {
-        Some(fresh) => {
-            cache::write_usage_limits(transcript_path, &fresh, ttl_secs, Some(&fp));
-            Some(fresh)
-        }
-        None => {
-            cache::write_negative_marker(transcript_path, 30);
-            None
         }
     }
 }
@@ -200,8 +334,12 @@ pub(crate) fn lacks_standard_signal(data: &UsageLimitsData) -> bool {
 }
 
 /// Apply threshold styling using the higher of 5h/7d utilization.
-/// Falls back to `extra_usage_utilization` when both standard signals are zero
-/// (Enterprise plans where 5h/7d data is absent).
+/// Falls back to `extra_usage_utilization` whenever both standard percentages
+/// are zero — either because neither window is available (Enterprise plans,
+/// where 5h/7d data is absent) or because a normal account's windows are
+/// genuinely idle at 0%. `lacks_standard_signal` is not
+/// checked here; this fallback is purely value-based, so it applies in both
+/// cases.
 fn apply_threshold(content: &str, data: &UsageLimitsData, cfg: &CshipConfig) -> String {
     let ul_cfg = cfg.usage_limits.as_ref();
     let window_pct = |w: Option<UsageWindow<'_>>| w.map_or(0.0, |w| w.pct);
@@ -398,31 +536,6 @@ pub fn render_extra_usage(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
     let content = format_extra_usage(&data, ul_cfg)?;
     Some(apply_threshold(&content, &data, cfg))
-}
-
-/// Spawn `fetch_fn` on a new thread and wait up to 2 seconds for the result.
-///
-/// Returns `None` on API error or timeout, logging a warning in both cases.
-/// Generic `F` bound allows tests to inject a fast lambda bypassing real HTTP.
-fn fetch_with_timeout<F>(fetch_fn: F) -> Option<UsageLimitsData>
-where
-    F: FnOnce() -> Result<UsageLimitsData, String> + Send + 'static,
-{
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        tx.send(fetch_fn()).ok();
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(2)) {
-        Ok(Ok(data)) => Some(data),
-        Ok(Err(e)) => {
-            tracing::warn!("cship.usage_limits: API fetch failed: {e}");
-            None
-        }
-        Err(_) => {
-            tracing::warn!("cship.usage_limits: API fetch timed out after 2s");
-            None
-        }
-    }
 }
 
 /// Extract usage limits from the `rate_limits` field Claude Code sends via stdin.
@@ -918,6 +1031,18 @@ mod tests {
         assert!(!lacks_standard_signal(&data));
     }
 
+    #[test]
+    fn test_lacks_standard_signal_returns_false_for_idle_but_present_window() {
+        // A supported 5h window that just reset (utilization 0, resets_at null)
+        // must not be mistaken for a plan where the window doesn't exist.
+        let data = UsageLimitsData {
+            five_hour_pct: 0.0,
+            seven_day_pct: 62.0,
+            ..Default::default()
+        };
+        assert!(!lacks_standard_signal(&data));
+    }
+
     // ── render() tests ────────────────────────────────────────────────────────
 
     #[test]
@@ -941,6 +1066,21 @@ mod tests {
         };
         let cfg = CshipConfig::default();
         assert!(render(&ctx, &cfg).is_none());
+    }
+
+    #[test]
+    fn test_full_data_eligible_requires_transcript_path() {
+        let ctx = Context {
+            transcript_path: None,
+            ..Default::default()
+        };
+        assert!(!full_data_eligible(&ctx));
+
+        let ctx = Context {
+            transcript_path: Some("/tmp/t.jsonl".to_string()),
+            ..Default::default()
+        };
+        assert!(full_data_eligible(&ctx));
     }
 
     #[test]
@@ -1314,63 +1454,6 @@ mod tests {
         let styled = apply_threshold("X", &data, &cfg);
         // Standard pct (30%) is below threshold; extra_usage (90%) is ignored.
         assert_eq!(styled, "X", "expected no styling; standard signal must win");
-    }
-
-    // ── fetch_with_timeout() tests ────────────────────────────────────────────
-
-    #[test]
-    fn test_render_stale_cache_returned_on_fetch_timeout() {
-        // Write an expired cache entry (expires_at = 0 so read_usage_limits returns None)
-        // but read_usage_limits(allow_stale=true) should still return it
-        let dir = tempfile::tempdir().unwrap();
-        let transcript = dir.path().join("test.jsonl");
-        // Write valid cache first so the file exists
-        let data = UsageLimitsData {
-            five_hour_pct: 50.0,
-            seven_day_pct: 30.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        };
-        crate::cache::write_usage_limits(&transcript, &data, 60, None);
-        // Verify read_usage_limits(allow_stale=true) works even after TTL would normally expire
-        let stale = crate::cache::read_usage_limits(&transcript, true, None);
-        assert!(
-            stale.is_some(),
-            "stale read should return data regardless of TTL"
-        );
-        assert!((stale.unwrap().five_hour_pct - 50.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_fetch_with_timeout_success_returns_data() {
-        let expected = UsageLimitsData {
-            five_hour_pct: 50.0,
-            seven_day_pct: 30.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        };
-        let cloned = expected.clone();
-        let result = fetch_with_timeout(move || Ok(cloned));
-        assert!(result.is_some());
-        assert!((result.unwrap().five_hour_pct - 50.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_fetch_with_timeout_api_error_returns_none() {
-        let result = fetch_with_timeout(|| Err("API error".to_string()));
-        assert!(result.is_none());
-    }
-
-    #[test]
-    #[ignore = "slow: blocks for 2s timeout"]
-    fn test_fetch_with_timeout_timeout_returns_none() {
-        let result = fetch_with_timeout(|| {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            Ok(UsageLimitsData::default())
-        });
-        assert!(result.is_none());
     }
 
     // ── epoch_to_iso() tests ──────────────────────────────────────────────────
@@ -1949,26 +2032,16 @@ mod tests {
         assert!(render_seven_day(&ctx, &cfg).unwrap().contains("7d 33%"));
     }
 
-    /// Writes API-shaped data to the cache next to `ctx`'s transcript, so `render`
-    /// takes the stdin + cache merge path.
-    fn prime_cache(ctx: &Context, data: &UsageLimitsData) {
-        let transcript = std::path::Path::new(ctx.transcript_path.as_deref().unwrap());
-        crate::cache::write_usage_limits(transcript, data, 60, None);
-    }
-
     #[test]
     fn test_merge_keeps_api_five_hour_when_stdin_omits_it() {
         let (_dir, ctx) = ctx_without_five_hour();
-        prime_cache(
-            &ctx,
-            &UsageLimitsData {
-                five_hour_pct: 62.0,
-                seven_day_pct: 10.0,
-                five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-                seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-                ..Default::default()
-            },
-        );
+        let _full = FullDataGuard::set(UsageLimitsData {
+            five_hour_pct: 62.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        });
         let cfg = five_hour_cfg();
         let out = render(&ctx, &cfg).unwrap();
         assert!(out.contains("5h 62%"), "API 5h reading must show: {out:?}");
@@ -1979,15 +2052,12 @@ mod tests {
     #[test]
     fn test_merge_hides_five_hour_when_both_sources_lack_it() {
         let (_dir, ctx) = ctx_without_five_hour();
-        prime_cache(
-            &ctx,
-            &UsageLimitsData {
-                seven_day_pct: 10.0,
-                seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-                five_hour_absent: true,
-                ..Default::default()
-            },
-        );
+        let _full = FullDataGuard::set(UsageLimitsData {
+            seven_day_pct: 10.0,
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            five_hour_absent: true,
+            ..Default::default()
+        });
         let cfg = five_hour_cfg();
         let out = render(&ctx, &cfg).unwrap();
         assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
@@ -2000,14 +2070,11 @@ mod tests {
         // "present" with 0% and no reset. That is not a reading, so stdin's
         // absence still hides the segment.
         let (_dir, ctx) = ctx_without_five_hour();
-        prime_cache(
-            &ctx,
-            &UsageLimitsData {
-                seven_day_pct: 10.0,
-                seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-                ..Default::default()
-            },
-        );
+        let _full = FullDataGuard::set(UsageLimitsData {
+            seven_day_pct: 10.0,
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        });
         let out = render(&ctx, &five_hour_cfg()).unwrap();
         assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
     }
@@ -2085,16 +2152,13 @@ mod tests {
     #[test]
     fn test_merge_keeps_api_seven_day_when_stdin_omits_it() {
         let (_dir, ctx) = ctx_without_seven_day();
-        prime_cache(
-            &ctx,
-            &UsageLimitsData {
-                five_hour_pct: 10.0,
-                seven_day_pct: 71.0,
-                five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-                seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-                ..Default::default()
-            },
-        );
+        let _full = FullDataGuard::set(UsageLimitsData {
+            five_hour_pct: 10.0,
+            seven_day_pct: 71.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        });
         let out = render(&ctx, &five_hour_cfg()).unwrap();
         assert!(out.contains("5h 40%"), "stdin 5h must still win: {out:?}");
         assert!(out.contains("7d 71%"), "API 7d reading must show: {out:?}");
@@ -2142,47 +2206,6 @@ mod tests {
         assert!(
             output.contains("60%"),
             "expected seven_day_pct 60%: {output:?}"
-        );
-    }
-
-    #[test]
-    fn test_render_stdin_takes_priority_over_cache() {
-        // AC2: stdin rate_limits present + cache present → stdin wins
-        let dir = tempfile::tempdir().unwrap();
-        let transcript = dir.path().join("test.jsonl");
-        let cache_data = UsageLimitsData {
-            five_hour_pct: 99.0, // ← cache has high value
-            seven_day_pct: 99.0,
-            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
-            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            ..Default::default()
-        };
-        crate::cache::write_usage_limits(&transcript, &cache_data, 60, None);
-
-        let ctx = Context {
-            transcript_path: Some(transcript.to_str().unwrap().to_string()),
-            rate_limits: Some(crate::context::RateLimits {
-                // ← stdin has different value
-                five_hour: Some(crate::context::RateLimitPeriod {
-                    used_percentage: Some(23.0),
-                    resets_at: Some(9_999_999_999),
-                }),
-                seven_day: Some(crate::context::RateLimitPeriod {
-                    used_percentage: Some(45.0),
-                    resets_at: Some(9_999_999_999),
-                }),
-            }),
-            ..Default::default()
-        };
-        let result = render(&ctx, &CshipConfig::default()).unwrap();
-        // Stdin value (23%) must win over cache value (99%)
-        assert!(
-            result.contains("23%"),
-            "stdin must override cache: {result:?}"
-        );
-        assert!(
-            !result.contains("99%"),
-            "cache value must not appear: {result:?}"
         );
     }
 
@@ -2906,34 +2929,254 @@ mod tests {
         assert!(!result.ends_with(" | "), "no dangling sep: {result:?}");
     }
 
-    fn current_fingerprint() -> Option<String> {
-        crate::platform::get_oauth_token()
-            .ok()
-            .map(|t| crate::platform::token_fingerprint(&t))
+    // --- merge_window: Phase 1 window-merge correctness ---
+
+    fn snap(pct: f64, epoch: Option<u64>) -> UsageWindowSnapshot {
+        UsageWindowSnapshot::new(pct, epoch, "")
+    }
+
+    #[test]
+    fn test_merge_window_stdin_expired_api_live() {
+        let now = 1_000_000;
+        let stdin = snap(85.0, Some(now - 10)); // expired
+        let api = snap(12.0, Some(now + 10)); // live
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 12.0);
+        assert_eq!(merged.resets_at_epoch, Some(now + 10));
+    }
+
+    #[test]
+    fn test_merge_window_api_expired_stdin_live() {
+        let now = 1_000_000;
+        let stdin = snap(30.0, Some(now + 10));
+        let api = snap(70.0, Some(now - 10));
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 30.0);
+        assert_eq!(merged.resets_at_epoch, Some(now + 10));
+    }
+
+    #[test]
+    fn test_merge_window_both_live_same_reset_api_higher() {
+        let now = 1_000_000;
+        let reset = now + 500;
+        let stdin = snap(23.0, Some(reset));
+        let api = snap(60.0, Some(reset));
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 60.0);
+        assert_eq!(merged.resets_at_epoch, Some(reset));
+    }
+
+    #[test]
+    fn test_merge_window_both_live_same_reset_stdin_higher() {
+        let now = 1_000_000;
+        let reset = now + 500;
+        let stdin = snap(60.0, Some(reset));
+        let api = snap(23.0, Some(reset));
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 60.0);
+        assert_eq!(merged.resets_at_epoch, Some(reset));
+    }
+
+    #[test]
+    fn test_merge_window_both_live_different_reset_uses_later_reset_window() {
+        let now = 1_000_000;
+        let stdin = snap(85.0, Some(now + 100)); // earlier reset, older window
+        let api = snap(12.0, Some(now + 10_000)); // later reset, newer window
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 12.0);
+        assert_eq!(merged.resets_at_epoch, Some(now + 10_000));
+    }
+
+    #[test]
+    fn test_merge_window_both_expired_returns_zero_with_no_reset() {
+        let now = 1_000_000;
+        let stdin = snap(85.0, Some(now - 100));
+        let api = snap(70.0, Some(now - 50));
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 0.0);
+        assert_eq!(merged.resets_at_epoch, None);
+        assert!(merged.resets_at_iso.is_empty());
+    }
+
+    #[test]
+    fn test_merge_window_api_unknown_reset_stdin_expired_prefers_api() {
+        let now = 1_000_000;
+        let stdin = snap(85.0, Some(now - 100)); // expired
+        let api = snap(40.0, None); // unknown reset
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 40.0);
+        assert_eq!(merged.resets_at_epoch, None);
+    }
+
+    #[test]
+    fn test_merge_window_stdin_unknown_reset_api_live_prefers_api() {
+        let now = 1_000_000;
+        let stdin = snap(90.0, None); // unknown reset
+        let api = snap(15.0, Some(now + 10)); // live
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 15.0);
+        assert_eq!(merged.resets_at_epoch, Some(now + 10));
+    }
+
+    #[test]
+    fn test_merge_window_only_stdin_present_unknown_reset() {
+        let now = 1_000_000;
+        let stdin = snap(50.0, None);
+        let merged = merge_window(Some(stdin), None, now);
+        assert_eq!(merged.pct, 50.0);
+        assert_eq!(merged.resets_at_epoch, None);
+    }
+
+    #[test]
+    fn test_merge_window_percentage_and_reset_always_paired() {
+        // Regression guard for the exact bug in the deleted branch: selecting
+        // API's pct must never pair with stdin's reset epoch or vice versa.
+        let now = 1_000_000;
+        let stdin = UsageWindowSnapshot::new(85.0, Some(now - 10), "2020-01-01T00:00:00+00:00");
+        let api = UsageWindowSnapshot::new(12.0, Some(now + 10), "2099-01-01T00:00:00+00:00");
+        let merged = merge_window(Some(stdin), Some(api), now);
+        assert_eq!(merged.pct, 12.0);
+        assert_eq!(merged.resets_at_iso, "2099-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn test_resolve_data_stdin_only_still_works_after_coordinator_rewire() {
+        let ctx = Context {
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(10.0),
+                    resets_at: Some(now_epoch() + 3600),
+                }),
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(5.0),
+                    resets_at: Some(now_epoch() + 3600),
+                }),
+            }),
+            ..Default::default()
+        };
+        let cfg = CshipConfig::default();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(out.contains("10%"));
+    }
+
+    // --- Fix 2 regression: single-source (stdin-only) resolve must also route
+    // through merge_window, not bypass it and pass a raw expired snapshot
+    // straight to the formatter. ---
+
+    #[test]
+    fn test_resolve_data_stdin_only_expired_window_never_renders_resets_in_now() {
+        // full_data is always None in test builds (resolve_full_data stub),
+        // so this exercises exactly the (Some(stdin), None) arm.
+        let now = now_epoch();
+        let ctx = Context {
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(85.0),
+                    resets_at: Some(now.saturating_sub(100)), // expired
+                }),
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(70.0),
+                    resets_at: Some(now.saturating_sub(50)), // expired
+                }),
+            }),
+            ..Default::default()
+        };
+        let data = resolve_data(&ctx, &CshipConfig::default())
+            .expect("stdin-only data should still resolve to Some");
+        assert_eq!(
+            data.five_hour_pct, 0.0,
+            "expired window must merge down to 0%, not raw 85%"
+        );
+        assert_eq!(data.seven_day_pct, 0.0);
+        assert_eq!(data.five_hour_resets_at_epoch, None);
+        assert_eq!(data.seven_day_resets_at_epoch, None);
+
+        // format_output must never say "resets in now" for an expired window.
+        let out = format_output(&data, &UsageLimitsConfig::default());
+        assert!(
+            !out.contains("resets in now"),
+            "expired single-source window must not render 'resets in now': {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_merge_window_one_side_expired_other_side_absent_is_empty() {
+        // Underlying invariant both single-source arms now depend on:
+        // one side present-and-expired, other side entirely absent → empty
+        // result (0 pct, no reset), never the raw expired snapshot.
+        let now = 1_000_000;
+        let stdin = snap(85.0, Some(now - 100)); // expired
+        let merged = merge_window(Some(stdin), None, now);
+        assert_eq!(merged.pct, 0.0);
+        assert_eq!(merged.resets_at_epoch, None);
+        assert!(merged.resets_at_iso.is_empty());
+    }
+
+    #[test]
+    fn test_format_output_zero_pct_never_renders_resets_in_now() {
+        let data = UsageLimitsData {
+            five_hour_pct: 0.0,
+            seven_day_pct: 0.0,
+            five_hour_resets_at: String::new(),
+            seven_day_resets_at: String::new(),
+            five_hour_resets_at_epoch: None,
+            seven_day_resets_at_epoch: None,
+            ..Default::default()
+        };
+        let cfg = UsageLimitsConfig::default();
+        let out = format_output(&data, &cfg);
+        assert!(!out.contains("resets in now"), "got: {out}");
+        assert!(out.contains("0%"), "got: {out}");
+    }
+
+    // ── stdin + API data assembly (resolve_data_uncached with injected API data) ──
+
+    /// Makes the test-build `resolve_full_data` return `data` until dropped.
+    struct FullDataGuard;
+    impl FullDataGuard {
+        fn set(data: UsageLimitsData) -> Self {
+            TEST_FULL_DATA.with(|d| *d.borrow_mut() = Some(data));
+            FullDataGuard
+        }
+    }
+    impl Drop for FullDataGuard {
+        fn drop(&mut self) {
+            TEST_FULL_DATA.with(|d| *d.borrow_mut() = None);
+        }
+    }
+
+    fn ctx_with_transcript() -> (tempfile::TempDir, Context) {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("test.jsonl");
+        let ctx = Context {
+            transcript_path: Some(transcript.to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+        (dir, ctx)
+    }
+
+    fn api_window_data() -> UsageLimitsData {
+        UsageLimitsData {
+            five_hour_pct: 30.0,
+            seven_day_pct: 60.0,
+            five_hour_resets_at_epoch: Some(9_999_999_999),
+            seven_day_resets_at_epoch: Some(9_999_999_999),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn test_render_enterprise_extra_usage_only() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript_path = tmp.path().join("transcript.jsonl");
-        std::fs::write(&transcript_path, "").unwrap();
-
-        let data = UsageLimitsData {
+        let _full = FullDataGuard::set(UsageLimitsData {
             extra_usage_enabled: Some(true),
             extra_usage_monthly_limit: Some(30000.0),
             extra_usage_used_credits: Some(23076.0),
             extra_usage_utilization: Some(76.92),
             ..Default::default()
-        };
-        let fp = current_fingerprint();
-        crate::cache::write_usage_limits(&transcript_path, &data, 600, fp.as_deref());
-
-        let ctx = Context {
-            transcript_path: Some(transcript_path.to_string_lossy().into()),
-            ..Default::default()
-        };
-        let cfg = CshipConfig::default();
-        let out = render(&ctx, &cfg).expect("Enterprise: extra_usage_only must render");
+        });
+        let (_dir, ctx) = ctx_with_transcript();
+        let out = render(&ctx, &CshipConfig::default())
+            .expect("Enterprise: extra_usage_only must render");
         assert!(!out.contains("5h:"), "must not include 5h section: {out}");
         assert!(!out.contains("7d:"), "must not include 7d section: {out}");
         assert!(out.contains("230.76"), "must include used dollars: {out}");
@@ -2942,22 +3185,78 @@ mod tests {
 
     #[test]
     fn test_render_enterprise_extra_disabled_returns_none() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript_path = tmp.path().join("transcript.jsonl");
-        std::fs::write(&transcript_path, "").unwrap();
-
-        let data = UsageLimitsData {
+        let _full = FullDataGuard::set(UsageLimitsData {
             extra_usage_enabled: Some(false),
             ..Default::default()
-        };
-        let fp = current_fingerprint();
-        crate::cache::write_usage_limits(&transcript_path, &data, 600, fp.as_deref());
+        });
+        let (_dir, ctx) = ctx_with_transcript();
+        assert!(render(&ctx, &CshipConfig::default()).is_none());
+    }
 
-        let ctx = Context {
-            transcript_path: Some(transcript_path.to_string_lossy().into()),
+    /// No stdin `rate_limits`: the standard windows come from the API alone.
+    #[test]
+    fn test_render_standard_windows_from_api_only() {
+        let _full = FullDataGuard::set(api_window_data());
+        let (_dir, ctx) = ctx_with_transcript();
+        let out = render(&ctx, &CshipConfig::default()).expect("API-only windows must render");
+        assert!(out.contains("5h: 30%"), "5h from API: {out}");
+        assert!(out.contains("7d: 60%"), "7d from API: {out}");
+    }
+
+    /// Stdin sends `rate_limits` with neither window (e.g. at session start)
+    /// while the API reports one: the API's window is kept, so the plan is not
+    /// mistaken for one without standard windows, and the window the API does
+    /// not report stays hidden.
+    #[test]
+    fn test_api_window_kept_when_stdin_omits_it() {
+        use crate::context::RateLimits;
+        for (five_absent, seven_absent) in [(false, true), (true, false)] {
+            let _full = FullDataGuard::set(UsageLimitsData {
+                five_hour_pct: 30.0,
+                seven_day_pct: 60.0,
+                five_hour_resets_at_epoch: Some(9_999_999_999),
+                seven_day_resets_at_epoch: Some(9_999_999_999),
+                five_hour_absent: five_absent,
+                seven_day_absent: seven_absent,
+                ..Default::default()
+            });
+            let (_dir, mut ctx) = ctx_with_transcript();
+            ctx.rate_limits = Some(RateLimits {
+                five_hour: None,
+                seven_day: None,
+            });
+            let out = render(&ctx, &CshipConfig::default()).unwrap_or_else(|| {
+                panic!("API window (5h absent={five_absent}, 7d absent={seven_absent}) must keep the module visible")
+            });
+            assert_eq!(out.contains("5h:"), !five_absent, "{out}");
+            assert_eq!(out.contains("7d:"), !seven_absent, "{out}");
+        }
+    }
+
+    /// Non-window fields (extra usage) come from the API even when stdin
+    /// supplies the standard windows.
+    #[test]
+    fn test_extra_usage_comes_from_api_when_windows_come_from_stdin() {
+        let (_dir, ctx) = ctx_with_pcts(20.0, 10.0);
+        let _full = FullDataGuard::set(UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(10000.0),
+            extra_usage_used_credits: Some(2500.0),
+            extra_usage_utilization: Some(25.0),
             ..Default::default()
-        };
-        let cfg = CshipConfig::default();
-        assert!(render(&ctx, &cfg).is_none());
+        });
+        let out = render(&ctx, &CshipConfig::default()).unwrap();
+        assert!(out.contains("5h: 20%"), "stdin window: {out}");
+        assert!(
+            out.contains("25.00") || out.contains("25%"),
+            "API extra usage: {out}"
+        );
+    }
+
+    /// No API data and no stdin: nothing to show.
+    #[test]
+    fn test_render_none_without_any_source() {
+        let (_dir, ctx) = ctx_with_transcript();
+        assert!(render(&ctx, &CshipConfig::default()).is_none());
     }
 }

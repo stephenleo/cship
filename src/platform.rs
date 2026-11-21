@@ -137,12 +137,10 @@ pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 /// Claude Code's config directory for this session: `CLAUDE_CONFIG_DIR` when set,
 /// otherwise `.claude` under [`home_dir`]. Claude Code launches the statusline with
 /// the session's environment, so this is the directory of the account in use.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn claude_config_dir() -> Option<std::path::PathBuf> {
     resolve_config_dir(config_dir_env(), home_dir())
 }
 
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn resolve_config_dir(
     config_dir: Option<String>,
     home: Option<std::path::PathBuf>,
@@ -172,6 +170,21 @@ fn keychain_service_name(config_dir: Option<&str>) -> String {
             format!("{BASE}-{hex}")
         }
     }
+}
+
+/// Shared, cross-process cache directory for cship's own state (currently just
+/// the usage-limits coordinator). Lives under the Claude config dir so it moves
+/// with `CLAUDE_CONFIG_DIR` overrides and is naturally per-user.
+pub(crate) fn cship_shared_cache_dir() -> Option<std::path::PathBuf> {
+    cship_shared_cache_dir_from(claude_config_dir())
+}
+
+/// Pure decision logic behind `cship_shared_cache_dir()`, taking its input
+/// explicitly so it is unit-testable without mutating process-wide env vars.
+fn cship_shared_cache_dir_from(
+    config_dir: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    config_dir.map(|d| d.join("cship").join("cache"))
 }
 
 #[cfg(target_os = "windows")]
@@ -528,5 +541,20 @@ mod tests {
     #[test]
     fn test_token_fingerprint_empty_returns_empty() {
         assert_eq!(token_fingerprint(""), "");
+    }
+
+    // ── cship_shared_cache_dir ───────────────────────────────────────────────
+
+    #[test]
+    fn test_cship_shared_cache_dir_is_claude_config_dir_slash_cship_slash_cache() {
+        assert_eq!(
+            cship_shared_cache_dir_from(Some(std::path::PathBuf::from("/explicit/config"))),
+            Some(std::path::PathBuf::from("/explicit/config/cship/cache"))
+        );
+    }
+
+    #[test]
+    fn test_cship_shared_cache_dir_none_when_config_dir_none() {
+        assert_eq!(cship_shared_cache_dir_from(None), None);
     }
 }

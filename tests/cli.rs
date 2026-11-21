@@ -2,25 +2,49 @@ use assert_cmd::Command;
 use assert_cmd::cargo_bin_cmd;
 use predicates::prelude::*;
 
+/// Every `cship` subprocess spawned by this test file gets an isolated
+/// `CLAUDE_CONFIG_DIR` (coordinator cache dir) and `CLAUDE_HOME` (credential
+/// root), each pointing at a fresh, never-reused path (unique per call via
+/// an atomic counter + this test binary's own PID, so parallel test threads
+/// never collide). `CLAUDE_HOME` is checked before `HOME`/`USERPROFILE` by
+/// `platform::home_dir()`, so `get_oauth_token()`'s
+/// `~/.claude/.credentials.json` read resolves to a path that never exists,
+/// so the file-based credential lookup fails deterministically. On macOS the
+/// credential comes from the Keychain (and on Linux `secret-tool` is a
+/// fallback); those lookups are not redirected by these variables, so a
+/// developer machine with a real login may still find a token. Without this
+/// isolation, both the coordinator's shared state file and the file-based
+/// credential would be readable/writable by every test in this file.
+fn isolated_config_dir() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("cship-cli-test-{}-{n}", std::process::id()))
+}
+
 fn cship() -> Command {
-    cargo_bin_cmd!("cship")
+    let mut cmd = cargo_bin_cmd!("cship");
+    let isolated = isolated_config_dir();
+    cmd.env("CLAUDE_CONFIG_DIR", &isolated);
+    cmd.env("CLAUDE_HOME", &isolated);
+    cmd
 }
 
 #[test]
 fn test_valid_full_json_exits_zero_with_no_stdout() {
     let json = std::fs::read_to_string("tests/fixtures/sample_input_full.json").unwrap();
-    cargo_bin_cmd!("cship").write_stdin(json).assert().success();
+    cship().write_stdin(json).assert().success();
 }
 
 #[test]
 fn test_valid_minimal_json_exits_zero() {
     let json = std::fs::read_to_string("tests/fixtures/sample_input_minimal.json").unwrap();
-    cargo_bin_cmd!("cship").write_stdin(json).assert().success();
+    cship().write_stdin(json).assert().success();
 }
 
 #[test]
 fn test_empty_stdin_exits_nonzero_with_no_stdout() {
-    cargo_bin_cmd!("cship")
+    cship()
         .write_stdin("")
         .assert()
         .failure()
@@ -50,7 +74,7 @@ fn test_version_flag_long_prints_version() {
 
 #[test]
 fn test_malformed_json_exits_nonzero_with_no_stdout() {
-    cargo_bin_cmd!("cship")
+    cship()
         .write_stdin("not valid json{{{")
         .assert()
         .failure()
@@ -63,7 +87,7 @@ fn test_malformed_json_exits_nonzero_with_no_stdout() {
 #[test]
 fn test_unknown_fields_silently_ignored() {
     let json = r#"{"session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/t.jsonl","version":"1.0","exceeds_200k_tokens":false,"model":{"id":"claude-test","display_name":"Test"},"workspace":{"current_dir":"/tmp","project_dir":"/tmp"},"output_style":{"name":"default"},"cost":{"total_cost_usd":0.0},"unknown_future_field":true,"nested_unknown":{"key":"value"}}"#;
-    cargo_bin_cmd!("cship").write_stdin(json).assert().success();
+    cship().write_stdin(json).assert().success();
 }
 
 #[test]
@@ -826,7 +850,7 @@ fn test_explain_with_config_flag() {
 fn test_explain_no_stdin_uses_embedded_fallback() {
     // Invoke without piped stdin — process spawned without write_stdin uses TTY detection
     // which triggers the embedded fallback path in load_context()
-    let output = cargo_bin_cmd!("cship").args(["explain"]).output().unwrap();
+    let output = cship().args(["explain"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -850,7 +874,7 @@ fn test_explain_no_stdin_uses_embedded_fallback() {
 fn test_explain_shows_warning_for_disabled_module() {
     // Pipe a minimal JSON with no model data + use config that disables model
     let json = r#"{"model":null}"#;
-    let output = cargo_bin_cmd!("cship")
+    let output = cship()
         .args(["explain", "--config", "tests/fixtures/disabled-model.toml"])
         .write_stdin(json)
         .output()
