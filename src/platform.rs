@@ -33,7 +33,7 @@
 /// - **Credential tool not found**: the OS binary (`security` on macOS,
 ///   `secret-tool` on Linux) was not found on `PATH` — returns a
 ///   platform-specific install hint. On Linux this only triggers after
-///   `~/.claude/.credentials.json` is also absent.
+///   `<config dir>/.credentials.json` is also absent.
 ///
 /// - **Credential not found** (subprocess exits non-zero, or credentials
 ///   file absent with no secret-tool fallback): returns

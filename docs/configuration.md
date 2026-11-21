@@ -469,7 +469,7 @@ critical_style     = "bold red"
 | `{remaining_credits}` | Remaining extra-credit budget, in dollars (e.g. `138.05`) |
 | `{active}` | `⚡` when 5h or 7d utilization is at 100% (actively consuming extra credits), `💤` otherwise |
 
-**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 cship reads the token from `~/.claude/.credentials.json`, which Claude Code writes at login. See [FAQ](/faq#usage-limits-linux) for details.
+**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 cship reads the token from `.credentials.json` in Claude Code's config dir (`$CLAUDE_CONFIG_DIR` when set, else `~/.claude`), which Claude Code writes at login. See [FAQ](/faq#usage-limits-linux) for details.
 
 ```toml
 [cship.usage_limits]
@@ -568,7 +568,7 @@ Because field values render verbatim, a launcher can also embed ANSI color in th
 CSHIP_ACCOUNT='{"organization_name":"Acme Corp","organization_tier":"Team","account_display_name":"work"}'
 ```
 
-**Prerequisites:** Unless `CSHIP_ACCOUNT` is set, requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2 this is `~/.claude/.credentials.json`, which Claude Code writes at login. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, unreachable API, or a malformed `CSHIP_ACCOUNT` value).
+**Prerequisites:** Unless `CSHIP_ACCOUNT` is set, requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2 this is `.credentials.json` in Claude Code's config dir (`$CLAUDE_CONFIG_DIR` when set, else `~/.claude`), which Claude Code writes at login. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, unreachable API, or a malformed `CSHIP_ACCOUNT` value).
 
 ```toml
 [cship.account]

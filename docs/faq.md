@@ -42,7 +42,7 @@ This shows:
 
 The CShip `usage_limits` module fetches data from the Anthropic API using your Claude Code OAuth token, which is stored in the OS credential store.
 
-**Linux/WSL2:** No manual setup required. Claude Code writes its credential to `~/.claude/.credentials.json` when you log in, and CShip reads the OAuth token from that file. If the file is missing, log in to Claude Code again (`/login`).
+**Linux/WSL2:** No manual setup required. Claude Code writes its credential to `~/.claude/.credentials.json` when you log in (or to `$CLAUDE_CONFIG_DIR/.credentials.json` when that is set; see **Multiple accounts** below), and CShip reads the OAuth token from that file. If the file is missing, log in to Claude Code again (`/login`).
 
 Only when that file is absent does CShip fall back to `secret-tool` (from `libsecret-tools`), looking up the service `Claude Code-credentials`. The stored secret must be the full contents of `.credentials.json` (the JSON containing `claudeAiOauth.accessToken`), not the bare token. Claude Code itself does not write to the keyring on Linux, so most setups never use this fallback.
 
