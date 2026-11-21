@@ -42,25 +42,15 @@ This shows:
 
 The CShip `usage_limits` module fetches data from the Anthropic API using your Claude Code OAuth token, which is stored in the OS credential store.
 
-**Prerequisites:**
+**Linux/WSL2:** No manual setup required. Claude Code writes its credential to `~/.claude/.credentials.json` when you log in, and CShip reads the OAuth token from that file. If the file is missing, log in to Claude Code again (`/login`).
 
-1. Install `libsecret-tools`:
-   ```sh
-   # Debian/Ubuntu/WSL2
-   sudo apt-get install -y libsecret-tools
-   ```
+Only when that file is absent does CShip fall back to `secret-tool` (from `libsecret-tools`), looking up the service `Claude Code-credentials`. The stored secret must be the full contents of `.credentials.json` (the JSON containing `claudeAiOauth.accessToken`), not the bare token. Claude Code itself does not write to the keyring on Linux, so most setups never use this fallback.
 
-2. Store your Claude Code OAuth token with `secret-tool`:
-   ```sh
-   secret-tool store --label="Claude Code" service "claude.ai" account "claude-code"
-   ```
-   When prompted for a password, paste your OAuth token.
-
-   You can find your token in `~/.claude/.credentials.json` (look for the `access_token` field) or by logging out and back into Claude Code.
-
-3. Run `cship explain` to verify the token is found and the usage limits module is rendering.
+Run `cship explain` to verify the token is found and the usage limits module is rendering.
 
 **macOS:** CShip reads the OAuth token from the macOS Keychain automatically — no manual setup required.
+
+**Multiple accounts (`CLAUDE_CONFIG_DIR`):** CShip reads the credential of the session's own config dir, the same way Claude Code stores it: `$CLAUDE_CONFIG_DIR/.credentials.json` on Linux/WSL2 and Windows, and the Keychain item `Claude Code-credentials-<hash>` on macOS (unsuffixed `Claude Code-credentials` when `CLAUDE_CONFIG_DIR` is unset). The Linux `secret-tool` fallback uses the same suffixed name. So `usage_limits` and `account` follow whichever account the session runs as.
 
 ---
 
@@ -87,6 +77,8 @@ extra_usage_format = "{active} ${used}/${limit}"
 
 - `$cship.usage_limits.session` — the 5-hour window (alias `.five_hour`)
 - `$cship.usage_limits.weekly` — the 7-day window (alias `.seven_day`)
+
+On an account with no 5-hour limit, `$cship.usage_limits` shows only the 7d window and `$cship.usage_limits.session` renders nothing. `cship explain` reports this as "this account has no 5-hour usage window".
 
 Combine them with the `{bar}` placeholder (available in `five_hour_format` / `seven_day_format`, sized by `bar_width`) to get an independent progress bar per window:
 
@@ -134,8 +126,8 @@ The value reflects live `/effort` changes, so it updates on the next render afte
 `cship.account` shows which Anthropic account you're signed in to (work vs
 personal). It reads your account profile from the OAuth `/api/oauth/profile`
 endpoint using the OAuth token in your OS credential store — the same
-credential `usage_limits` uses — so the [Linux/WSL2 setup above](#usage-limits-linux)
-applies here too (`libsecret-tools` + `secret-tool`). The profile is cached for
+credential `usage_limits` uses — so the [Linux/WSL2 notes above](#usage-limits-linux)
+apply here too. The profile is cached for
 24 hours and re-fetched automatically when you switch accounts.
 
 If the module renders nothing, run `cship explain cship.account`. It
@@ -204,12 +196,16 @@ Set `end_hour = 24` to mean "through end of day". Weekends always return nothing
   ```
 - Run `cship explain` to confirm cship is receiving a valid JSON context.
 
-**Usage limits** data is cached:
-- Cache TTL: **configurable (default 60 seconds)**, or until the rate-limit reset window passes (whichever comes first). Set `[cship.usage_limits] ttl` to increase the cache interval if you run many concurrent sessions.
-- The first call in a session always fetches fresh data; subsequent calls within the configured TTL return the cached value.
-- If the cache seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
+**Usage limits** data is fetched from the Anthropic API and shared between sessions:
+- **Refresh interval:** `[cship.usage_limits] ttl` (default **60 seconds**). All `cship` processes that use the same Claude config directory share one fetch schedule and one state file, so running more sessions doesn't multiply API calls, and a new session within the interval shows the last fetched data instead of fetching again.
+- **Where it lives:** `<CLAUDE_CONFIG_DIR or ~/.claude>/cship/cache/usage-limits-state-v3.json`, plus a `usage-limits-fetch.lock` file next to it. Both are owner-only on Unix. Deleting them is safe; cship recreates them on the next fetch.
+- **Errors back off instead of retrying every render.** A rate limit (HTTP 429) waits for the server's `Retry-After`, or doubles from `ttl` when there is none, up to 15 minutes. Any other unexpected HTTP status waits 30 seconds and doubles with each repeat, up to 5 minutes. A network error or an unreadable response retries after 30 seconds. A rejected token (HTTP 401) is retried after 15 minutes, or at once when you log in again and the token changes. None of these retries come sooner than `ttl`, and a `ttl` longer than a limit above takes its place. Last known data keeps rendering in the meantime.
+- **Unreadable credential:** if the OAuth token cannot be read for a render (for example a keychain lookup that times out), cship keeps showing the last fetched data for up to 15 minutes and does not call the API.
+- **Window resets:** when a usage window is about to reset, the next fetch is scheduled for a few seconds after the reset so the new window appears promptly. A reset never causes two fetches closer than 30 seconds apart (or `ttl`, if that is shorter).
+- **Session-only:** the OAuth fetch only runs for a normal Claude Code session (one that provides a `transcript_path`), so rendering with `cship` by hand on arbitrary input never calls the API.
+- If the data seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
 
-You can see the current cache state by running `cship explain` — it shows the usage limits value being rendered and any warnings if the API call failed.
+Run `cship explain` to see the usage limits value being rendered and a hint when nothing rendered. For the reason a fetch failed or was skipped, run a render with `RUST_LOG=warn` set.
 
 ## Why are some characters missing from my path or model name?
 

@@ -7,6 +7,7 @@
 - Module interface (never deviate): `pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String>`
 - Disabled flag → silent `None` (no warn); absent data → explicit `match` + `tracing::warn!` + `None`
   - Exception: `context_bar` intentionally renders a 0% empty bar (styled via `empty_style`) when `context_window` is absent, rather than returning `None`. This is a deliberate UX choice — showing an empty bar is more informative than showing nothing. It uses `tracing::debug!` (not `warn!`) because absence is the normal state at session start.
+  - Exception: `usage_limits` hides the 5h window (segment and `session`/`five_hour` tokens return `None`) when the account has no 5-hour limit. It logs with `tracing::debug!` (not `warn!`) because that is a normal plan state, not missing data.
 - Never use `?` operator on paths that require a warning — use explicit `match`
 - stdout owned by `main.rs` only; all module diagnostics via `tracing::*` macros; no `eprintln!` anywhere
 - Exception: CLI-action subcommands (e.g. `uninstall`, `explain`) may use `println!` directly — the stdout rule applies to the rendering pipeline only
