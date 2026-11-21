@@ -78,6 +78,8 @@ extra_usage_format = "{active} ${used}/${limit}"
 - `$cship.usage_limits.session` — the 5-hour window (alias `.five_hour`)
 - `$cship.usage_limits.weekly` — the 7-day window (alias `.seven_day`)
 
+On an account with no 5-hour limit, `$cship.usage_limits` shows only the 7d window and `$cship.usage_limits.session` renders nothing. `cship explain` reports this as "this account has no 5-hour usage window".
+
 Combine them with the `{bar}` placeholder (available in `five_hour_format` / `seven_day_format`, sized by `bar_width`) to get an independent progress bar per window:
 
 ```toml
