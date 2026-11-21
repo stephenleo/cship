@@ -111,14 +111,33 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
 
     match (stdin_data, full_data) {
         // Merge: stdin 5h/7d (fresh) + cache/OAuth per-model/extra
-        (Some(stdin), Some(full)) => Some(UsageLimitsData {
-            five_hour_pct: stdin.five_hour_pct,
-            seven_day_pct: stdin.seven_day_pct,
-            five_hour_resets_at_epoch: stdin.five_hour_resets_at_epoch,
-            seven_day_resets_at_epoch: stdin.seven_day_resets_at_epoch,
-            five_hour_absent: stdin.five_hour_absent,
-            ..full
-        }),
+        (Some(stdin), Some(full)) => {
+            // Stdin omits `five_hour` on accounts with no 5h limit, but a window can
+            // also be missing from a single payload. When the API data carries a real
+            // 5h reading, keep it instead of hiding a limit the account does have.
+            let keep_api_five_hour = stdin.five_hour_absent && has_five_hour_reading(&full);
+            let (five_hour_pct, five_hour_resets_at_epoch, five_hour_absent) = if keep_api_five_hour
+            {
+                tracing::debug!(
+                    "cship.usage_limits: rate_limits.five_hour absent from stdin; using the 5h window from the usage API"
+                );
+                (full.five_hour_pct, full.five_hour_resets_at_epoch, false)
+            } else {
+                (
+                    stdin.five_hour_pct,
+                    stdin.five_hour_resets_at_epoch,
+                    stdin.five_hour_absent,
+                )
+            };
+            Some(UsageLimitsData {
+                five_hour_pct,
+                seven_day_pct: stdin.seven_day_pct,
+                five_hour_resets_at_epoch,
+                seven_day_resets_at_epoch: stdin.seven_day_resets_at_epoch,
+                five_hour_absent,
+                ..full
+            })
+        }
         // Stdin only (no per-model/extra)
         (Some(stdin), None) => Some(stdin),
         // No stdin, use cache/OAuth data as-is
@@ -151,6 +170,17 @@ fn fetch_and_cache(
             None
         }
     }
+}
+
+/// True when `data` holds an actual 5h reading: the window is not flagged absent and
+/// has a non-zero percentage or a reset time. A zero percentage with no reset time
+/// is indistinguishable from "no 5h window" (cache entries written before
+/// `five_hour_absent` existed look exactly like that), so it does not count.
+fn has_five_hour_reading(data: &UsageLimitsData) -> bool {
+    !data.five_hour_absent
+        && (data.five_hour_pct > 0.0
+            || data.five_hour_resets_at_epoch.is_some()
+            || !data.five_hour_resets_at.is_empty())
 }
 
 /// True when the response carries no 5h or 7d signal — i.e. percentages and
@@ -191,8 +221,9 @@ fn apply_threshold(content: &str, data: &UsageLimitsData, cfg: &CshipConfig) -> 
 
 /// Render the usage limits module.
 ///
-/// On Pro/Max plans this is the full 5h + 7d (+ optional per-model + optional extra)
-/// composition produced by `format_output`. On Enterprise plans (where the API returns
+/// On Pro/Max plans this is the 5h + 7d (+ optional per-model + optional extra)
+/// composition produced by `format_output`; the 5h part is left out when the account
+/// has no 5h window (`five_hour_absent`). On Enterprise plans (where the API returns
 /// 5h/7d as null), `render` short-circuits to the `extra_usage` section only.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let data = resolve_data(ctx, cfg)?;
@@ -231,12 +262,16 @@ enum Period {
 /// escalating independently. Returns `None` on plans without standard 5h/7d
 /// windows (e.g. Enterprise) — unlike `render`, it does not fall back to the
 /// extra-usage section, since this token is specifically the 5h/7d window.
+/// The 5h token also returns `None` when the account has no 5h window
+/// (`five_hour_absent`).
 fn render_period(ctx: &Context, cfg: &CshipConfig, period: Period) -> Option<String> {
     let data = resolve_data(ctx, cfg)?;
     if lacks_standard_signal(&data) {
         return None;
     }
     if matches!(period, Period::FiveHour) && data.five_hour_absent {
+        // Normal state on accounts without a 5h limit, hence debug rather than warn.
+        tracing::debug!("cship.usage_limits: no 5h window for this account; 5h token hidden");
         return None;
     }
     let default_ul_cfg = UsageLimitsConfig::default();
@@ -390,8 +425,9 @@ where
 /// round-trip through ISO 8601 formatting and re-parsing.
 ///
 /// Only falls back to `None` (triggering the OAuth path) when `ctx.rate_limits` is absent.
-/// Partial data (absent `five_hour`, `seven_day`, or `used_percentage`) uses placeholder values:
+/// Partial data (absent `five_hour`, `seven_day`, or `used_percentage`) is handled per field:
 /// - absent `five_hour` → `five_hour_absent`, so the 5h segment is not rendered
+///   (unless the usage API reports a 5h window, see the merge in `resolve_data_uncached`)
 /// - absent `seven_day` → pct `0.0` (renders as `"0%"`) and epoch `None` (renders as `"?"`)
 /// - absent `used_percentage` within a present period → pct `0.0`
 fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
@@ -399,7 +435,13 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
 
     let (five_pct, five_epoch) = match rl.five_hour.as_ref() {
         Some(five) => (five.used_percentage.unwrap_or(0.0), five.resets_at),
-        None => (0.0, None),
+        None => {
+            // Normal state on accounts without a 5h limit, hence debug rather than warn.
+            tracing::debug!(
+                "rate_limits.five_hour absent from stdin; treating the 5h window as absent"
+            );
+            (0.0, None)
+        }
     };
     let (seven_pct, seven_epoch) = match rl.seven_day.as_ref() {
         Some(seven) => (seven.used_percentage.unwrap_or(0.0), seven.resets_at),
@@ -516,14 +558,6 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
         .as_deref()
         .unwrap_or("7d: {pct}% resets in {reset}");
 
-    let five_h_part = format_period_part(
-        five_h_fmt,
-        data.five_hour_pct,
-        five_h_epoch,
-        FIVE_HOUR_SECS,
-        now,
-        cfg,
-    );
     let seven_d_part = format_period_part(
         seven_d_fmt,
         data.seven_day_pct,
@@ -535,7 +569,14 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
 
     let mut parts: Vec<String> = Vec::new();
     if !data.five_hour_absent {
-        parts.push(five_h_part);
+        parts.push(format_period_part(
+            five_h_fmt,
+            data.five_hour_pct,
+            five_h_epoch,
+            FIVE_HOUR_SECS,
+            now,
+            cfg,
+        ));
     }
     parts.push(seven_d_part);
 
@@ -1912,6 +1953,87 @@ mod tests {
         let cfg = five_hour_cfg();
         assert!(render_five_hour(&ctx, &cfg).is_none());
         assert!(render_seven_day(&ctx, &cfg).unwrap().contains("7d 33%"));
+    }
+
+    /// Writes API-shaped data to the cache next to `ctx`'s transcript, so `render`
+    /// takes the stdin + cache merge path.
+    fn prime_cache(ctx: &Context, data: &UsageLimitsData) {
+        let transcript = std::path::Path::new(ctx.transcript_path.as_deref().unwrap());
+        crate::cache::write_usage_limits(transcript, data, 60, None);
+    }
+
+    #[test]
+    fn test_merge_keeps_api_five_hour_when_stdin_omits_it() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        prime_cache(
+            &ctx,
+            &UsageLimitsData {
+                five_hour_pct: 62.0,
+                seven_day_pct: 10.0,
+                five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+                seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        );
+        let cfg = five_hour_cfg();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(out.contains("5h 62%"), "API 5h reading must show: {out:?}");
+        assert!(out.contains("7d 33%"), "stdin 7d must still win: {out:?}");
+        assert!(render_five_hour(&ctx, &cfg).unwrap().contains("5h 62%"));
+    }
+
+    #[test]
+    fn test_merge_hides_five_hour_when_both_sources_lack_it() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        prime_cache(
+            &ctx,
+            &UsageLimitsData {
+                seven_day_pct: 10.0,
+                seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+                five_hour_absent: true,
+                ..Default::default()
+            },
+        );
+        let cfg = five_hour_cfg();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+    }
+
+    #[test]
+    fn test_merge_hides_five_hour_for_cache_entry_without_flag_or_reading() {
+        // A cache entry written before `five_hour_absent` existed reads back as
+        // "present" with 0% and no reset. That is not a reading, so stdin's
+        // absence still hides the segment.
+        let (_dir, ctx) = ctx_without_five_hour();
+        prime_cache(
+            &ctx,
+            &UsageLimitsData {
+                seven_day_pct: 10.0,
+                seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        );
+        let out = render(&ctx, &five_hour_cfg()).unwrap();
+        assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
+    }
+
+    #[test]
+    fn test_has_five_hour_reading() {
+        assert!(!has_five_hour_reading(&UsageLimitsData::default()));
+        assert!(has_five_hour_reading(&UsageLimitsData {
+            five_hour_pct: 1.0,
+            ..Default::default()
+        }));
+        assert!(has_five_hour_reading(&UsageLimitsData {
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        }));
+        assert!(!has_five_hour_reading(&UsageLimitsData {
+            five_hour_pct: 50.0,
+            five_hour_absent: true,
+            ..Default::default()
+        }));
     }
 
     // ── render() stdin integration tests (story 2-4, AC2 & AC4) ──────────────

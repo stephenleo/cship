@@ -26,7 +26,10 @@ pub struct UsageLimitsData {
     /// Unix epoch seconds for the seven-day window reset; `Some` only on the stdin path.
     #[serde(default)]
     pub seven_day_resets_at_epoch: Option<u64>,
-    /// True when the source reported no five-hour window at all (plans without a 5h limit).
+    /// True when the source reported no five-hour window at all (stdin omitted
+    /// `rate_limits.five_hour`, or the API returned `five_hour: null`). The 5h segment
+    /// is then hidden; `five_hour_pct` and the reset fields hold placeholders.
+    /// Absent from cache entries written by older versions, which read as `false`.
     #[serde(default)]
     pub five_hour_absent: bool,
     // Extra usage (OAuth API only; absent on stdin path)
