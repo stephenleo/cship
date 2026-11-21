@@ -30,8 +30,13 @@ pub struct UsageLimitsData {
     /// `rate_limits.five_hour`, or the API returned `five_hour: null`). The 5h segment
     /// is then hidden; `five_hour_pct` and the reset fields hold placeholders.
     /// Absent from cache entries written by older versions, which read as `false`.
+    /// Read the window through [`UsageLimitsData::five_hour`] rather than this flag.
     #[serde(default)]
     pub five_hour_absent: bool,
+    /// Same as `five_hour_absent`, for the seven-day window. Read the window through
+    /// [`UsageLimitsData::seven_day`].
+    #[serde(default)]
+    pub seven_day_absent: bool,
     // Extra usage (OAuth API only; absent on stdin path)
     #[serde(default)]
     pub extra_usage_enabled: Option<bool>,
@@ -58,6 +63,47 @@ pub struct UsageLimitsData {
     pub seven_day_oauth_apps_pct: Option<f64>,
     #[serde(default)]
     pub seven_day_oauth_apps_resets_at: Option<String>,
+}
+
+/// One standard usage window (5h or 7d) as its source reported it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UsageWindow<'a> {
+    pub pct: f64,
+    /// ISO 8601 reset time; empty when unknown (API returned null, or stdin path).
+    pub resets_at: &'a str,
+    /// Unix epoch reset time; `Some` only on the stdin path.
+    pub resets_at_epoch: Option<u64>,
+}
+
+impl UsageWindow<'_> {
+    /// True when the window holds an actual reading: a non-zero percentage or a
+    /// reset time. A window at 0% with no reset time is indistinguishable from the
+    /// placeholders of a cache entry written before the `*_absent` flags existed.
+    pub fn has_reading(&self) -> bool {
+        self.pct > 0.0 || self.resets_at_epoch.is_some() || !self.resets_at.is_empty()
+    }
+}
+
+impl UsageLimitsData {
+    /// The five-hour window, or `None` when the source reported none. The flat
+    /// `five_hour_*` fields stay as they are for cache compatibility; consumers go
+    /// through this accessor so an absent window's placeholders are never rendered.
+    pub fn five_hour(&self) -> Option<UsageWindow<'_>> {
+        (!self.five_hour_absent).then_some(UsageWindow {
+            pct: self.five_hour_pct,
+            resets_at: &self.five_hour_resets_at,
+            resets_at_epoch: self.five_hour_resets_at_epoch,
+        })
+    }
+
+    /// The seven-day window, or `None` when the source reported none.
+    pub fn seven_day(&self) -> Option<UsageWindow<'_>> {
+        (!self.seven_day_absent).then_some(UsageWindow {
+            pct: self.seven_day_pct,
+            resets_at: &self.seven_day_resets_at,
+            resets_at_epoch: self.seven_day_resets_at_epoch,
+        })
+    }
 }
 
 /// Intermediate struct matching the raw API response structure.
@@ -110,6 +156,7 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
         .five_hour
         .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
         .unwrap_or((0.0, String::new()));
+    let seven_day_absent = api.seven_day.is_none();
     let (seven_d_pct, seven_d_reset) = api
         .seven_day
         .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
@@ -123,6 +170,7 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
         five_hour_resets_at_epoch: None,
         seven_day_resets_at_epoch: None,
         five_hour_absent,
+        seven_day_absent,
         extra_usage_enabled: api.extra_usage.as_ref().and_then(|e| e.is_enabled),
         extra_usage_monthly_limit: api.extra_usage.as_ref().and_then(|e| e.monthly_limit),
         extra_usage_used_credits: api.extra_usage.as_ref().and_then(|e| e.used_credits),
@@ -176,6 +224,12 @@ mod tests {
         let json = r#"{"five_hour":null,"seven_day":{"utilization":33.0,"resets_at":null}}"#;
         let data = parse_api_response(json).unwrap();
         assert!(data.five_hour_absent);
+        assert!(!data.seven_day_absent);
+        assert!(data.five_hour().is_none());
+        assert_eq!(data.seven_day().map(|w| w.pct), Some(33.0));
+
+        let enterprise = parse_api_response(r#"{"five_hour":null,"seven_day":null}"#).unwrap();
+        assert!(enterprise.five_hour_absent && enterprise.seven_day_absent);
     }
 
     #[test]
