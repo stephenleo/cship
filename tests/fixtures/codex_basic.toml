@@ -1,0 +1,5 @@
+[cship]
+lines = ["$cship.model$fill$cship.context_window.used_percentage"]
+
+[cship.model]
+style = "bold green"

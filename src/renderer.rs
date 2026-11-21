@@ -89,14 +89,16 @@ fn parse_line(line: &str) -> Vec<Token> {
     tokens
 }
 
-/// A rendered line segment: either literal text or a `$fill` placeholder whose
-/// width is computed once all text segments are known.
-enum Piece {
+/// A rendered line segment: either styled (ANSI) text or a `$fill` placeholder
+/// whose width is computed once all text segments are known.
+pub enum Piece {
     Text(String),
     Fill,
 }
 
-fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
+/// Render one format line into pieces, before `$fill` is expanded. Hosts that lay
+/// out the line themselves (Codex) consume this directly.
+fn line_pieces(line: &str, ctx: &Context, cfg: &CshipConfig) -> Vec<Piece> {
     let fill_disabled = cfg.fill.as_ref().and_then(|f| f.disabled).unwrap_or(false);
 
     let mut pieces: Vec<Piece> = Vec::new();
@@ -132,6 +134,11 @@ fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
             }
         }
     }
+    pieces
+}
+
+fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
+    let pieces = line_pieces(line, ctx, cfg);
 
     // Fast path: no fills → concatenate (spacing is encoded in Literal tokens).
     // This keeps the common case free of any terminal-width lookup.
@@ -240,28 +247,44 @@ fn distribute(remaining: usize, n: usize) -> Vec<usize> {
     (0..n).map(|i| base + usize::from(i < extra)).collect()
 }
 
-pub fn render(lines: &[String], ctx: &Context, cfg: &CshipConfig) -> String {
-    // cfg.format takes priority over lines; split on "$line_break" to produce rows
-    let owned_lines: Vec<String>;
-    let effective_lines: &[String] = if let Some(format_str) = &cfg.format {
+/// Resolve the format lines to render: `cfg.format` (split on `$line_break`)
+/// takes priority over `lines`.
+fn effective_lines(lines: &[String], cfg: &CshipConfig) -> Vec<String> {
+    if let Some(format_str) = &cfg.format {
         if !lines.is_empty() {
             tracing::warn!("cship: format field is set — ignoring lines config");
         }
-        owned_lines = format_str
+        format_str
             .split("$line_break")
             .map(|s| s.to_string())
-            .collect();
-        &owned_lines
+            .collect()
     } else {
-        lines
-    };
+        lines.to_vec()
+    }
+}
 
-    effective_lines
+pub fn render(lines: &[String], ctx: &Context, cfg: &CshipConfig) -> String {
+    effective_lines(lines, cfg)
         .iter()
         .map(|line| render_line(line, ctx, cfg))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Render every line into unexpanded pieces, dropping lines with no visible text.
+/// Used by hosts that handle layout and styling themselves (see `crate::codex`).
+pub fn render_pieces(lines: &[String], ctx: &Context, cfg: &CshipConfig) -> Vec<Vec<Piece>> {
+    effective_lines(lines, cfg)
+        .iter()
+        .map(|line| line_pieces(line, ctx, cfg))
+        .filter(|pieces| {
+            pieces.iter().any(|p| match p {
+                Piece::Text(s) => !crate::ansi::strip_ansi(s).is_empty(),
+                Piece::Fill => false,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

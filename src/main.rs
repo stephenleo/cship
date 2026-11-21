@@ -24,6 +24,9 @@ enum Commands {
     Uninstall,
     /// Print the JSON schema for the `[cship]` config section (editor autocomplete).
     ConfigSchema,
+    /// Serve the statusline to Codex CLI as a stdio MCP server (experimental).
+    /// Register with: codex mcp add cship -- cship codex-mcp
+    CodexMcp,
 }
 
 fn main() {
@@ -54,6 +57,13 @@ fn main() {
         }
         Some(Commands::ConfigSchema) => {
             println!("{}", cship::config::schema_json());
+        }
+        Some(Commands::CodexMcp) => {
+            // CLI-action subcommand: stdout carries the JSON-RPC channel.
+            if let Err(e) = cship::codex::run(cli.config.as_deref()) {
+                tracing::error!("cship codex-mcp: I/O error: {e}");
+                std::process::exit(1);
+            }
         }
         None => {
             let ctx = match cship::context::from_stdin() {

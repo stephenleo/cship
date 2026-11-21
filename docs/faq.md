@@ -170,6 +170,12 @@ style  = "fg:#414868"
 
 ---
 
+## Does cship work with Codex CLI?
+
+Yes, experimentally. Codex's custom status line is behind its `/experimental` flag, and cship connects to it as an MCP server with `codex mcp add cship -- cship codex-mcp`. Your existing config renders in the Codex footer, though some modules (vim, agent, account via keychain) have no Codex data and text backgrounds aren't supported. See [Codex CLI](/codex) for setup and the full list of differences.
+
+---
+
 ## How does the peak-time indicator handle time zones and DST?
 
 The `peak_usage` module checks whether the current time falls within the configured peak window in **US Pacific time**. It computes the UTC→Pacific offset internally — PDT (UTC−7) from the second Sunday of March through the first Sunday of November, PST (UTC−8) the rest of the year.

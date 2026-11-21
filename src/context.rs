@@ -29,6 +29,20 @@ pub struct Context {
     /// Rate limits sent directly by Claude Code via stdin (Pro/Max subscribers).
     /// When present, the usage_limits module uses this instead of making an OAuth API call.
     pub rate_limits: Option<RateLimits>,
+    /// Which host CLI produced this context. Never read from JSON: stdin input is
+    /// always Claude Code, and the Codex adapter sets this explicitly.
+    #[serde(skip)]
+    pub host: Host,
+}
+
+/// The host CLI that cship is rendering for.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Host {
+    /// Claude Code: session JSON piped on stdin, ANSI written to stdout.
+    #[default]
+    ClaudeCode,
+    /// Codex CLI: snapshot delivered over MCP (`cship codex-mcp`).
+    Codex,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -114,7 +128,7 @@ impl Context {
     /// `explain`, cache) receive terminal-safe values regardless of how they render.
     /// Numeric/boolean fields cannot carry control bytes, so only string fields are
     /// touched. See [`crate::ansi::sanitize_control`] for the threat model.
-    fn sanitize(&mut self) {
+    pub(crate) fn sanitize(&mut self) {
         fn clean(opt: &mut Option<String>) {
             if let Some(s) = opt {
                 *s = crate::ansi::sanitize_control(s);

@@ -65,6 +65,12 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
     // Stdin provides the freshest 5h/7d values
     let stdin_data = data_from_stdin_rate_limits(ctx);
 
+    // Codex supplies its own account's limits in the snapshot. The Anthropic OAuth
+    // fallback would report a different account and can outlast Codex's 1s read budget.
+    if ctx.host == crate::context::Host::Codex {
+        return stdin_data;
+    }
+
     // Read OAuth token up front for fingerprint (cache identity check).
     // Token failure is non-fatal here — stdin data is still usable.
     let token_and_fp = match crate::platform::get_oauth_token() {

@@ -1,0 +1,38 @@
+{
+  "account": {
+    "rate_limits": [
+      {
+        "limit_id": "codex",
+        "limit_name": null,
+        "primary_limit": { "used_percent": 42, "window_minutes": 300, "resets_at": 1900000000 },
+        "secondary_limit": { "used_percent": 13.5, "window_minutes": 10080, "resets_at": 1900500000 }
+      }
+    ]
+  },
+  "app": { "cli_version": "0.171.0", "display_mode": "standard" },
+  "config": { "statusline_items": ["model", "current-dir"] },
+  "thread": {
+    "id": "thread-123",
+    "name": null,
+    "agent": { "state": "working" },
+    "model": {
+      "display_name": "gpt-5.5-codex",
+      "id": "gpt-5.5-codex",
+      "provider": "openai",
+      "reasoning_level": "high"
+    },
+    "workspace": { "cwd": "/home/user/projects/myapp" },
+    "usage": {
+      "context": { "context_window_size": 272000, "used_tokens": 68000, "used_percentage": 25 },
+      "total": {
+        "total_input_tokens": 120000,
+        "cache_read_input_tokens": 90000,
+        "cache_write_input_tokens": 0,
+        "other_input_tokens": 30000,
+        "output_tokens": 8000
+      },
+      "cost": { "total_cost_usd": 1.25 }
+    },
+    "approval": { "policy": "on-request", "reviewer": "user" }
+  }
+}

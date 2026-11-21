@@ -114,6 +114,16 @@ Everything in the [Claude Code status line documentation](https://code.claude.co
 
 Full configuration reference: **https://cship.dev**
 
+## 🤖 Codex CLI (experimental)
+
+cship can also render in the [Codex CLI](https://github.com/openai/codex) footer, using the same config. Register it as an MCP status line provider:
+
+```sh
+codex mcp add cship -- cship codex-mcp
+```
+
+Then enable **Custom status line** in Codex's `/experimental`, restart the TUI, and select **cship** in `/statusline`. Setup details and differences from Claude Code: **https://cship.dev/codex**
+
 ## 🔍 Debugging
 
 Run `cship explain` to inspect what cship sees from Claude Code's context JSON — useful when a module shows nothing or behaves unexpectedly.

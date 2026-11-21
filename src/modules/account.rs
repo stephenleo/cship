@@ -97,6 +97,13 @@ fn resolve_profile(ctx: &Context, account_cfg: Option<&AccountConfig>) -> Option
         return Some(profile);
     }
 
+    // The keychain token belongs to Claude Code; under Codex it would describe the
+    // wrong account, so only the env-var contract above applies there.
+    if ctx.host == crate::context::Host::Codex {
+        tracing::debug!("cship.account: OAuth lookup skipped under Codex");
+        return None;
+    }
+
     // Preference 2: keychain token → OAuth fetch, with fingerprint-gated cache.
     let transcript_str = ctx.transcript_path.as_deref()?;
     let transcript_path = std::path::Path::new(transcript_str);

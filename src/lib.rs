@@ -1,6 +1,7 @@
 pub mod account;
 pub mod ansi;
 pub mod cache;
+pub mod codex;
 pub mod config;
 pub mod context;
 pub mod explain;
