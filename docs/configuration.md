@@ -403,6 +403,8 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 | `$cship.usage_limits.session` (alias `.five_hour`) | Only the 5h window, colored by *its own* utilization |
 | `$cship.usage_limits.weekly` (alias `.seven_day`) | Only the 7d window, colored by *its own* utilization |
 
+Claude Code sends no `rate_limits.five_hour` for an account without a 5-hour limit, and the usage API returns `five_hour: null`. In that case `$cship.usage_limits` leaves out the 5h part and `$cship.usage_limits.session` renders nothing. If only the session JSON omits it while the usage API does report a 5-hour window, cship shows the API's values. A missing 7-day window is handled the same way: its part is left out and `$cship.usage_limits.weekly` renders nothing. A window that is reported at 0% still renders.
+
 The sub-tokens let you place sections independently in your `lines` layout — e.g., keep the 5h/7d pair on one row and push per-model onto a second row.
 
 Unlike `$cship.usage_limits` (whose threshold color keys off the *higher* of the two windows), the `session` and `weekly` tokens each escalate independently on their own percentage. Combined with the `{bar}` placeholder and `bar_width`, this lets you render a separate progress bar per window — one line for the 5h session, one for the 7d week — each turning yellow/red on its own:
@@ -467,7 +469,7 @@ critical_style     = "bold red"
 | `{remaining_credits}` | Remaining extra-credit budget, in dollars (e.g. `138.05`) |
 | `{active}` | `⚡` when 5h or 7d utilization is at 100% (actively consuming extra credits), `💤` otherwise |
 
-**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 install `libsecret-tools` and store your OAuth token with `secret-tool`. See [FAQ](/faq#usage-limits-linux) for setup instructions.
+**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 cship reads the token from `~/.claude/.credentials.json`, which Claude Code writes at login. See [FAQ](/faq#usage-limits-linux) for details.
 
 ```toml
 [cship.usage_limits]
@@ -566,7 +568,7 @@ Because field values render verbatim, a launcher can also embed ANSI color in th
 CSHIP_ACCOUNT='{"organization_name":"Acme Corp","organization_tier":"Team","account_display_name":"work"}'
 ```
 
-**Prerequisites:** Unless `CSHIP_ACCOUNT` is set, requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2, install `libsecret-tools` and store your token with `secret-tool`. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, unreachable API, or a malformed `CSHIP_ACCOUNT` value).
+**Prerequisites:** Unless `CSHIP_ACCOUNT` is set, requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2 this is `~/.claude/.credentials.json`, which Claude Code writes at login. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, unreachable API, or a malformed `CSHIP_ACCOUNT` value).
 
 ```toml
 [cship.account]

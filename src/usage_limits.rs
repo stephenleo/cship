@@ -20,22 +20,23 @@ pub struct UsageLimitsData {
     pub seven_day_pct: f64,
     pub five_hour_resets_at: String, // ISO 8601; empty string when API returns null
     pub seven_day_resets_at: String, // ISO 8601; empty string when API returns null
-    /// Whether the source actually carried a `five_hour` window (vs. it being
-    /// `null`/absent, e.g. on Enterprise plans). A supported-but-idle window
-    /// (`{utilization: 0, resets_at: null}`) is still `true` — only a missing
-    /// key/`null` object is `false`. Distinguishes "no data" from "zero data"
-    /// so `lacks_standard_signal` doesn't mistake one for the other.
-    #[serde(default)]
-    pub five_hour_available: bool,
-    /// Same as `five_hour_available`, for the `seven_day` window.
-    #[serde(default)]
-    pub seven_day_available: bool,
     /// Unix epoch seconds for the five-hour window reset; `Some` only on the stdin path.
     #[serde(default)]
     pub five_hour_resets_at_epoch: Option<u64>,
     /// Unix epoch seconds for the seven-day window reset; `Some` only on the stdin path.
     #[serde(default)]
     pub seven_day_resets_at_epoch: Option<u64>,
+    /// True when the source reported no five-hour window at all (stdin omitted
+    /// `rate_limits.five_hour`, or the API returned `five_hour: null`). The 5h segment
+    /// is then hidden; `five_hour_pct` and the reset fields hold placeholders.
+    /// Absent from cache entries written by older versions, which read as `false`.
+    /// Read the window through [`UsageLimitsData::five_hour`] rather than this flag.
+    #[serde(default)]
+    pub five_hour_absent: bool,
+    /// Same as `five_hour_absent`, for the seven-day window. Read the window through
+    /// [`UsageLimitsData::seven_day`].
+    #[serde(default)]
+    pub seven_day_absent: bool,
     // Extra usage (OAuth API only; absent on stdin path)
     #[serde(default)]
     pub extra_usage_enabled: Option<bool>,
@@ -62,6 +63,47 @@ pub struct UsageLimitsData {
     pub seven_day_oauth_apps_pct: Option<f64>,
     #[serde(default)]
     pub seven_day_oauth_apps_resets_at: Option<String>,
+}
+
+/// One standard usage window (5h or 7d) as its source reported it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UsageWindow<'a> {
+    pub pct: f64,
+    /// ISO 8601 reset time; empty when unknown (API returned null, or stdin path).
+    pub resets_at: &'a str,
+    /// Unix epoch reset time; `Some` only on the stdin path.
+    pub resets_at_epoch: Option<u64>,
+}
+
+impl UsageWindow<'_> {
+    /// True when the window holds an actual reading: a non-zero percentage or a
+    /// reset time. A window at 0% with no reset time is indistinguishable from the
+    /// placeholders of a cache entry written before the `*_absent` flags existed.
+    pub fn has_reading(&self) -> bool {
+        self.pct > 0.0 || self.resets_at_epoch.is_some() || !self.resets_at.is_empty()
+    }
+}
+
+impl UsageLimitsData {
+    /// The five-hour window, or `None` when the source reported none. The flat
+    /// `five_hour_*` fields stay as they are for cache compatibility; consumers go
+    /// through this accessor so an absent window's placeholders are never rendered.
+    pub fn five_hour(&self) -> Option<UsageWindow<'_>> {
+        (!self.five_hour_absent).then_some(UsageWindow {
+            pct: self.five_hour_pct,
+            resets_at: &self.five_hour_resets_at,
+            resets_at_epoch: self.five_hour_resets_at_epoch,
+        })
+    }
+
+    /// The seven-day window, or `None` when the source reported none.
+    pub fn seven_day(&self) -> Option<UsageWindow<'_>> {
+        (!self.seven_day_absent).then_some(UsageWindow {
+            pct: self.seven_day_pct,
+            resets_at: &self.seven_day_resets_at,
+            resets_at_epoch: self.seven_day_resets_at_epoch,
+        })
+    }
 }
 
 /// Intermediate struct matching the raw API response structure.
@@ -109,13 +151,12 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
     let (cowork_pct, cowork_reset) = map_period(&api.seven_day_cowork);
     let (oauth_apps_pct, oauth_apps_reset) = map_period(&api.seven_day_oauth_apps);
 
-    let five_hour_available = api.five_hour.is_some();
-    let seven_day_available = api.seven_day.is_some();
-
+    let five_hour_absent = api.five_hour.is_none();
     let (five_h_pct, five_h_reset) = api
         .five_hour
         .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
         .unwrap_or((0.0, String::new()));
+    let seven_day_absent = api.seven_day.is_none();
     let (seven_d_pct, seven_d_reset) = api
         .seven_day
         .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
@@ -128,8 +169,8 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
         seven_day_resets_at: seven_d_reset,
         five_hour_resets_at_epoch: None,
         seven_day_resets_at_epoch: None,
-        five_hour_available,
-        seven_day_available,
+        five_hour_absent,
+        seven_day_absent,
         extra_usage_enabled: api.extra_usage.as_ref().and_then(|e| e.is_enabled),
         extra_usage_monthly_limit: api.extra_usage.as_ref().and_then(|e| e.monthly_limit),
         extra_usage_used_credits: api.extra_usage.as_ref().and_then(|e| e.used_credits),
@@ -310,6 +351,19 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_api_response_null_five_hour_is_absent() {
+        let json = r#"{"five_hour":null,"seven_day":{"utilization":33.0,"resets_at":null}}"#;
+        let data = parse_api_response(json).unwrap();
+        assert!(data.five_hour_absent);
+        assert!(!data.seven_day_absent);
+        assert!(data.five_hour().is_none());
+        assert_eq!(data.seven_day().map(|w| w.pct), Some(33.0));
+
+        let enterprise = parse_api_response(r#"{"five_hour":null,"seven_day":null}"#).unwrap();
+        assert!(enterprise.five_hour_absent && enterprise.seven_day_absent);
+    }
+
+    #[test]
     fn test_fetch_parses_extra_usage_fields() {
         let json = r#"{
             "five_hour": {"utilization": 100.0, "resets_at": "2099-01-01T00:00:00+00:00"},
@@ -386,8 +440,8 @@ mod tests {
         assert_eq!(data.seven_day_pct, 0.0);
         assert!(data.five_hour_resets_at.is_empty());
         assert!(data.seven_day_resets_at.is_empty());
-        assert!(!data.five_hour_available);
-        assert!(!data.seven_day_available);
+        assert!(data.five_hour_absent);
+        assert!(data.seven_day_absent);
         assert_eq!(data.extra_usage_enabled, Some(true));
         assert_eq!(data.extra_usage_monthly_limit, Some(20000.0));
         assert!((data.extra_usage_used_credits.unwrap() - 19411.0).abs() < f64::EPSILON);
@@ -399,7 +453,7 @@ mod tests {
         // Real capture taken seconds after a 5h window reset (2026-07-15, session
         // 6318e733). `five_hour` is `Some({utilization: 0.0, resets_at: null})` here,
         // not `None` — same (0.0, "") tuple as the Enterprise `five_hour: null` case
-        // above, but `five_hour_available` now records that the window was actually
+        // above, but `five_hour_absent` is false: the window was actually
         // present, so `lacks_standard_signal` won't mistake this idle-but-real window
         // for a plan where the 5h window doesn't exist at all.
         let json = r#"{
@@ -410,8 +464,8 @@ mod tests {
         let data = parse_api_response(json).expect("idle five_hour must still parse");
         assert_eq!(data.five_hour_pct, 0.0);
         assert!(data.five_hour_resets_at.is_empty());
-        assert!(data.five_hour_available);
-        assert!(data.seven_day_available);
+        assert!(!data.five_hour_absent);
+        assert!(!data.seven_day_absent);
         // seven_day is untouched by the reset and still carries real signal.
         assert!((data.seven_day_pct - 62.0).abs() < f64::EPSILON);
         assert_eq!(data.seven_day_resets_at, "2026-07-17T15:59:59.793231+00:00");

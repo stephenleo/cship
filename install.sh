@@ -65,19 +65,21 @@ if [ ! -s "${INSTALL_DIR}/cship" ]; then
 fi
 echo "Installed cship to ${INSTALL_DIR}/cship"
 
-# ── 4. Linux: libsecret-tools check (usage limits dependency) ─────────────────
+# ── 4. Linux: libsecret-tools check (optional keyring fallback) ───────────────
+# cship reads the OAuth token from ~/.claude/.credentials.json; secret-tool is
+# only consulted when that file is absent.
 if [ "$OS" = "Linux" ] && ! command -v secret-tool >/dev/null 2>&1; then
   if [ "$YES" = "true" ]; then
     sudo apt-get install -y libsecret-tools
   elif [ "$INTERACTIVE" = "true" ]; then
-    printf "Install libsecret-tools? (required for usage limits on Linux) [Y/n] "
+    printf "Install libsecret-tools? (optional: keyring fallback for usage limits when ~/.claude/.credentials.json is absent) [Y/n] "
     read -r answer </dev/tty
     case "$answer" in
-      [Nn]*) echo "Skipping — usage limits module unavailable until installed manually." ;;
+      [Nn]*) echo "Skipping. Usage limits still work as long as Claude Code has written ~/.claude/.credentials.json." ;;
       *)     sudo apt-get install -y libsecret-tools ;;
     esac
   else
-    echo "Skipping libsecret-tools (non-interactive). Re-run with --yes or install manually: sudo apt-get install -y libsecret-tools"
+    echo "Skipping optional libsecret-tools (non-interactive). To add the keyring fallback, re-run with --yes or install manually: sudo apt-get install -y libsecret-tools"
   fi
 fi
 

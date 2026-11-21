@@ -995,7 +995,6 @@ mod tests {
     fn success_with_pct(pct: f64) -> UsageFetchOutcome {
         UsageFetchOutcome::Success(Box::new(UsageLimitsData {
             five_hour_pct: pct,
-            five_hour_available: true,
             ..Default::default()
         }))
     }
@@ -1007,7 +1006,6 @@ mod tests {
         state.next_allowed_at_epoch = now;
         state.usage = Some(UsageLimitsData {
             five_hour_pct: 11.0,
-            five_hour_available: true,
             ..Default::default()
         });
         persist_state_to_dir(dir, &state);

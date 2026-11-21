@@ -34,7 +34,7 @@ curl -fsSL https://cship.dev/install.sh | bash
 
 Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64), downloads the binary to `~/.local/bin/cship`, creates a starter config at `~/.config/cship.toml`, and wires the `statusLine` entry in `~/.claude/settings.json`.
 
-Optional dependencies ([Starship](https://starship.rs) for passthrough modules, and `libsecret-tools` on Linux for usage limits) are handled as follows:
+Optional dependencies ([Starship](https://starship.rs) for passthrough modules, and `libsecret-tools` on Linux as a keyring fallback for usage limits) are handled as follows:
 
 - **Interactive terminal** — the installer prompts you for each.
 - **`--yes` / `-y`** — auto-installs all optional deps without prompting:

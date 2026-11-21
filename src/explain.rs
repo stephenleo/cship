@@ -196,51 +196,50 @@ fn is_disabled(name: &str, cfg: &crate::config::CshipConfig) -> bool {
     }
 }
 
-/// Hint for a `usage_limits*` token that rendered nothing although a credential
-/// exists. Distinguishes Enterprise plans (no 5h/7d windows) from a failed fetch:
-///   1. Enterprise sub-token (.opus / .sonnet / .cowork / .oauth_apps / .per_model /
-///      per-window) — inherently absent on plans that only expose monthly credits.
-///   2. Enterprise main token with extra_usage disabled — neither windows nor credits.
-///   3. Anything else — the legacy "fetch failed" hint.
-///
-/// `cached` is the last known usage for the current token, if any. Pure so the
-/// branches are testable without credentials or filesystem state.
-fn usage_limits_hint(
+/// Pick the `usage_limits` hint for a token that rendered nothing although a
+/// credential is present, based on the cached API data:
+///   1. Enterprise per-window / per-model sub-token: inherently absent, since
+///      Enterprise only exposes monthly credits.
+///   2. Enterprise main token with extra_usage disabled: the plan has neither
+///      usage windows nor extra credits.
+///   3. 5h or 7d sub-token on an account without that window.
+///   4. Anything else: the "fetch failed" hint.
+fn usage_limits_hint_from_cache(
     top: &str,
-    cached: Option<crate::usage_limits::UsageLimitsData>,
+    cached: Option<&crate::usage_limits::UsageLimitsData>,
 ) -> (String, String) {
-    let is_plan_specific_subtoken = matches!(
-        top,
-        "usage_limits.per_model"
-            | "usage_limits.opus"
-            | "usage_limits.sonnet"
-            | "usage_limits.cowork"
-            | "usage_limits.oauth_apps"
-            | "usage_limits.five_hour"
-            | "usage_limits.seven_day"
-            | "usage_limits.session"
-            | "usage_limits.weekly"
-    );
+    use crate::modules::usage_limits::lacks_standard_signal;
+    let is_five_hour_subtoken = matches!(top, "usage_limits.five_hour" | "usage_limits.session");
+    // Sub-tokens that require a standard 5h/7d signal and so are
+    // inherently absent on Enterprise (per-window and per-model).
+    let is_seven_day_subtoken = matches!(top, "usage_limits.seven_day" | "usage_limits.weekly");
+    let is_plan_specific_subtoken = is_five_hour_subtoken
+        || is_seven_day_subtoken
+        || matches!(
+            top,
+            "usage_limits.per_model"
+                | "usage_limits.opus"
+                | "usage_limits.sonnet"
+                | "usage_limits.cowork"
+                | "usage_limits.oauth_apps"
+        );
     match cached {
-        Some(d)
-            if crate::modules::usage_limits::lacks_standard_signal(&d)
-                && is_plan_specific_subtoken =>
-        {
-            (
-                "the 5h/7d and per-model breakdowns are unavailable on this plan"
-                    .into(),
-                "Claude Enterprise reports usage via monthly credits (`extra_usage`) only. Use `$cship.usage_limits` or `$cship.usage_limits.extra_usage` instead.".into(),
-            )
-        }
-        Some(d)
-            if crate::modules::usage_limits::lacks_standard_signal(&d)
-                && d.extra_usage_enabled != Some(true) =>
-        {
-            (
-                "usage_limits returned no data — your plan reports no usage windows or extra credits".into(),
-                "If you're on Claude Enterprise, ask your admin to verify extra-credit billing is enabled for your account.".into(),
-            )
-        }
+        Some(d) if lacks_standard_signal(d) && is_plan_specific_subtoken => (
+            "the 5h/7d and per-model breakdowns are unavailable on this plan".into(),
+            "Claude Enterprise reports usage via monthly credits (`extra_usage`) only. Use `$cship.usage_limits` or `$cship.usage_limits.extra_usage` instead.".into(),
+        ),
+        Some(d) if lacks_standard_signal(d) && d.extra_usage_enabled != Some(true) => (
+            "usage_limits returned no data — your plan reports no usage windows or extra credits".into(),
+            "If you're on Claude Enterprise, ask your admin to verify extra-credit billing is enabled for your account.".into(),
+        ),
+        Some(d) if d.five_hour().is_none() && is_five_hour_subtoken => (
+            "this account has no 5-hour usage window".into(),
+            "Nothing is wrong: the usage API reports no 5-hour limit for this account. Use `$cship.usage_limits.weekly` or `$cship.usage_limits` instead.".into(),
+        ),
+        Some(d) if d.seven_day().is_none() && is_seven_day_subtoken => (
+            "this account has no 7-day usage window".into(),
+            "Nothing is wrong: the usage API reports no 7-day limit for this account. Use `$cship.usage_limits.session` or `$cship.usage_limits` instead.".into(),
+        ),
         _ => (
             "usage_limits returned no data — credential present but API fetch failed".into(),
             "Your Claude Code token may have expired. Re-authenticate by opening Claude Code and completing the login flow, then run `cship explain` again.".into(),
@@ -314,7 +313,7 @@ fn error_hint_for(
                         &crate::usage_limits_state::load_state_or_default(),
                         &fingerprint,
                     );
-                    usage_limits_hint(top, cached)
+                    usage_limits_hint_from_cache(top, cached.as_ref())
                 }
                 Err(_) => (
                     "usage_limits returned no data — credential appears malformed or tool unavailable".into(),
@@ -705,7 +704,8 @@ mod tests {
 
     #[test]
     fn test_usage_limits_hint_enterprise_no_extra_credits() {
-        let (msg, hint) = usage_limits_hint("usage_limits", Some(enterprise_usage(false)));
+        let (msg, hint) =
+            usage_limits_hint_from_cache("usage_limits", Some(&enterprise_usage(false)));
         assert!(
             msg.contains("plan reports no usage windows or extra credits"),
             "unexpected msg: {msg}"
@@ -720,8 +720,53 @@ mod tests {
     fn test_usage_limits_hint_enterprise_with_extra_credits_is_not_blamed_on_plan() {
         // Extra credits are enabled, so the main token has something to show;
         // an empty render is a fetch problem, not a plan limitation.
-        let (msg, _) = usage_limits_hint("usage_limits", Some(enterprise_usage(true)));
+        let (msg, _) = usage_limits_hint_from_cache("usage_limits", Some(&enterprise_usage(true)));
         assert!(msg.contains("API fetch failed"), "unexpected msg: {msg}");
+    }
+
+    #[test]
+    fn test_five_hour_subtoken_hint_when_account_has_no_five_hour_window() {
+        let data = crate::usage_limits::UsageLimitsData {
+            seven_day_pct: 33.0,
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            five_hour_absent: true,
+            ..Default::default()
+        };
+        for top in ["usage_limits.session", "usage_limits.five_hour"] {
+            let (msg, hint) = usage_limits_hint_from_cache(top, Some(&data));
+            assert!(msg.contains("no 5-hour usage window"), "{top}: {msg}");
+            assert!(hint.contains("usage_limits.weekly"), "{top}: {hint}");
+            assert!(!hint.contains("Re-authenticate"), "{top}: {hint}");
+        }
+        // Tokens that should have rendered still get the fetch-failed hint.
+        for top in ["usage_limits", "usage_limits.weekly"] {
+            let (msg, _) = usage_limits_hint_from_cache(top, Some(&data));
+            assert!(msg.contains("API fetch failed"), "{top}: {msg}");
+        }
+        // Enterprise (no 5h and no 7d) keeps its own hint for the 5h sub-token.
+        let enterprise = crate::usage_limits::UsageLimitsData {
+            five_hour_absent: true,
+            seven_day_absent: true,
+            ..Default::default()
+        };
+        for top in ["usage_limits.session", "usage_limits.weekly"] {
+            let (msg, _) = usage_limits_hint_from_cache(top, Some(&enterprise));
+            assert!(msg.contains("unavailable on this plan"), "{top}: {msg}");
+        }
+        // 7d sub-token on an account that reports a 5h window but no 7d one.
+        let no_weekly = crate::usage_limits::UsageLimitsData {
+            five_hour_pct: 12.0,
+            seven_day_absent: true,
+            ..Default::default()
+        };
+        for top in ["usage_limits.weekly", "usage_limits.seven_day"] {
+            let (msg, hint) = usage_limits_hint_from_cache(top, Some(&no_weekly));
+            assert!(msg.contains("no 7-day usage window"), "{top}: {msg}");
+            assert!(hint.contains("usage_limits.session"), "{top}: {hint}");
+        }
+        // No cache at all: fetch-failed hint.
+        let (msg, _) = usage_limits_hint_from_cache("usage_limits.session", None);
+        assert!(msg.contains("API fetch failed"), "{msg}");
     }
 
     #[test]
@@ -737,7 +782,7 @@ mod tests {
             "usage_limits.session",
             "usage_limits.weekly",
         ] {
-            let (msg, hint) = usage_limits_hint(top, Some(enterprise_usage(true)));
+            let (msg, hint) = usage_limits_hint_from_cache(top, Some(&enterprise_usage(true)));
             assert!(
                 msg.contains("unavailable on this plan"),
                 "{top}: unexpected msg: {msg}"
@@ -752,11 +797,11 @@ mod tests {
     #[test]
     fn test_usage_limits_hint_standard_plan_or_no_data_is_fetch_failure() {
         let standard = crate::usage_limits::UsageLimitsData {
-            five_hour_available: true,
+            five_hour_pct: 10.0,
             ..Default::default()
         };
-        for cached in [None, Some(standard)] {
-            let (msg, _) = usage_limits_hint("usage_limits.opus", cached);
+        for cached in [None, Some(&standard)] {
+            let (msg, _) = usage_limits_hint_from_cache("usage_limits.opus", cached);
             assert!(msg.contains("API fetch failed"), "unexpected msg: {msg}");
         }
     }

@@ -12,7 +12,7 @@
 
 use crate::config::{CshipConfig, UsageLimitsConfig};
 use crate::context::Context;
-use crate::usage_limits::UsageLimitsData;
+use crate::usage_limits::{UsageLimitsData, UsageWindow};
 
 /// A single window's percentage + reset, tagged with which source produced it.
 /// Reset and percentage always travel together so a merge can never pair one
@@ -111,6 +111,40 @@ fn merge_window(
         (Some(s), Some(WindowState::Unknown), _, _) => unknown_result(s.pct),
         _ => MergedUsageWindow::empty(),
     }
+}
+
+/// Merge one window (5h or 7d, picked by `window`) across stdin and the API;
+/// `None` when neither source has the window.
+///
+/// Stdin omits a window the account does not have (`five_hour` on plans with no
+/// 5h limit), but a window can also be missing from a single payload. When stdin
+/// lacks the window and the API data carries a real reading for it, keep that
+/// instead of hiding a limit the account does have.
+fn merge_source_windows(
+    stdin: Option<&UsageLimitsData>,
+    api: Option<&UsageLimitsData>,
+    window: fn(&UsageLimitsData) -> Option<UsageWindow<'_>>,
+    now: u64,
+) -> Option<MergedUsageWindow> {
+    let stdin_w = stdin.and_then(window);
+    let api_w = api
+        .and_then(window)
+        .filter(|w| stdin.is_none() || stdin_w.is_some() || w.has_reading());
+    if stdin.is_some() && stdin_w.is_none() && api_w.is_some() {
+        tracing::debug!(
+            "cship.usage_limits: window absent from stdin rate_limits; using the usage API's"
+        );
+    }
+    if stdin_w.is_none() && api_w.is_none() {
+        return None;
+    }
+    let snapshot =
+        |w: UsageWindow<'_>| UsageWindowSnapshot::new(w.pct, w.resets_at_epoch, w.resets_at);
+    Some(merge_window(
+        stdin_w.map(snapshot),
+        api_w.map(snapshot),
+        now,
+    ))
 }
 
 /// A pct with no trustworthy reset time attached — used whenever the
@@ -245,50 +279,26 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
     match (stdin_data, full_data) {
         (None, None) => None,
         (stdin, full) => {
-            let five_h = merge_window(
-                stdin.as_ref().map(|s| {
-                    UsageWindowSnapshot::new(
-                        s.five_hour_pct,
-                        s.five_hour_resets_at_epoch,
-                        &s.five_hour_resets_at,
-                    )
-                }),
-                full.as_ref().map(|f| {
-                    UsageWindowSnapshot::new(
-                        f.five_hour_pct,
-                        f.five_hour_resets_at_epoch,
-                        &f.five_hour_resets_at,
-                    )
-                }),
+            let five_h = merge_source_windows(
+                stdin.as_ref(),
+                full.as_ref(),
+                UsageLimitsData::five_hour,
                 now,
             );
-            let seven_d = merge_window(
-                stdin.as_ref().map(|s| {
-                    UsageWindowSnapshot::new(
-                        s.seven_day_pct,
-                        s.seven_day_resets_at_epoch,
-                        &s.seven_day_resets_at,
-                    )
-                }),
-                full.as_ref().map(|f| {
-                    UsageWindowSnapshot::new(
-                        f.seven_day_pct,
-                        f.seven_day_resets_at_epoch,
-                        &f.seven_day_resets_at,
-                    )
-                }),
+            let seven_d = merge_source_windows(
+                stdin.as_ref(),
+                full.as_ref(),
+                UsageLimitsData::seven_day,
                 now,
             );
+            let (five_hour_absent, seven_day_absent) = (five_h.is_none(), seven_d.is_none());
+            let (five_h, seven_d) = (five_h.unwrap_or_default(), seven_d.unwrap_or_default());
             // Non-window fields (extra_usage_*, per-model breakdowns) only
             // ever come from `full` — prefer it as the base when present,
             // matching the previous `..full` spread; fall back to `stdin`
             // (whose non-window fields are all `Default`) when `full` is
             // absent, so the arm still produces a value in the
             // single-source stdin-only case.
-            let five_hour_available = stdin.as_ref().is_some_and(|d| d.five_hour_available)
-                || full.as_ref().is_some_and(|d| d.five_hour_available);
-            let seven_day_available = stdin.as_ref().is_some_and(|d| d.seven_day_available)
-                || full.as_ref().is_some_and(|d| d.seven_day_available);
             let base = full.unwrap_or_else(|| stdin.unwrap_or_default());
             Some(UsageLimitsData {
                 five_hour_pct: five_h.pct,
@@ -297,36 +307,43 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
                 seven_day_resets_at: seven_d.resets_at_iso,
                 five_hour_resets_at_epoch: five_h.resets_at_epoch,
                 seven_day_resets_at_epoch: seven_d.resets_at_epoch,
-                five_hour_available,
-                seven_day_available,
+                five_hour_absent,
+                seven_day_absent,
                 ..base
             })
         }
     }
 }
 
-/// True when neither source ever carried a 5h or 7d window at all — i.e. on
-/// Claude Enterprise, where the API returns these fields as `null`/absent.
-/// Used to switch the renderer into "extra-usage only" mode.
+/// True when the data carries no usable 5h or 7d window, which switches the
+/// renderer into "extra-usage only" mode. On Claude Enterprise the API returns both
+/// windows as `null`.
 ///
-/// Checks presence (`*_available`), not value: a normal account whose 5h
-/// window just reset reports `{utilization: 0, resets_at: null}` — present,
-/// just idle — and must still render as a normal zero-usage window rather
-/// than being mistaken for a plan where standard windows don't exist.
+/// - Both windows absent: no signal.
+/// - Exactly one absent: the source tells windows apart, so the other one is real
+///   even at 0% with no reset time (a 5h-less account at the start of its week).
+/// - Neither flagged absent: no signal only when both are at their zero state.
+///   Cache entries written before the `*_absent` flags existed look like that for
+///   Enterprise accounts.
 pub(crate) fn lacks_standard_signal(data: &UsageLimitsData) -> bool {
-    !data.five_hour_available && !data.seven_day_available
+    match (data.five_hour(), data.seven_day()) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+        (Some(five), Some(seven)) => !five.has_reading() && !seven.has_reading(),
+    }
 }
 
 /// Apply threshold styling using the higher of 5h/7d utilization.
 /// Falls back to `extra_usage_utilization` whenever both standard percentages
 /// are zero — either because neither window is available (Enterprise plans,
 /// where 5h/7d data is absent) or because a normal account's windows are
-/// genuinely idle at 0%. `lacks_standard_signal` is presence-based and not
+/// genuinely idle at 0%. `lacks_standard_signal` is not
 /// checked here; this fallback is purely value-based, so it applies in both
 /// cases.
 fn apply_threshold(content: &str, data: &UsageLimitsData, cfg: &CshipConfig) -> String {
     let ul_cfg = cfg.usage_limits.as_ref();
-    let standard_max = data.five_hour_pct.max(data.seven_day_pct);
+    let window_pct = |w: Option<UsageWindow<'_>>| w.map_or(0.0, |w| w.pct);
+    let standard_max = window_pct(data.five_hour()).max(window_pct(data.seven_day()));
     let pct = if standard_max > 0.0 {
         standard_max
     } else {
@@ -345,8 +362,9 @@ fn apply_threshold(content: &str, data: &UsageLimitsData, cfg: &CshipConfig) -> 
 
 /// Render the usage limits module.
 ///
-/// On Pro/Max plans this is the full 5h + 7d (+ optional per-model + optional extra)
-/// composition produced by `format_output`. On Enterprise plans (where the API returns
+/// On Pro/Max plans this is the 5h + 7d (+ optional per-model + optional extra)
+/// composition produced by `format_output`; a window the source did not report
+/// (the 5h one on accounts with no 5h limit) is left out. On Enterprise plans (where the API returns
 /// 5h/7d as null), `render` short-circuits to the `extra_usage` section only.
 pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let data = resolve_data(ctx, cfg)?;
@@ -385,6 +403,8 @@ enum Period {
 /// escalating independently. Returns `None` on plans without standard 5h/7d
 /// windows (e.g. Enterprise) — unlike `render`, it does not fall back to the
 /// extra-usage section, since this token is specifically the 5h/7d window.
+/// A token also returns `None` when its own window is absent (the 5h one on
+/// accounts with no 5h limit).
 fn render_period(ctx: &Context, cfg: &CshipConfig, period: Period) -> Option<String> {
     let data = resolve_data(ctx, cfg)?;
     if lacks_standard_signal(&data) {
@@ -394,10 +414,9 @@ fn render_period(ctx: &Context, cfg: &CshipConfig, period: Period) -> Option<Str
     let ul_cfg = cfg.usage_limits.as_ref().unwrap_or(&default_ul_cfg);
     let now = now_epoch();
 
-    let (pct, epoch, window_secs, fmt) = match period {
+    let (window, window_secs, fmt) = match period {
         Period::FiveHour => (
-            data.five_hour_pct,
-            resolve_epoch(data.five_hour_resets_at_epoch, &data.five_hour_resets_at),
+            data.five_hour(),
             FIVE_HOUR_SECS,
             ul_cfg
                 .five_hour_format
@@ -405,8 +424,7 @@ fn render_period(ctx: &Context, cfg: &CshipConfig, period: Period) -> Option<Str
                 .unwrap_or("5h: {pct}% resets in {reset}"),
         ),
         Period::SevenDay => (
-            data.seven_day_pct,
-            resolve_epoch(data.seven_day_resets_at_epoch, &data.seven_day_resets_at),
+            data.seven_day(),
             SEVEN_DAY_SECS,
             ul_cfg
                 .seven_day_format
@@ -414,6 +432,16 @@ fn render_period(ctx: &Context, cfg: &CshipConfig, period: Period) -> Option<Str
                 .unwrap_or("7d: {pct}% resets in {reset}"),
         ),
     };
+    let window = match window {
+        Some(window) => window,
+        None => {
+            // Normal state on accounts without that limit, hence debug rather than warn.
+            tracing::debug!("cship.usage_limits: window absent for this account; token hidden");
+            return None;
+        }
+    };
+    let pct = window.pct;
+    let epoch = resolve_epoch(window.resets_at_epoch, window.resets_at);
 
     let content = format_period_part(fmt, pct, epoch, window_secs, now, ul_cfg);
     Some(crate::ansi::apply_style_with_threshold(
@@ -516,8 +544,10 @@ pub fn render_extra_usage(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
 /// round-trip through ISO 8601 formatting and re-parsing.
 ///
 /// Only falls back to `None` (triggering the OAuth path) when `ctx.rate_limits` is absent.
-/// Partial data (absent `five_hour`, `seven_day`, or `used_percentage`) uses placeholder values:
-/// - absent period → pct `0.0` (renders as `"0%"`) and epoch `None` (renders as `"?"`)
+/// Partial data (absent `five_hour`, `seven_day`, or `used_percentage`) is handled per field:
+/// - absent `five_hour` / `seven_day` → `five_hour_absent` / `seven_day_absent`, so that
+///   segment is not rendered (unless the usage API reports the window, see the merge
+///   in `resolve_data_uncached`)
 /// - absent `used_percentage` within a present period → pct `0.0`
 fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     let rl = ctx.rate_limits.as_ref()?; // None here → use OAuth path
@@ -525,8 +555,9 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     let (five_pct, five_epoch) = match rl.five_hour.as_ref() {
         Some(five) => (five.used_percentage.unwrap_or(0.0), five.resets_at),
         None => {
-            tracing::warn!(
-                "rate_limits.five_hour absent from stdin; rendering with placeholder values"
+            // Normal state on accounts without a 5h limit, hence debug rather than warn.
+            tracing::debug!(
+                "rate_limits.five_hour absent from stdin; treating the 5h window as absent"
             );
             (0.0, None)
         }
@@ -535,7 +566,7 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
         Some(seven) => (seven.used_percentage.unwrap_or(0.0), seven.resets_at),
         None => {
             tracing::warn!(
-                "rate_limits.seven_day absent from stdin; rendering with placeholder values"
+                "rate_limits.seven_day absent from stdin; treating the 7d window as absent"
             );
             (0.0, None)
         }
@@ -546,8 +577,8 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
         seven_day_pct: seven_pct,
         five_hour_resets_at_epoch: five_epoch,
         seven_day_resets_at_epoch: seven_epoch,
-        five_hour_available: rl.five_hour.is_some(),
-        seven_day_available: rl.seven_day.is_some(),
+        five_hour_absent: rl.five_hour.is_none(),
+        seven_day_absent: rl.seven_day.is_none(),
         ..Default::default()
     })
 }
@@ -635,9 +666,6 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
     let sep = cfg.separator.as_deref().unwrap_or(" | ");
     let now = now_epoch();
 
-    let five_h_epoch = resolve_epoch(data.five_hour_resets_at_epoch, &data.five_hour_resets_at);
-    let seven_d_epoch = resolve_epoch(data.seven_day_resets_at_epoch, &data.seven_day_resets_at);
-
     let five_h_fmt = cfg
         .five_hour_format
         .as_deref()
@@ -647,24 +675,17 @@ fn format_output(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> String {
         .as_deref()
         .unwrap_or("7d: {pct}% resets in {reset}");
 
-    let five_h_part = format_period_part(
-        five_h_fmt,
-        data.five_hour_pct,
-        five_h_epoch,
-        FIVE_HOUR_SECS,
-        now,
-        cfg,
-    );
-    let seven_d_part = format_period_part(
-        seven_d_fmt,
-        data.seven_day_pct,
-        seven_d_epoch,
-        SEVEN_DAY_SECS,
-        now,
-        cfg,
-    );
-
-    let mut parts: Vec<String> = vec![five_h_part, seven_d_part];
+    // A window the source did not report is left out.
+    let mut parts: Vec<String> = Vec::new();
+    for (window, fmt, window_secs) in [
+        (data.five_hour(), five_h_fmt, FIVE_HOUR_SECS),
+        (data.seven_day(), seven_d_fmt, SEVEN_DAY_SECS),
+    ] {
+        if let Some(w) = window {
+            let epoch = resolve_epoch(w.resets_at_epoch, w.resets_at);
+            parts.push(format_period_part(fmt, w.pct, epoch, window_secs, now, cfg));
+        }
+    }
 
     if cfg.show_per_model.unwrap_or(false) {
         let per_model = format_per_model(data, cfg);
@@ -971,8 +992,6 @@ mod tests {
             seven_day_pct: 45.1,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_available: true,
-            seven_day_available: true,
             ..Default::default()
         }
     }
@@ -986,60 +1005,42 @@ mod tests {
     }
 
     #[test]
-    fn test_lacks_standard_signal_returns_false_when_five_hour_available() {
+    fn test_lacks_standard_signal_returns_false_when_pct_set() {
         let data = UsageLimitsData {
             five_hour_pct: 1.0,
-            five_hour_available: true,
             ..Default::default()
         };
         assert!(!lacks_standard_signal(&data));
     }
 
     #[test]
-    fn test_lacks_standard_signal_returns_false_when_seven_day_available() {
+    fn test_lacks_standard_signal_returns_false_when_reset_iso_set() {
         let data = UsageLimitsData {
             seven_day_resets_at: "2099-01-01T00:00:00+00:00".into(),
-            seven_day_available: true,
             ..Default::default()
         };
         assert!(!lacks_standard_signal(&data));
     }
 
     #[test]
-    fn test_lacks_standard_signal_returns_false_when_only_epoch_and_available_set() {
+    fn test_lacks_standard_signal_returns_false_when_reset_epoch_set() {
         let data = UsageLimitsData {
             five_hour_resets_at_epoch: Some(1_700_000_000),
-            five_hour_available: true,
             ..Default::default()
         };
         assert!(!lacks_standard_signal(&data));
     }
 
     #[test]
-    fn test_lacks_standard_signal_returns_false_for_idle_but_available_window() {
-        // The core regression case: a supported window that just reset
-        // (utilization 0, resets_at null) is still `available` — must not be
-        // mistaken for a plan where the window doesn't exist (Enterprise).
+    fn test_lacks_standard_signal_returns_false_for_idle_but_present_window() {
+        // A supported 5h window that just reset (utilization 0, resets_at null)
+        // must not be mistaken for a plan where the window doesn't exist.
         let data = UsageLimitsData {
             five_hour_pct: 0.0,
             seven_day_pct: 62.0,
-            five_hour_available: true,
-            seven_day_available: true,
             ..Default::default()
         };
         assert!(!lacks_standard_signal(&data));
-    }
-
-    #[test]
-    fn test_lacks_standard_signal_returns_true_when_unavailable_despite_stale_pct() {
-        // Presence, not value, is authoritative: even if a pct/reset value is
-        // (incorrectly) populated without the available flag, absence wins.
-        let data = UsageLimitsData {
-            five_hour_pct: 1.0,
-            five_hour_available: false,
-            ..Default::default()
-        };
-        assert!(lacks_standard_signal(&data));
     }
 
     // ── render() tests ────────────────────────────────────────────────────────
@@ -1992,12 +1993,187 @@ mod tests {
         let result = data_from_stdin_rate_limits(&ctx);
         assert!(result.is_some());
         let data = result.unwrap();
-        assert!(
-            (data.five_hour_pct - 0.0).abs() < f64::EPSILON,
-            "absent five_hour → 0.0 placeholder"
-        );
+        assert!(data.five_hour_absent, "absent five_hour → five_hour_absent");
         assert!((data.seven_day_pct - 75.0).abs() < f64::EPSILON);
         assert_eq!(data.five_hour_resets_at_epoch, None);
+    }
+
+    fn ctx_without_five_hour() -> (tempfile::TempDir, Context) {
+        let (dir, mut ctx) = ctx_with_pcts(0.0, 33.0);
+        ctx.rate_limits.as_mut().unwrap().five_hour = None;
+        (dir, ctx)
+    }
+
+    fn five_hour_cfg() -> CshipConfig {
+        CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                five_hour_format: Some("5h {pct}% ({reset})".into()),
+                seven_day_format: Some("7d {pct}%".into()),
+                separator: Some(" ".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_render_omits_five_hour_when_absent() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        let out = render(&ctx, &five_hour_cfg()).unwrap();
+        assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
+        assert!(out.contains("7d 33%"), "7d segment should remain: {out:?}");
+    }
+
+    #[test]
+    fn test_render_five_hour_token_none_when_absent() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        let cfg = five_hour_cfg();
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+        assert!(render_seven_day(&ctx, &cfg).unwrap().contains("7d 33%"));
+    }
+
+    #[test]
+    fn test_merge_keeps_api_five_hour_when_stdin_omits_it() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        let _full = FullDataGuard::set(UsageLimitsData {
+            five_hour_pct: 62.0,
+            seven_day_pct: 10.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        });
+        let cfg = five_hour_cfg();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(out.contains("5h 62%"), "API 5h reading must show: {out:?}");
+        assert!(out.contains("7d 33%"), "stdin 7d must still win: {out:?}");
+        assert!(render_five_hour(&ctx, &cfg).unwrap().contains("5h 62%"));
+    }
+
+    #[test]
+    fn test_merge_hides_five_hour_when_both_sources_lack_it() {
+        let (_dir, ctx) = ctx_without_five_hour();
+        let _full = FullDataGuard::set(UsageLimitsData {
+            seven_day_pct: 10.0,
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            five_hour_absent: true,
+            ..Default::default()
+        });
+        let cfg = five_hour_cfg();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+    }
+
+    #[test]
+    fn test_merge_hides_five_hour_for_cache_entry_without_flag_or_reading() {
+        // A cache entry written before `five_hour_absent` existed reads back as
+        // "present" with 0% and no reset. That is not a reading, so stdin's
+        // absence still hides the segment.
+        let (_dir, ctx) = ctx_without_five_hour();
+        let _full = FullDataGuard::set(UsageLimitsData {
+            seven_day_pct: 10.0,
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        });
+        let out = render(&ctx, &five_hour_cfg()).unwrap();
+        assert!(!out.contains("5h"), "5h segment should be hidden: {out:?}");
+    }
+
+    #[test]
+    fn test_window_accessors_follow_absent_flags() {
+        let data = UsageLimitsData {
+            five_hour_pct: 50.0,
+            five_hour_absent: true,
+            seven_day_pct: 20.0,
+            ..Default::default()
+        };
+        assert!(data.five_hour().is_none(), "absent flag wins over the pct");
+        assert_eq!(data.seven_day().map(|w| w.pct), Some(20.0));
+
+        let zero = UsageLimitsData::default();
+        assert!(!zero.five_hour().unwrap().has_reading());
+        let with_reset = UsageLimitsData {
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        assert!(with_reset.five_hour().unwrap().has_reading());
+    }
+
+    #[test]
+    fn test_lacks_standard_signal_with_absent_windows() {
+        // Enterprise: both windows absent.
+        assert!(lacks_standard_signal(&UsageLimitsData {
+            five_hour_absent: true,
+            seven_day_absent: true,
+            ..Default::default()
+        }));
+        // 5h-less account at the start of its week: 7d is real even at 0%.
+        assert!(!lacks_standard_signal(&UsageLimitsData {
+            five_hour_absent: true,
+            ..Default::default()
+        }));
+        assert!(!lacks_standard_signal(&UsageLimitsData {
+            seven_day_absent: true,
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn test_weekly_renders_at_zero_pct_when_five_hour_absent() {
+        // 5h absent, 7d at 0% with no reset time: the weekly window still shows.
+        let (_dir, mut ctx) = ctx_without_five_hour();
+        ctx.rate_limits.as_mut().unwrap().seven_day = Some(crate::context::RateLimitPeriod {
+            used_percentage: Some(0.0),
+            resets_at: None,
+        });
+        let cfg = five_hour_cfg();
+        assert_eq!(render(&ctx, &cfg).as_deref(), Some("7d 0%"));
+        assert_eq!(render_seven_day(&ctx, &cfg).as_deref(), Some("7d 0%"));
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+    }
+
+    fn ctx_without_seven_day() -> (tempfile::TempDir, Context) {
+        let (dir, mut ctx) = ctx_with_pcts(40.0, 0.0);
+        ctx.rate_limits.as_mut().unwrap().seven_day = None;
+        (dir, ctx)
+    }
+
+    #[test]
+    fn test_render_omits_seven_day_when_absent() {
+        let (_dir, ctx) = ctx_without_seven_day();
+        let cfg = five_hour_cfg();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(out.contains("5h 40%"), "5h segment should remain: {out:?}");
+        assert!(!out.contains("7d"), "7d segment should be hidden: {out:?}");
+        assert!(render_seven_day(&ctx, &cfg).is_none());
+        assert!(render_five_hour(&ctx, &cfg).unwrap().contains("5h 40%"));
+    }
+
+    #[test]
+    fn test_merge_keeps_api_seven_day_when_stdin_omits_it() {
+        let (_dir, ctx) = ctx_without_seven_day();
+        let _full = FullDataGuard::set(UsageLimitsData {
+            five_hour_pct: 10.0,
+            seven_day_pct: 71.0,
+            five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
+            seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
+            ..Default::default()
+        });
+        let out = render(&ctx, &five_hour_cfg()).unwrap();
+        assert!(out.contains("5h 40%"), "stdin 5h must still win: {out:?}");
+        assert!(out.contains("7d 71%"), "API 7d reading must show: {out:?}");
+    }
+
+    #[test]
+    fn test_render_both_windows_absent_falls_back_to_extra_usage() {
+        let (_dir, mut ctx) = ctx_without_five_hour();
+        ctx.rate_limits.as_mut().unwrap().seven_day = None;
+        let cfg = five_hour_cfg();
+        assert!(
+            render(&ctx, &cfg).is_none(),
+            "no windows and no extra usage"
+        );
+        assert!(render_seven_day(&ctx, &cfg).is_none());
     }
 
     // ── render() stdin integration tests (story 2-4, AC2 & AC4) ──────────────
@@ -2252,8 +2428,6 @@ mod tests {
             seven_day_pct: 40.0,
             five_hour_resets_at: "2099-01-01T00:00:00Z".into(),
             seven_day_resets_at: "2099-01-01T00:00:00Z".into(),
-            five_hour_available: true,
-            seven_day_available: true,
             extra_usage_enabled: Some(true),
             extra_usage_monthly_limit: Some(20000.0),
             extra_usage_used_credits: Some(1000.0),
@@ -2987,8 +3161,6 @@ mod tests {
             seven_day_pct: 60.0,
             five_hour_resets_at_epoch: Some(9_999_999_999),
             seven_day_resets_at_epoch: Some(9_999_999_999),
-            five_hour_available: true,
-            seven_day_available: true,
             ..Default::default()
         }
     }
@@ -3032,19 +3204,20 @@ mod tests {
     }
 
     /// Stdin sends `rate_limits` with neither window (e.g. at session start)
-    /// while the API has them: availability is OR-ed across sources, so the
-    /// plan is not mistaken for one without standard windows.
+    /// while the API reports one: the API's window is kept, so the plan is not
+    /// mistaken for one without standard windows, and the window the API does
+    /// not report stays hidden.
     #[test]
-    fn test_availability_flags_are_combined_across_sources() {
+    fn test_api_window_kept_when_stdin_omits_it() {
         use crate::context::RateLimits;
-        for (five_api, seven_api) in [(true, false), (false, true)] {
+        for (five_absent, seven_absent) in [(false, true), (true, false)] {
             let _full = FullDataGuard::set(UsageLimitsData {
                 five_hour_pct: 30.0,
                 seven_day_pct: 60.0,
                 five_hour_resets_at_epoch: Some(9_999_999_999),
                 seven_day_resets_at_epoch: Some(9_999_999_999),
-                five_hour_available: five_api,
-                seven_day_available: seven_api,
+                five_hour_absent: five_absent,
+                seven_day_absent: seven_absent,
                 ..Default::default()
             });
             let (_dir, mut ctx) = ctx_with_transcript();
@@ -3053,9 +3226,10 @@ mod tests {
                 seven_day: None,
             });
             let out = render(&ctx, &CshipConfig::default()).unwrap_or_else(|| {
-                panic!("API window (5h={five_api}, 7d={seven_api}) must keep the module visible")
+                panic!("API window (5h absent={five_absent}, 7d absent={seven_absent}) must keep the module visible")
             });
-            assert!(out.contains("5h:") && out.contains("7d:"), "{out}");
+            assert_eq!(out.contains("5h:"), !five_absent, "{out}");
+            assert_eq!(out.contains("7d:"), !seven_absent, "{out}");
         }
     }
 
