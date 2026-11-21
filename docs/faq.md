@@ -42,27 +42,15 @@ This shows:
 
 The CShip `usage_limits` module fetches data from the Anthropic API using your Claude Code OAuth token, which is stored in the OS credential store.
 
-**Prerequisites:**
+**Linux/WSL2:** No manual setup required. Claude Code writes its credential to `~/.claude/.credentials.json` when you log in, and CShip reads the OAuth token from that file. If the file is missing, log in to Claude Code again (`/login`).
 
-1. Install `libsecret-tools`:
-   ```sh
-   # Debian/Ubuntu/WSL2
-   sudo apt-get install -y libsecret-tools
-   ```
+Only when that file is absent does CShip fall back to `secret-tool` (from `libsecret-tools`), looking up the service `Claude Code-credentials`. The stored secret must be the full contents of `.credentials.json` (the JSON containing `claudeAiOauth.accessToken`), not the bare token. Claude Code itself does not write to the keyring on Linux, so most setups never use this fallback.
 
-2. Store your Claude Code OAuth token with `secret-tool`:
-   ```sh
-   secret-tool store --label="Claude Code" service "claude.ai" account "claude-code"
-   ```
-   When prompted for a password, paste your OAuth token.
-
-   You can find your token in `~/.claude/.credentials.json` (look for the `access_token` field) or by logging out and back into Claude Code.
-
-3. Run `cship explain` to verify the token is found and the usage limits module is rendering.
+Run `cship explain` to verify the token is found and the usage limits module is rendering.
 
 **macOS:** CShip reads the OAuth token from the macOS Keychain automatically — no manual setup required.
 
-**Multiple accounts (`CLAUDE_CONFIG_DIR`):** CShip reads the credential of the session's own config dir, the same way Claude Code stores it: `$CLAUDE_CONFIG_DIR/.credentials.json` on Linux/WSL2 and Windows, and the Keychain item `Claude Code-credentials-<hash>` on macOS (unsuffixed `Claude Code-credentials` when `CLAUDE_CONFIG_DIR` is unset). So `usage_limits` and `account` follow whichever account the session runs as.
+**Multiple accounts (`CLAUDE_CONFIG_DIR`):** CShip reads the credential of the session's own config dir, the same way Claude Code stores it: `$CLAUDE_CONFIG_DIR/.credentials.json` on Linux/WSL2 and Windows, and the Keychain item `Claude Code-credentials-<hash>` on macOS (unsuffixed `Claude Code-credentials` when `CLAUDE_CONFIG_DIR` is unset). The Linux `secret-tool` fallback uses the same suffixed name. So `usage_limits` and `account` follow whichever account the session runs as.
 
 ---
 
@@ -136,8 +124,8 @@ The value reflects live `/effort` changes, so it updates on the next render afte
 `cship.account` shows which Anthropic account you're signed in to (work vs
 personal). It reads your account profile from the OAuth `/api/oauth/profile`
 endpoint using the OAuth token in your OS credential store — the same
-credential `usage_limits` uses — so the [Linux/WSL2 setup above](#usage-limits-linux)
-applies here too (`libsecret-tools` + `secret-tool`). The profile is cached for
+credential `usage_limits` uses — so the [Linux/WSL2 notes above](#usage-limits-linux)
+apply here too. The profile is cached for
 24 hours and re-fetched automatically when you switch accounts.
 
 If the module renders nothing, run `cship explain cship.account`. It

@@ -120,9 +120,8 @@ fn remove_cache_directories(home: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static HOME_MUTEX: Mutex<()> = Mutex::new(());
+    // Shared with the platform tests, which also mutate HOME / CLAUDE_HOME.
+    use crate::platform::TEST_ENV_LOCK as HOME_MUTEX;
 
     fn with_tempdir<F: FnOnce(&std::path::Path)>(f: F) {
         let _guard = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());

@@ -120,6 +120,20 @@ fn config_dir_env() -> Option<String> {
         .filter(|d| !d.is_empty())
 }
 
+/// Unicode NFC form of a `CLAUDE_CONFIG_DIR` value. Claude Code normalises the
+/// config dir this way before using it as a path or hashing it, so a value with
+/// decomposed characters (e.g. `e` + combining acute, as macOS file APIs return)
+/// must be composed first or cship looks somewhere Claude Code never wrote.
+fn nfc(dir: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    dir.nfc().collect()
+}
+
+/// Serialises tests that mutate process-global env vars read by [`home_dir`] and
+/// [`claude_config_dir`] (`HOME`, `USERPROFILE`, `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR`).
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Claude Code's config directory for this session: `CLAUDE_CONFIG_DIR` when set,
 /// otherwise `.claude` under [`home_dir`]. Claude Code launches the statusline with
 /// the session's environment, so this is the directory of the account in use.
@@ -134,7 +148,7 @@ fn resolve_config_dir(
     home: Option<std::path::PathBuf>,
 ) -> Option<std::path::PathBuf> {
     match config_dir.filter(|d| !d.is_empty()) {
-        Some(dir) => Some(std::path::PathBuf::from(dir)),
+        Some(dir) => Some(std::path::PathBuf::from(nfc(&dir))),
         None => home.map(|h| h.join(".claude")),
     }
 }
@@ -144,8 +158,8 @@ fn resolve_config_dir(
 /// Mirrors Claude Code: the default config dir uses `"Claude Code-credentials"`;
 /// a session with `CLAUDE_CONFIG_DIR` set appends `-` and the first 8 hex chars of
 /// the SHA-256 of that value, e.g. `"Claude Code-credentials-1e91dd84"` for
-/// `/Users/me/.claude-work`. The value is hashed as given (no tilde expansion or
-/// path canonicalisation), the same as Claude Code does.
+/// `/Users/me/.claude-work`. The value is NFC-normalised and otherwise hashed as
+/// given (no tilde expansion or path canonicalisation), the same as Claude Code does.
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 fn keychain_service_name(config_dir: Option<&str>) -> String {
     use sha2::{Digest, Sha256};
@@ -153,7 +167,7 @@ fn keychain_service_name(config_dir: Option<&str>) -> String {
     match config_dir.filter(|d| !d.is_empty()) {
         None => BASE.to_string(),
         Some(dir) => {
-            let digest = Sha256::digest(dir.as_bytes());
+            let digest = Sha256::digest(nfc(dir).as_bytes());
             let hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
             format!("{BASE}-{hex}")
         }
@@ -333,26 +347,82 @@ mod tests {
         assert_eq!(extract_access_token(json), None);
     }
 
+    /// Write a `.credentials.json` holding `token` into `dir` (created if absent).
+    #[cfg(target_os = "linux")]
+    fn write_credentials(dir: &std::path::Path, token: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let json = format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"{token}","refreshToken":"rt","expiresAt":9999}}}}"#
+        );
+        std::fs::write(dir.join(".credentials.json"), json).unwrap();
+    }
+
+    /// Run `f` with `HOME` set to `home`, `CLAUDE_CONFIG_DIR` set to `config_dir`
+    /// (removed when `None`) and `CLAUDE_HOME` removed, then restore all three.
+    /// Holds [`TEST_ENV_LOCK`] so the caller's own shell env and other env-mutating
+    /// tests cannot leak in.
+    #[cfg(target_os = "linux")]
+    fn with_credential_env<T>(
+        home: &std::path::Path,
+        config_dir: Option<&std::path::Path>,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        const VARS: [&str; 3] = ["HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR"];
+        let _guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = VARS.map(std::env::var_os);
+        // SAFETY: guarded by TEST_ENV_LOCK; restored below before the lock is released.
+        unsafe {
+            std::env::set_var("HOME", home);
+            std::env::remove_var("CLAUDE_HOME");
+            match config_dir {
+                Some(dir) => std::env::set_var("CLAUDE_CONFIG_DIR", dir),
+                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+            }
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        for (var, value) in VARS.iter().zip(saved) {
+            // SAFETY: guarded by TEST_ENV_LOCK.
+            unsafe {
+                match value {
+                    Some(v) => std::env::set_var(var, v),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+        result.unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn test_read_credentials_file_valid() {
-        use std::io::Write;
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        let creds_path = claude_dir.join(".credentials.json");
-        let json = r#"{"claudeAiOauth":{"accessToken":"sk-ant-file-token","refreshToken":"rt","expiresAt":9999}}"#;
-        std::fs::File::create(&creds_path)
-            .unwrap()
-            .write_all(json.as_bytes())
-            .unwrap();
-        // Temporarily override HOME for this test
-        let orig_home = std::env::var("HOME").unwrap_or_default();
-        // SAFETY: single-threaded test, no concurrent env reads
-        unsafe { std::env::set_var("HOME", dir.path()) };
-        let result = read_credentials_file();
-        unsafe { std::env::set_var("HOME", &orig_home) };
-        assert_eq!(result, Some("sk-ant-file-token".to_string()));
+        let home = tempfile::tempdir().unwrap();
+        write_credentials(&home.path().join(".claude"), "sk-ant-file-token");
+        let result = with_credential_env(home.path(), None, read_credentials_file);
+        assert_eq!(result.as_deref(), Some("sk-ant-file-token"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_read_credentials_file_prefers_claude_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        write_credentials(&home.path().join(".claude"), "sk-ant-default-token");
+        let config_dir = tempfile::tempdir().unwrap();
+        write_credentials(config_dir.path(), "sk-ant-config-dir-token");
+        let result =
+            with_credential_env(home.path(), Some(config_dir.path()), read_credentials_file);
+        assert_eq!(result.as_deref(), Some("sk-ant-config-dir-token"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_read_credentials_file_does_not_fall_back_to_home() {
+        // An account with no credential file must not read the default account's.
+        let home = tempfile::tempdir().unwrap();
+        write_credentials(&home.path().join(".claude"), "sk-ant-default-token");
+        let config_dir = tempfile::tempdir().unwrap();
+        let result =
+            with_credential_env(home.path(), Some(config_dir.path()), read_credentials_file);
+        assert_eq!(result, None);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -387,6 +457,31 @@ mod tests {
         assert_eq!(
             keychain_service_name(Some("/home/me/.claude-personal")),
             "Claude Code-credentials-d20442b7"
+        );
+    }
+
+    #[test]
+    fn test_keychain_service_name_normalises_to_nfc() {
+        // Claude Code hashes the NFC form, so a decomposed "e\u{301}" must give the
+        // same service name as the composed "\u{e9}".
+        let composed = "/Users/Jos\u{e9}/.claude-work";
+        let decomposed = "/Users/Jose\u{301}/.claude-work";
+        assert_eq!(
+            keychain_service_name(Some(composed)),
+            "Claude Code-credentials-cf8a19d4"
+        );
+        assert_eq!(
+            keychain_service_name(Some(decomposed)),
+            "Claude Code-credentials-cf8a19d4"
+        );
+    }
+
+    #[test]
+    fn test_resolve_config_dir_normalises_to_nfc() {
+        use std::path::PathBuf;
+        assert_eq!(
+            resolve_config_dir(Some("/home/Jose\u{301}/.claude-work".into()), None),
+            Some(PathBuf::from("/home/Jos\u{e9}/.claude-work"))
         );
     }
 
