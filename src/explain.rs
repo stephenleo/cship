@@ -295,6 +295,31 @@ fn error_hint_for(
             "workspace data absent from Claude Code context".into(),
             "Ensure Claude Code is running and cship is wired via \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} in ~/.claude/settings.json.".into(),
         ),
+        "usage_limits"
+            if crate::modules::usage_limits::stdin_only(cfg.usage_limits.as_ref()) =>
+        {
+            // No credential probe: with `stdin_only` the render path never reads
+            // one, so its state can't be why this token is empty.
+            let is_window_token = matches!(
+                top,
+                "usage_limits"
+                    | "usage_limits.session"
+                    | "usage_limits.five_hour"
+                    | "usage_limits.weekly"
+                    | "usage_limits.seven_day"
+            );
+            if is_window_token {
+                (
+                    "usage_limits returned no data: stdin_only is set and Claude Code sent no rate_limits".into(),
+                    "With `stdin_only = true` the 5h/7d values come only from Claude Code's session JSON, which carries `rate_limits` on Pro/Max plans. Remove `stdin_only` to fall back to the usage API.".into(),
+                )
+            } else {
+                (
+                    "this token needs the usage API, which stdin_only turns off".into(),
+                    "Per-model and extra-usage values come only from the usage API. Remove `stdin_only = true` from [cship.usage_limits], or drop this token from your format.".into(),
+                )
+            }
+        }
         "usage_limits" => {
             // Probe credential state to distinguish missing token from expired token.
             // NOTE: This arm spawns a subprocess or reads a file — acceptable for the
@@ -693,6 +718,43 @@ mod tests {
             remediation.contains("login flow"),
             "remediation must include login flow instruction, got: {remediation}"
         );
+    }
+
+    fn stdin_only_cfg() -> CshipConfig {
+        CshipConfig {
+            usage_limits: Some(crate::config::UsageLimitsConfig {
+                stdin_only: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// #210: with `stdin_only` the hint points at the missing stdin data for
+    /// window tokens and at the flag itself for API-only tokens, never at the
+    /// credential (which the render path doesn't read in this mode).
+    #[test]
+    fn test_error_hint_usage_limits_stdin_only() {
+        let cfg = stdin_only_cfg();
+        let ctx = crate::context::Context::default();
+        for name in [
+            "usage_limits",
+            "cship.usage_limits.session",
+            "usage_limits.weekly",
+        ] {
+            let (error, remediation) = error_hint_for(name, &ctx, &cfg);
+            assert!(error.contains("sent no rate_limits"), "{name}: {error}");
+            assert!(remediation.contains("stdin_only"), "{name}: {remediation}");
+        }
+        for name in [
+            "usage_limits.opus",
+            "usage_limits.per_model",
+            "usage_limits.extra_usage",
+        ] {
+            let (error, remediation) = error_hint_for(name, &ctx, &cfg);
+            assert!(error.contains("stdin_only turns off"), "{name}: {error}");
+            assert!(remediation.contains("stdin_only"), "{name}: {remediation}");
+        }
     }
 
     fn enterprise_usage(extra_enabled: bool) -> crate::usage_limits::UsageLimitsData {
