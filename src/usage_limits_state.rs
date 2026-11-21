@@ -4,8 +4,9 @@
 //! Claude Code sessions can invoke it at nearly the same time. This module
 //! makes those processes share one on-disk state file and one fetch lock so
 //! `/api/oauth/usage` is polled at most once per interval (60s by default,
-//! user-configurable via `ttl`), globally, regardless of how many sessions or
-//! processes are running.
+//! user-configurable via `ttl`) per Claude config directory, regardless of how
+//! many sessions or processes are running. A changed token gets one
+//! additional, immediate fetch.
 //!
 //! This is the ONLY file that reads/writes the shared cross-process cache
 //! directory (`platform::cship_shared_cache_dir()`). It does not make HTTP
@@ -34,6 +35,11 @@ pub(crate) struct SharedUsageState {
     pub rate_limit_until_epoch: u64,
     pub consecutive_errors: u32,
     pub failed_token_fingerprint: Option<String>,
+    /// When the token in `failed_token_fingerprint` may be tried again. Kept
+    /// apart from `next_allowed_at_epoch` so a rejected token's backoff does
+    /// not delay a different token that shares this state.
+    #[serde(default)]
+    pub failed_token_retry_at_epoch: u64,
     /// Fingerprint of an as-yet-uncommitted (`token_fingerprint` still holds
     /// the previous token) token change that has already been given its one
     /// out-of-schedule "bypass and probe immediately" attempt. Additive
@@ -41,6 +47,10 @@ pub(crate) struct SharedUsageState {
     /// existed still deserialize (as `None`, i.e. "not yet probed").
     #[serde(default)]
     pub token_change_probe_fingerprint: Option<String>,
+    /// When `usage` was last fetched successfully (0 = never). Bounds how long
+    /// the snapshot is still shown while the credential cannot be read.
+    #[serde(default)]
+    pub usage_fetched_at_epoch: u64,
 }
 
 impl SharedUsageState {
@@ -53,7 +63,9 @@ impl SharedUsageState {
             rate_limit_until_epoch: 0,
             consecutive_errors: 0,
             failed_token_fingerprint: None,
+            failed_token_retry_at_epoch: 0,
             token_change_probe_fingerprint: None,
+            usage_fetched_at_epoch: 0,
         }
     }
 }
@@ -66,16 +78,33 @@ fn load_state_from_dir(dir: &Path) -> SharedUsageState {
     let path = state_file_path_in(dir);
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,
-        Err(_) => return SharedUsageState::default_state(),
+        // No state yet (first run, or the cache dir was cleared): normal.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return SharedUsageState::default_state();
+        }
+        Err(e) => {
+            tracing::warn!(
+                "cship.usage_limits_state: could not read {}: {e}",
+                path.display()
+            );
+            return SharedUsageState::default_state();
+        }
     };
     match serde_json::from_str::<SharedUsageState>(&raw) {
         Ok(state) if state.schema_version == CURRENT_SCHEMA_VERSION => state,
-        Ok(_) => {
-            tracing::debug!("cship.usage_limits_state: unknown schema version, using default");
+        Ok(state) => {
+            tracing::warn!(
+                "cship.usage_limits_state: schema version {} in {} is not {CURRENT_SCHEMA_VERSION}, ignoring it",
+                state.schema_version,
+                path.display()
+            );
             SharedUsageState::default_state()
         }
         Err(e) => {
-            tracing::debug!("cship.usage_limits_state: invalid state JSON ({e}), using default");
+            tracing::warn!(
+                "cship.usage_limits_state: invalid state JSON in {} ({e}), ignoring it",
+                path.display()
+            );
             SharedUsageState::default_state()
         }
     }
@@ -162,58 +191,78 @@ pub(crate) struct FetchLock {
 }
 
 impl FetchLock {
-    /// Records "a fetch for `fingerprint` was just attempted" in the lock
-    /// file itself (contents + mtime), independent of whether `persist_state`
-    /// succeeds afterward. See `recently_attempted` for why this matters.
-    fn touch(&self, fingerprint: &str) {
+    /// Records in the lock file itself that a fetch for `fingerprint` was
+    /// attempted and that the next one is not due before `not_before_epoch`,
+    /// independent of whether `persist_state_to_dir` succeeds. See
+    /// `attempt_blocks` for why this matters.
+    fn record_attempt(&self, fingerprint: &str, not_before_epoch: u64) {
         use std::io::{Seek, Write};
         let mut f = &self._file;
-        let _ = self._file.set_len(0);
-        let _ = f.rewind();
-        let _ = f.write_all(fingerprint.as_bytes());
-        let _ = self._file.set_modified(std::time::SystemTime::now());
+        let record = format!("{fingerprint}\n{not_before_epoch}");
+        let written = self
+            ._file
+            .set_len(0)
+            .and_then(|()| f.rewind())
+            .and_then(|()| f.write_all(record.as_bytes()));
+        if let Err(e) = written {
+            tracing::warn!("cship.usage_limits_state: could not record the fetch attempt: {e}");
+        }
     }
 
     /// Backstop fetch-eligibility check, independent of `SharedUsageState`:
-    /// true if this lock file records an attempt for `fingerprint` within
-    /// `interval` seconds of `now`.
+    /// true if this lock file records an attempt for `fingerprint` whose next
+    /// allowed fetch time is still in the future.
     ///
-    /// `persist_state` can silently fail to durably record a completed fetch
+    /// `persist_state_to_dir` can fail to durably record a completed fetch
     /// (read-only/unavailable cache dir, a rename blocked by an AV scanner or
     /// a sync client holding the target file open, ...). When that happens the
     /// state file under-reports how recently a fetch actually ran, so
-    /// `fetch_may_be_needed` alone would judge every render eligible again —
-    /// hammering the API on every statusline render instead of respecting
-    /// `interval`. `touch` updates the lock file whenever a fetch starts,
-    /// regardless of persist success; a small in-place write is far more
-    /// likely to survive whatever is blocking the state file's atomic rename.
+    /// `fetch_may_be_needed` alone would judge every render eligible again and
+    /// the API would be hit on every statusline render. `record_attempt`
+    /// writes the lock file whenever a fetch starts and again once its outcome
+    /// is known; a small in-place write is far more likely to survive whatever
+    /// is blocking the state file's atomic rename.
+    ///
+    /// The record carries the scheduled next fetch time, not just "an attempt
+    /// happened", so it agrees with the state file's schedule: a poll that
+    /// `apply_fetch_outcome` scheduled sooner than `interval` (just after a
+    /// window reset) is not blocked here, and a longer error backoff is kept.
     ///
     /// The fingerprint is part of the record so that (a) a freshly created,
-    /// never-touched lock file (empty, mtime = creation time) is not mistaken
-    /// for an attempt, and (b) switching accounts is not throttled by the
-    /// previous account's attempt. Reads through the already-locked handle:
-    /// on Windows a second handle cannot read a byte-range-locked file.
-    fn recently_attempted(&self, fingerprint: &str, interval: u64, now: u64) -> bool {
+    /// never-written lock file is not mistaken for an attempt, and (b)
+    /// switching accounts is not throttled by the previous account's attempt.
+    /// A time further ahead than any schedule this module produces (the clock
+    /// was ahead when it was written, or the file is damaged) is ignored, so
+    /// it cannot block fetching for longer than a real backoff would. Reads
+    /// through the already-locked handle: on Windows a second handle cannot
+    /// read a byte-range-locked file.
+    fn attempt_blocks(&self, fingerprint: &str, interval: u64, now: u64) -> bool {
         use std::io::{Read, Seek};
         let mut f = &self._file;
         let mut recorded = String::new();
         if f.rewind().is_err() || f.read_to_string(&mut recorded).is_err() {
             return false;
         }
-        if recorded != fingerprint {
+        let Some((recorded_fingerprint, not_before)) = recorded.split_once('\n') else {
+            return false;
+        };
+        if recorded_fingerprint != fingerprint {
             return false;
         }
-        let Ok(modified) = self._file.metadata().and_then(|m| m.modified()) else {
+        let Ok(not_before) = not_before.trim().parse::<u64>() else {
             return false;
         };
-        let Ok(mtime_epoch) = modified
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-        else {
-            return false; // mtime before 1970 — shouldn't happen, don't block on it
-        };
-        now.saturating_sub(mtime_epoch) < interval
+        now < not_before && not_before <= now.saturating_add(longest_scheduled_wait(interval))
     }
+}
+
+/// Upper bound on how far ahead of "now" this module ever schedules a fetch:
+/// the longest error backoff or one regular interval, plus the spacing a
+/// reset-aligned poll may add on top.
+fn longest_scheduled_wait(interval: u64) -> u64 {
+    interval
+        .max(MAX_RATE_LIMIT_BACKOFF_SECS)
+        .saturating_add(MIN_POLL_SPACING_SECS)
 }
 
 fn lock_path_in(dir: &Path) -> PathBuf {
@@ -221,7 +270,11 @@ fn lock_path_in(dir: &Path) -> PathBuf {
 }
 
 fn try_acquire_fetch_lock_in(dir: &Path) -> Option<FetchLock> {
-    if std::fs::create_dir_all(dir).is_err() {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        tracing::warn!(
+            "cship.usage_limits_state: could not create {}: {e}; usage API data will not refresh",
+            dir.display()
+        );
         return None;
     }
     let lock_path = lock_path_in(dir);
@@ -234,7 +287,10 @@ fn try_acquire_fetch_lock_in(dir: &Path) -> Option<FetchLock> {
     {
         Ok(f) => f,
         Err(e) => {
-            tracing::debug!("cship.usage_limits_state: could not open lock file: {e}");
+            tracing::warn!(
+                "cship.usage_limits_state: could not open {}: {e}; usage API data will not refresh",
+                lock_path.display()
+            );
             return None;
         }
     };
@@ -242,7 +298,15 @@ fn try_acquire_fetch_lock_in(dir: &Path) -> Option<FetchLock> {
     // callers are a statusline renderer that must never stall.
     match file.try_lock() {
         Ok(()) => Some(FetchLock { _file: file }),
-        Err(_) => None,
+        // Another process is fetching: the normal contended case.
+        Err(std::fs::TryLockError::WouldBlock) => None,
+        Err(std::fs::TryLockError::Error(e)) => {
+            tracing::warn!(
+                "cship.usage_limits_state: could not lock {}: {e}; usage API data will not refresh",
+                lock_path.display()
+            );
+            None
+        }
     }
 }
 
@@ -253,23 +317,33 @@ fn try_acquire_fetch_lock_in(dir: &Path) -> Option<FetchLock> {
 const DEFAULT_API_INTERVAL_SECS: u64 = 60;
 const MAX_RATE_LIMIT_BACKOFF_SECS: u64 = 900;
 const TRANSIENT_ERROR_RETRY_SECS: u64 = 30;
+/// How long to wait before retrying a token the API rejected with a 401.
+const UNAUTHORIZED_RETRY_SECS: u64 = MAX_RATE_LIMIT_BACKOFF_SECS;
+/// How long the last snapshot is still shown while the credential cannot be read.
+const UNREADABLE_CREDENTIAL_GRACE_SECS: u64 = MAX_RATE_LIMIT_BACKOFF_SECS;
 /// Poll this long after a known window reset, so the API has rolled the window over.
 const RESET_CONFIRMATION_BUFFER_SECS: u64 = 5;
 /// Two polls are never scheduled closer together than this (or `ttl`, if shorter).
 const MIN_POLL_SPACING_SECS: u64 = 30;
 
 fn fetch_may_be_needed(state: &SharedUsageState, fingerprint: &str, now: u64) -> bool {
+    now >= next_fetch_epoch(state, fingerprint)
+}
+
+/// Earliest time a fetch for `fingerprint` is due under `state`'s schedule.
+fn next_fetch_epoch(state: &SharedUsageState, fingerprint: &str) -> u64 {
+    let schedule = state
+        .next_allowed_at_epoch
+        .max(state.rate_limit_until_epoch);
     if state.failed_token_fingerprint.as_deref() == Some(fingerprint) {
-        return false;
+        schedule.max(state.failed_token_retry_at_epoch)
+    } else {
+        schedule
     }
-    if now < state.rate_limit_until_epoch {
-        return false;
-    }
-    now >= state.next_allowed_at_epoch
 }
 
 /// A token change is "fresh" — eligible for the one-time bypass-and-probe
-/// treatment (design points 1/5) — only the first time we see it. Once a
+/// treatment — only the first time we see it. Once a
 /// probe has been attempted for `fingerprint` (success or failure), further
 /// renders for that same still-uncommitted fingerprint fall back to normal
 /// `fetch_may_be_needed` scheduling, exactly like a non-token-change render,
@@ -333,7 +407,8 @@ fn apply_fetch_outcome(
         UsageFetchOutcome::Success(data) => {
             let reset = earliest_future_reset(&data, now);
             state.usage = Some(*data);
-            let ordinary_next = now + api_interval;
+            state.usage_fetched_at_epoch = now;
+            let ordinary_next = now.saturating_add(api_interval);
             let spacing = MIN_POLL_SPACING_SECS.min(api_interval);
             state.next_allowed_at_epoch = match reset {
                 // Poll just after the reset instead of the regular poll when the
@@ -341,14 +416,19 @@ fn apply_fetch_outcome(
                 // regular poll then would only see the old window). Never
                 // sooner than `spacing` from now, and a regular poll is never
                 // delayed by more than `spacing`.
-                Some(r) if r + RESET_CONFIRMATION_BUFFER_SECS < ordinary_next + spacing => {
-                    (r + RESET_CONFIRMATION_BUFFER_SECS).max(now + spacing)
+                Some(r)
+                    if r.saturating_add(RESET_CONFIRMATION_BUFFER_SECS)
+                        < ordinary_next.saturating_add(spacing) =>
+                {
+                    r.saturating_add(RESET_CONFIRMATION_BUFFER_SECS)
+                        .max(now.saturating_add(spacing))
                 }
                 _ => ordinary_next,
             };
             state.rate_limit_until_epoch = 0;
             state.consecutive_errors = 0;
             state.failed_token_fingerprint = None;
+            state.failed_token_retry_at_epoch = 0;
         }
         UsageFetchOutcome::RateLimited {
             retry_after_seconds,
@@ -368,7 +448,7 @@ fn apply_fetch_outcome(
                     )
                 });
             // Never poll more often than the configured ttl, even after an error.
-            state.rate_limit_until_epoch = now + delay.max(api_interval);
+            state.rate_limit_until_epoch = now.saturating_add(delay.max(api_interval));
             state.next_allowed_at_epoch = state.rate_limit_until_epoch;
         }
         UsageFetchOutcome::Unauthorized => {
@@ -377,19 +457,23 @@ fn apply_fetch_outcome(
             // that still holds the *previous* (uncommitted) fingerprint, so
             // reading it here would blame the wrong token.
             state.failed_token_fingerprint = Some(attempted_fingerprint.to_string());
-            // No retry timer here: `fetch_may_be_needed` unconditionally
-            // blocks any fetch while `failed_token_fingerprint` matches the
-            // current token, so only a token change (different fingerprint)
-            // can unblock — a `next_allowed_at_epoch` bump would be inert.
+            // A rejected token is normally fixed by a token change, which
+            // gets its own immediate probe. The same token is still retried,
+            // but only at the longest backoff: a 401 can also be a passing
+            // server-side fault, and without a retry the per-model and
+            // extra-usage values would stay frozen until the next refresh.
+            state.failed_token_retry_at_epoch =
+                now.saturating_add(UNAUTHORIZED_RETRY_SECS.max(api_interval));
         }
         UsageFetchOutcome::NetworkError | UsageFetchOutcome::InvalidResponse => {
             state.consecutive_errors = state.consecutive_errors.saturating_add(1);
-            state.next_allowed_at_epoch = now + TRANSIENT_ERROR_RETRY_SECS.max(api_interval);
+            state.next_allowed_at_epoch =
+                now.saturating_add(TRANSIENT_ERROR_RETRY_SECS.max(api_interval));
         }
         UsageFetchOutcome::ServerError { .. } => {
             state.consecutive_errors = state.consecutive_errors.saturating_add(1);
             let delay = backoff_secs(TRANSIENT_ERROR_RETRY_SECS, state.consecutive_errors, 300);
-            state.next_allowed_at_epoch = now + delay.max(api_interval);
+            state.next_allowed_at_epoch = now.saturating_add(delay.max(api_interval));
         }
     }
 }
@@ -399,7 +483,7 @@ pub(crate) struct SharedUsageResolution {
 }
 
 /// Usage is only displayable when it was recorded under the fingerprint
-/// currently in use (token-change points 1/2) — checked at read time, not
+/// currently in use — checked at read time, not
 /// wiped destructively, so a stale value on disk simply never surfaces
 /// under a different token rather than needing to be actively cleared.
 pub(crate) fn displayable_usage(
@@ -418,42 +502,38 @@ pub(crate) fn displayable_usage(
 const RENDER_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Runs `fetch_fn` on a worker thread and waits up to `RENDER_FETCH_TIMEOUT`
-/// for it to reply, bounding how long a render can stall regardless of the
-/// HTTP client's own (longer) internal timeout. If the worker hasn't replied
-/// in time, its result is abandoned — the thread keeps running in the
-/// background, but this call reports `NetworkError` so the caller applies
-/// the same backoff as any other transient failure (`apply_fetch_outcome`'s
-/// `TRANSIENT_ERROR_RETRY_SECS`), instead of re-attempting the same slow
-/// endpoint on the very next render. Generic `F` bound allows tests to
-/// inject a fast lambda bypassing real HTTP.
-/// `lock` is moved into the spawned thread rather than released by the
-/// caller: if the real request outlives the render timeout, the OS-level
-/// fetch lock must stay held for as long as the request is actually in
-/// flight, not just for as long as the render is willing to wait on it —
-/// otherwise another process can acquire the lock and start an overlapping
-/// request. The lock drops (and the rendezvous file is freed for the next
-/// fetch) whenever the thread actually finishes, bounded by the fetch
-/// function's own client-side timeout.
+/// for it to reply. The real fetch has its own, shorter client timeout, so
+/// this wait is a backstop for a client that does not honor it. If the worker
+/// has not replied in time its result is abandoned and this call reports
+/// `NetworkError`, so the caller applies the same backoff as any other
+/// transient failure instead of re-attempting on the very next render.
+///
+/// `lock` travels with the request. When the worker replies in time the lock
+/// comes back with the outcome, so the caller can save the new state before
+/// releasing it and no other process can fetch from the old state in between.
+/// When the worker is abandoned it keeps the lock (`None` is returned) until
+/// the request really ends, so no other process starts an overlapping one.
 fn fetch_with_render_timeout<F>(
     fetch_fn: F,
     lock: FetchLock,
-) -> crate::usage_limits::UsageFetchOutcome
+) -> (crate::usage_limits::UsageFetchOutcome, Option<FetchLock>)
 where
     F: FnOnce() -> crate::usage_limits::UsageFetchOutcome + Send + 'static,
 {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _lock = lock;
-        let _ = tx.send(fetch_fn());
+        // If the receiver has given up, the unsent pair (and with it the
+        // lock) is dropped here, once the request has ended.
+        let _ = tx.send((fetch_fn(), lock));
     });
     match rx.recv_timeout(RENDER_FETCH_TIMEOUT) {
-        Ok(outcome) => outcome,
+        Ok((outcome, lock)) => (outcome, Some(lock)),
         Err(_) => {
             tracing::warn!(
                 "cship.usage_limits_state: API fetch timed out after {}s",
                 RENDER_FETCH_TIMEOUT.as_secs()
             );
-            crate::usage_limits::UsageFetchOutcome::NetworkError
+            (crate::usage_limits::UsageFetchOutcome::NetworkError, None)
         }
     }
 }
@@ -484,8 +564,9 @@ pub(crate) fn resolve_shared_usage(
 /// `resolve_shared_usage` with the cache directory and the fetch function
 /// injected, so the whole orchestration (eligibility, locking, token-change
 /// probe, outcome handling, persistence) can be tested against a temp dir and
-/// a fake fetch. `dir = None` (no resolvable cache dir) behaves as before:
-/// nothing is read, locked or persisted.
+/// a fake fetch. With `dir = None` (no resolvable cache dir) nothing is read,
+/// locked, fetched or persisted: without a shared directory there is no way to
+/// keep concurrent processes from each fetching on every render.
 fn resolve_shared_usage_in<F>(
     dir: Option<&Path>,
     fetch: F,
@@ -501,7 +582,17 @@ where
         None => SharedUsageState::default_state(),
     };
     let Some(token) = token else {
-        return SharedUsageResolution { usage: None };
+        // The credential could not be read (the caller has logged why). A
+        // keychain lookup can fail for a single render, so keep showing a
+        // recent snapshot instead of blanking the API-only fields. Without a
+        // token the snapshot cannot be matched to an account, so this stops
+        // once it is older than the grace period (a real logout).
+        let state = load();
+        let recent =
+            now.saturating_sub(state.usage_fetched_at_epoch) <= UNREADABLE_CREDENTIAL_GRACE_SECS;
+        return SharedUsageResolution {
+            usage: state.usage.filter(|_| recent),
+        };
     };
 
     let fingerprint = crate::platform::token_fingerprint(token);
@@ -515,28 +606,34 @@ where
         };
     }
 
-    let Some(_lock) = dir.and_then(try_acquire_fetch_lock_in) else {
+    let Some(dir) = dir else {
+        tracing::warn!(
+            "cship.usage_limits_state: no Claude config directory could be resolved; usage API data will not refresh"
+        );
+        return SharedUsageResolution {
+            usage: displayable_usage(&state, &fingerprint),
+        };
+    };
+    let Some(lock) = try_acquire_fetch_lock_in(dir) else {
         return SharedUsageResolution {
             usage: displayable_usage(&state, &fingerprint),
         };
     };
 
-    // Re-read: another process may have refreshed while we were acquiring.
+    // Re-read: another process may have refreshed between the first read and
+    // taking the lock.
     let mut state = load();
     let fresh_token_change = is_fresh_token_change(&state, &fingerprint);
 
-    let recently_attempted = _lock.recently_attempted(&fingerprint, interval, now);
-
-    if recently_attempted
+    if lock.attempt_blocks(&fingerprint, interval, now)
         || (!fresh_token_change && !fetch_may_be_needed(&state, &fingerprint, now))
     {
-        // Someone else already refreshed while we waited for the lock, or
-        // this fingerprint already burned its one bypass probe and is now
-        // just in normal backoff — or the state file under-reports how
-        // recently a fetch ran because persisting it is currently failing
-        // (see `FetchLock::recently_attempted`). The recently-attempted check applies
-        // even to a fresh token change: if persisting the probe's outcome
-        // failed, the lock file is still the backstop that stops it from
+        // Someone else already refreshed, or this fingerprint already spent
+        // its one bypass probe and is now in normal backoff, or the state
+        // file under-reports how recently a fetch ran because persisting it
+        // is failing (see `FetchLock::attempt_blocks`). The lock-file check
+        // applies even to a fresh token change: if persisting the probe's
+        // outcome failed, the lock file is still what stops it from
         // re-firing on every render.
         return SharedUsageResolution {
             usage: displayable_usage(&state, &fingerprint),
@@ -544,7 +641,7 @@ where
     }
 
     if fresh_token_change {
-        // Points 3/4/5: the old failure block no longer applies to this
+        // The old failure block no longer applies to this
         // token, the old schedule belonged to the old token, and any
         // existing rate-limit cooldown gets one probe rather than a blind
         // 15-minute wait — `apply_fetch_outcome` re-establishes backoff
@@ -562,25 +659,24 @@ where
         // in effect and blocking the *new* token via `fetch_may_be_needed`'s
         // separate `rate_limit_until_epoch` check.
         state.failed_token_fingerprint = None;
+        state.failed_token_retry_at_epoch = 0;
         state.next_allowed_at_epoch = now;
         state.rate_limit_until_epoch = 0;
         state.consecutive_errors = 0;
     }
 
-    // Recorded unconditionally, even if the state write below fails, so a
-    // degraded (but writable-lock-file) cache dir still self-limits fetches
-    // to once per `interval` — see `FetchLock::recently_attempted`. Touched now,
-    // before the request even starts, since the request may outlive this
-    // function's own return (see `fetch_with_render_timeout`).
-    _lock.touch(&fingerprint);
+    // Recorded before the request starts, with a provisional next fetch time,
+    // so the attempt is on record even if this process is killed mid-request
+    // or the request is abandoned at the render timeout.
+    lock.record_attempt(&fingerprint, now.saturating_add(interval));
 
     let token_owned = token.to_string();
-    let outcome = fetch_with_render_timeout(move || fetch(token_owned), _lock);
+    let (outcome, lock) = fetch_with_render_timeout(move || fetch(token_owned), lock);
     let succeeded = matches!(outcome, crate::usage_limits::UsageFetchOutcome::Success(_));
     apply_fetch_outcome(&mut state, outcome, now, interval, &fingerprint);
     if succeeded {
-        // Point 6: only a successful fetch commits the new fingerprint —
-        // this is the moment the "switch" is actually recorded.
+        // Only a successful fetch commits the new fingerprint: this is the
+        // moment the switch is actually recorded.
         state.token_fingerprint = Some(fingerprint.clone());
         state.token_change_probe_fingerprint = None;
     } else if fresh_token_change {
@@ -589,17 +685,17 @@ where
         // backoff instead of bypassing the schedule again.
         state.token_change_probe_fingerprint = Some(fingerprint.clone());
     }
-    if let Some(d) = dir {
-        persist_state_to_dir(d, &state);
+    persist_state_to_dir(dir, &state);
+    // Still under the lock (unless the request was abandoned): replace the
+    // provisional record with the schedule the outcome produced, so the lock
+    // file and the state file agree on when the next fetch is due.
+    if let Some(lock) = &lock {
+        lock.record_attempt(&fingerprint, next_fetch_epoch(&state, &fingerprint));
     }
 
     SharedUsageResolution {
         usage: displayable_usage(&state, &fingerprint),
     }
-    // The OS-level lock itself may still be held by the background thread at
-    // this point if the request timed out past the render deadline — it's
-    // released whenever that thread actually finishes. The lock file is left
-    // in place either way, as a permanent rendezvous point.
 }
 
 #[cfg(test)]
@@ -617,7 +713,7 @@ mod tests {
     fn test_fetch_with_render_timeout_returns_fast_outcome() {
         let dir = tempfile::tempdir().unwrap();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        let outcome = fetch_with_render_timeout(
+        let (outcome, lock) = fetch_with_render_timeout(
             || crate::usage_limits::UsageFetchOutcome::Success(Box::default()),
             lock,
         );
@@ -625,13 +721,19 @@ mod tests {
             outcome,
             crate::usage_limits::UsageFetchOutcome::Success(_)
         ));
+        // The lock comes back with the outcome, still held, so the caller can
+        // save the new state before any other process may fetch.
+        assert!(lock.is_some());
+        assert!(try_acquire_fetch_lock_in(dir.path()).is_none());
+        drop(lock);
+        assert!(try_acquire_fetch_lock_in(dir.path()).is_some());
     }
 
     #[test]
     fn test_fetch_with_render_timeout_abandons_slow_fetch() {
         let dir = tempfile::tempdir().unwrap();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        let outcome = fetch_with_render_timeout(
+        let (outcome, lock) = fetch_with_render_timeout(
             || {
                 std::thread::sleep(Duration::from_secs(5));
                 crate::usage_limits::UsageFetchOutcome::Success(Box::default())
@@ -642,10 +744,10 @@ mod tests {
             outcome,
             crate::usage_limits::UsageFetchOutcome::NetworkError
         ));
+        assert!(lock.is_none(), "an abandoned request keeps the lock");
     }
 
-    /// Regression test for the lock-outliving-render-timeout bug: the OS
-    /// lock must stay held (blocking a second `try_acquire_fetch_lock_in`)
+    /// The OS lock must stay held (blocking a second `try_acquire_fetch_lock_in`)
     /// until the background thread actually finishes, not just until the
     /// render gives up waiting on it.
     #[test]
@@ -654,7 +756,7 @@ mod tests {
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let outcome = fetch_with_render_timeout(
+            let (outcome, _) = fetch_with_render_timeout(
                 || {
                     // Longer than RENDER_FETCH_TIMEOUT (2s) but short enough
                     // to keep the test fast.
@@ -676,8 +778,8 @@ mod tests {
         );
 
         // Let the slow fetch finish and release the lock. The lock drops
-        // just after `tx.send` inside the spawned thread, a few
-        // instructions after `done_rx` receives — poll briefly rather than
+        // when the worker's unsent result is dropped, which can be a few
+        // instructions after `done_rx` receives, so poll briefly instead of
         // racing a fixed sleep against that window.
         done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let reacquired = (0..50).find_map(|_| {
@@ -733,22 +835,31 @@ mod tests {
         assert!(!fetch_may_be_needed(&state, "fp-1", now));
     }
 
+    /// A 401 is a timed block like any other backoff: the rejected token is
+    /// retried once `next_allowed_at_epoch` passes, not suppressed forever.
     #[test]
-    fn test_fetch_not_eligible_when_token_is_failed_fingerprint() {
+    fn test_fetch_eligible_again_for_rejected_token_once_backoff_elapses() {
         let now = 2_000_000;
         let mut state = default_state_at(now);
-        state.next_allowed_at_epoch = now - 1;
-        state.failed_token_fingerprint = Some("fp-1".to_string());
-        assert!(!fetch_may_be_needed(&state, "fp-1", now));
-    }
-
-    #[test]
-    fn test_fetch_eligible_when_failed_fingerprint_is_a_different_token() {
-        let now = 2_000_000;
-        let mut state = default_state_at(now);
-        state.next_allowed_at_epoch = now - 1;
-        state.failed_token_fingerprint = Some("fp-old".to_string());
-        assert!(fetch_may_be_needed(&state, "fp-new", now));
+        apply_fetch_outcome(
+            &mut state,
+            crate::usage_limits::UsageFetchOutcome::Unauthorized,
+            now,
+            180,
+            "fp-1",
+        );
+        assert!(!fetch_may_be_needed(
+            &state,
+            "fp-1",
+            now + UNAUTHORIZED_RETRY_SECS - 1
+        ));
+        assert!(fetch_may_be_needed(
+            &state,
+            "fp-1",
+            now + UNAUTHORIZED_RETRY_SECS
+        ));
+        // Another token sharing this state is not held back by that 401.
+        assert!(fetch_may_be_needed(&state, "fp-other", now));
     }
 
     #[test]
@@ -891,6 +1002,47 @@ mod tests {
             state.failed_token_fingerprint,
             Some("fp-current".to_string())
         );
+        assert_eq!(
+            state.failed_token_retry_at_epoch,
+            now + UNAUTHORIZED_RETRY_SECS
+        );
+    }
+
+    /// A ttl longer than the 401 backoff still wins: errors never retry
+    /// sooner than ttl.
+    #[test]
+    fn test_apply_unauthorized_outcome_never_retries_sooner_than_ttl() {
+        let now = 2_000_000;
+        let mut state = default_state_at(now);
+        apply_fetch_outcome(
+            &mut state,
+            crate::usage_limits::UsageFetchOutcome::Unauthorized,
+            now,
+            3_600,
+            "fp-1",
+        );
+        assert_eq!(state.failed_token_retry_at_epoch, now + 3_600);
+        assert!(fetch_may_be_needed(&state, "fp-other", now));
+    }
+
+    /// A ttl near the top of the range must not overflow the schedule.
+    #[test]
+    fn test_apply_outcomes_do_not_overflow_with_huge_ttl() {
+        use crate::usage_limits::UsageFetchOutcome as O;
+        let now = 2_000_000;
+        for outcome in [
+            O::Success(Box::default()),
+            O::RateLimited {
+                retry_after_seconds: None,
+            },
+            O::Unauthorized,
+            O::NetworkError,
+            O::ServerError { status: 500 },
+        ] {
+            let mut state = default_state_at(now);
+            apply_fetch_outcome(&mut state, outcome, now, u64::MAX, "fp-1");
+            assert_eq!(next_fetch_epoch(&state, "fp-1"), u64::MAX);
+        }
     }
 
     /// Bug 2: during a token-change probe, `state.token_fingerprint` still
@@ -1004,6 +1156,7 @@ mod tests {
         let mut state = SharedUsageState::default_state();
         state.token_fingerprint = Some(crate::platform::token_fingerprint(token));
         state.next_allowed_at_epoch = now;
+        state.usage_fetched_at_epoch = now;
         state.usage = Some(UsageLimitsData {
             five_hour_pct: 11.0,
             ..Default::default()
@@ -1108,6 +1261,131 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
+    /// One failed credential read (a keychain lookup that times out) must not
+    /// blank the API-only fields: the recent snapshot stays up, with no fetch.
+    #[test]
+    fn test_resolve_without_token_shows_recent_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = real_now();
+        seed_committed_state(dir.path(), OLD_TOKEN, now);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let render = |at: u64| {
+            let c = Arc::clone(&calls);
+            resolve_shared_usage_in(
+                Some(dir.path()),
+                move |_t| {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    success_with_pct(1.0)
+                },
+                None,
+                Some(TTL),
+                at,
+            )
+        };
+
+        let r = render(now + UNREADABLE_CREDENTIAL_GRACE_SECS);
+        assert_eq!(r.usage.unwrap().five_hour_pct, 11.0);
+
+        // Past the grace period it is a logout, not a blip: without a token
+        // the snapshot cannot be tied to an account, so it is no longer shown.
+        let r = render(now + UNREADABLE_CREDENTIAL_GRACE_SECS + 1);
+        assert!(r.usage.is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// The poll scheduled just after a window reset must actually run, through
+    /// the whole entry point: the lock file's record of the previous attempt
+    /// carries the same schedule as the state file, so it does not hold the
+    /// early poll back for a full ttl.
+    #[test]
+    fn test_resolve_polls_just_after_window_reset_before_ttl() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = real_now();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let reset = iso_at(now + 20);
+
+        render_with(
+            dir.path(),
+            &calls,
+            move || {
+                UsageFetchOutcome::Success(Box::new(UsageLimitsData {
+                    five_hour_pct: 90.0,
+                    five_hour_resets_at: reset,
+                    ..Default::default()
+                }))
+            },
+            NEW_TOKEN,
+            now,
+        );
+        let scheduled = load_state_from_dir(dir.path()).next_allowed_at_epoch;
+        assert_eq!(scheduled, now + MIN_POLL_SPACING_SECS);
+
+        let r = render_with(
+            dir.path(),
+            &calls,
+            || success_with_pct(90.0),
+            NEW_TOKEN,
+            scheduled - 1,
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "not before the schedule");
+        assert_eq!(r.usage.unwrap().five_hour_pct, 90.0);
+
+        let r = render_with(
+            dir.path(),
+            &calls,
+            || success_with_pct(2.0),
+            NEW_TOKEN,
+            scheduled,
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the post-reset poll runs well inside ttl"
+        );
+        assert_eq!(r.usage.unwrap().five_hour_pct, 2.0);
+    }
+
+    /// An error backoff longer than ttl holds even when the state file cannot
+    /// be written: the lock file records the same schedule.
+    #[test]
+    fn test_resolve_unwritable_state_file_keeps_error_backoff_via_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(state_file_path_in(dir.path())).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let now = real_now();
+        let rate_limited = || UsageFetchOutcome::RateLimited {
+            retry_after_seconds: Some(600),
+        };
+
+        render_with(dir.path(), &calls, rate_limited, NEW_TOKEN, now);
+        render_with(dir.path(), &calls, rate_limited, NEW_TOKEN, now + TTL + 1);
+        render_with(dir.path(), &calls, rate_limited, NEW_TOKEN, now + 599);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        render_with(dir.path(), &calls, rate_limited, NEW_TOKEN, now + 600);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// A cache dir that cannot be created means no lock and so no fetch, but
+    /// the render must still complete.
+    #[test]
+    fn test_resolve_uncreatable_cache_dir_never_fetches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blocker = tmp.path().join("not-a-dir");
+        std::fs::write(&blocker, "").unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let r = render_with(
+            &blocker.join("cache"),
+            &calls,
+            || success_with_pct(1.0),
+            NEW_TOKEN,
+            real_now(),
+        );
+        assert!(r.usage.is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
     #[test]
     fn test_resolve_without_cache_dir_never_touches_disk_or_locks() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1191,9 +1469,10 @@ mod tests {
         );
     }
 
-    /// A 401 on the new token blames it: no more fetches until the token changes.
+    /// A 401 on the new token blames it: it is retried only after the 401
+    /// backoff, while a different token fetches at once.
     #[test]
-    fn test_resolve_unauthorized_new_token_stays_suppressed() {
+    fn test_resolve_unauthorized_new_token_backs_off_then_retries() {
         let dir = tempfile::tempdir().unwrap();
         let now = real_now();
         seed_committed_state(dir.path(), OLD_TOKEN, now);
@@ -1214,14 +1493,14 @@ mod tests {
         render_with(
             dir.path(),
             &calls,
-            || success_with_pct(1.0),
+            || UsageFetchOutcome::Unauthorized,
             NEW_TOKEN,
-            now + 10_000,
+            now + UNAUTHORIZED_RETRY_SECS - 1,
         );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
-            "a blamed token stays suppressed, even much later"
+            "a rejected token is not retried inside its backoff"
         );
 
         // A different token is not blamed and fetches immediately.
@@ -1230,9 +1509,42 @@ mod tests {
             &calls,
             || success_with_pct(7.0),
             OLD_TOKEN,
-            now + 10_001,
+            now + UNAUTHORIZED_RETRY_SECS - 1,
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// A 401 that was a passing server fault must not freeze the data until
+    /// the token next changes: the same token is retried after the backoff.
+    #[test]
+    fn test_resolve_unauthorized_same_token_recovers_after_backoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = real_now();
+        seed_committed_state(dir.path(), OLD_TOKEN, now);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let r = render_with(
+            dir.path(),
+            &calls,
+            || UsageFetchOutcome::Unauthorized,
+            OLD_TOKEN,
+            now,
+        );
+        assert_eq!(r.usage.unwrap().five_hour_pct, 11.0, "last data stays up");
+
+        let r = render_with(
+            dir.path(),
+            &calls,
+            || success_with_pct(42.0),
+            OLD_TOKEN,
+            now + UNAUTHORIZED_RETRY_SECS,
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(r.usage.unwrap().five_hour_pct, 42.0);
+        assert_eq!(
+            load_state_from_dir(dir.path()).failed_token_fingerprint,
+            None
+        );
     }
 
     /// A successful probe commits the new token and clears the probe marker.
@@ -1524,76 +1836,115 @@ mod tests {
     }
 
     #[test]
-    fn test_recently_attempted_true_just_after_touch() {
+    fn test_attempt_blocks_until_recorded_time() {
         let dir = tempfile::tempdir().unwrap();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        lock.touch("fp-1");
-        assert!(lock.recently_attempted("fp-1", 60, now_epoch_for_test()));
+        let now = 2_000_000;
+        lock.record_attempt("fp-1", now + 60);
+        assert!(lock.attempt_blocks("fp-1", 60, now));
+        assert!(lock.attempt_blocks("fp-1", 60, now + 59));
+        assert!(!lock.attempt_blocks("fp-1", 60, now + 60));
     }
 
+    /// The record survives the lock being released and taken by another
+    /// process, and a later record replaces an earlier, longer one.
     #[test]
-    fn test_recently_attempted_false_once_interval_elapses() {
+    fn test_attempt_record_persists_and_is_replaced() {
         let dir = tempfile::tempdir().unwrap();
+        let now = 2_000_000;
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        lock.touch("fp-1");
-        assert!(!lock.recently_attempted("fp-1", 60, now_epoch_for_test() + 61));
+        lock.record_attempt("fp-1", now + 600);
+        lock.record_attempt("fp-1", now + 30);
+        drop(lock);
+
+        let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
+        assert!(lock.attempt_blocks("fp-1", 600, now + 29));
+        assert!(!lock.attempt_blocks("fp-1", 600, now + 30));
     }
 
-    /// A freshly created lock file has an mtime of "now" but records no
-    /// attempt. It must not be mistaken for "a fetch just ran", or the very
-    /// first render (or the first after the cache dir is wiped) would skip
-    /// fetching for a whole interval.
+    /// A freshly created lock file records no attempt. It must not be
+    /// mistaken for "a fetch just ran", or the very first render (or the
+    /// first after the cache dir is wiped) would skip fetching.
     #[test]
-    fn test_recently_attempted_false_for_fresh_lock_file() {
+    fn test_attempt_blocks_false_for_fresh_lock_file() {
         let dir = tempfile::tempdir().unwrap();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        assert!(!lock.recently_attempted("fp-1", 60, now_epoch_for_test()));
+        assert!(!lock.attempt_blocks("fp-1", 60, now_epoch_for_test()));
+    }
+
+    /// A lock file that does not hold a well-formed record never blocks.
+    #[test]
+    fn test_attempt_blocks_false_for_malformed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        for content in ["fp-1", "fp-1\n", "fp-1\nsoon", "\n2000060"] {
+            std::fs::write(lock_path_in(dir.path()), content).unwrap();
+            let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
+            assert!(!lock.attempt_blocks("fp-1", 60, 2_000_000), "{content:?}");
+        }
+    }
+
+    /// A record further ahead than any schedule this module produces (written
+    /// while the clock was ahead, or damaged) must not block fetching.
+    #[test]
+    fn test_attempt_blocks_ignores_implausibly_distant_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
+        let now = 2_000_000;
+        let longest = longest_scheduled_wait(60);
+        lock.record_attempt("fp-1", now + longest);
+        assert!(lock.attempt_blocks("fp-1", 60, now));
+        lock.record_attempt("fp-1", now + longest + 1);
+        assert!(!lock.attempt_blocks("fp-1", 60, now));
+        lock.record_attempt("fp-1", u64::MAX);
+        assert!(!lock.attempt_blocks("fp-1", 60, now));
     }
 
     /// Persist-failure amplification: even though `state.next_allowed_at_epoch`
-    /// never advances (simulating a cache dir where `persist_state` silently
-    /// fails), a second render within `interval` of the first must not be
-    /// judged eligible, because the lock file records the attempt.
+    /// never advances (simulating a cache dir where persisting fails), a
+    /// second render before the recorded time must not be judged eligible,
+    /// because the lock file records the attempt.
     #[test]
-    fn test_recently_attempted_blocks_reeligibility_despite_stale_state() {
+    fn test_attempt_blocks_reeligibility_despite_stale_state() {
         let dir = tempfile::tempdir().unwrap();
+        let now = now_epoch_for_test();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        lock.touch("fp-1");
+        lock.record_attempt("fp-1", now + 60);
         drop(lock);
 
-        let now = now_epoch_for_test();
         let state = SharedUsageState::default_state(); // next_allowed_at_epoch stuck at 0
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
 
         assert!(fetch_may_be_needed(&state, "fp-1", now)); // state alone says "go"
-        assert!(lock.recently_attempted("fp-1", 60, now)); // backstop says "no"
+        assert!(lock.attempt_blocks("fp-1", 60, now)); // backstop says "no"
     }
 
     /// Same amplification for the fresh-token-change bypass: if persisting the
     /// probe's outcome fails, the fingerprint stays "fresh" on every render,
     /// so the lock's record of the attempt must still gate it.
     #[test]
-    fn test_recently_attempted_blocks_fresh_token_bypass_despite_stale_state() {
+    fn test_attempt_blocks_fresh_token_bypass_despite_stale_state() {
         let dir = tempfile::tempdir().unwrap();
+        let now = now_epoch_for_test();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        lock.touch("fp-new");
+        lock.record_attempt("fp-new", now + 60);
         drop(lock);
 
         let state = SharedUsageState::default_state();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
 
         assert!(is_fresh_token_change(&state, "fp-new")); // state alone says "bypass"
-        assert!(lock.recently_attempted("fp-new", 60, now_epoch_for_test()));
+        assert!(lock.attempt_blocks("fp-new", 60, now));
     }
 
     /// Switching accounts right after a fetch must not be throttled by the
     /// previous account's attempt: the new token gets its one probe.
     #[test]
-    fn test_recently_attempted_false_for_different_token() {
+    fn test_attempt_blocks_false_for_different_token() {
         let dir = tempfile::tempdir().unwrap();
         let lock = try_acquire_fetch_lock_in(dir.path()).unwrap();
-        lock.touch("fp-old");
-        assert!(!lock.recently_attempted("fp-new", 60, now_epoch_for_test()));
+        let now = 2_000_000;
+        lock.record_attempt("fp-old", now + 60);
+        assert!(!lock.attempt_blocks("fp-new", 60, now));
     }
 
     /// The state and lock files hold a token fingerprint, so they must be

@@ -193,12 +193,13 @@ Set `end_hour = 24` to mean "through end of day". Weekends always return nothing
 **Usage limits** data is fetched from the Anthropic API and shared between sessions:
 - **Refresh interval:** `[cship.usage_limits] ttl` (default **60 seconds**). All `cship` processes that use the same Claude config directory share one fetch schedule and one state file, so running more sessions doesn't multiply API calls, and a new session within the interval shows the last fetched data instead of fetching again.
 - **Where it lives:** `<CLAUDE_CONFIG_DIR or ~/.claude>/cship/cache/usage-limits-state-v3.json`, plus a `usage-limits-fetch.lock` file next to it. Both are owner-only on Unix. Deleting them is safe; cship recreates them on the next fetch.
-- **Errors back off instead of retrying every render.** A rate limit (HTTP 429) waits for the server's `Retry-After` (up to 15 minutes), a server error (5xx) waits longer after each repeat, a network error retries after 30 seconds (or `ttl`, if that is longer), and a rejected token (HTTP 401) stops fetching until you log in again and the token changes. Last known data keeps rendering in the meantime. Retries never come sooner than `ttl`.
+- **Errors back off instead of retrying every render.** A rate limit (HTTP 429) waits for the server's `Retry-After`, or doubles from `ttl` when there is none, up to 15 minutes. Any other unexpected HTTP status waits 30 seconds and doubles with each repeat, up to 5 minutes. A network error or an unreadable response retries after 30 seconds. A rejected token (HTTP 401) is retried after 15 minutes, or at once when you log in again and the token changes. None of these retries come sooner than `ttl`, and a `ttl` longer than a limit above takes its place. Last known data keeps rendering in the meantime.
+- **Unreadable credential:** if the OAuth token cannot be read for a render (for example a keychain lookup that times out), cship keeps showing the last fetched data for up to 15 minutes and does not call the API.
 - **Window resets:** when a usage window is about to reset, the next fetch is scheduled for a few seconds after the reset so the new window appears promptly. A reset never causes two fetches closer than 30 seconds apart (or `ttl`, if that is shorter).
-- **Session-only:** the OAuth fetch only runs for a normal Claude Code session (one that provides a `transcript_path`), so running `cship` by hand with arbitrary input never reads your credential or calls the API.
+- **Session-only:** the OAuth fetch only runs for a normal Claude Code session (one that provides a `transcript_path`), so rendering with `cship` by hand on arbitrary input never calls the API.
 - If the data seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
 
-You can see the current cache state by running `cship explain` — it shows the usage limits value being rendered and any warnings if the API call failed.
+Run `cship explain` to see the usage limits value being rendered and a hint when nothing rendered. For the reason a fetch failed or was skipped, run a render with `RUST_LOG=warn` set.
 
 ## Why are some characters missing from my path or model name?
 

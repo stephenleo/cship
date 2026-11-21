@@ -384,10 +384,10 @@ Displays the current working directory or project directory.
 
 Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 
-**Data sources (in priority order):**
+**Data sources (merged on every render):**
 
-1. **stdin `rate_limits`** — Claude Code (v2.1+) sends `rate_limits` directly in the session JSON for Pro/Max subscribers. When present, cship uses this data immediately with zero latency and no credential setup required.
-2. **OAuth API fetch** — Falls back to fetching from `https://api.anthropic.com/api/oauth/usage` using your OAuth token (stored in the OS credential store). This fetch is coordinated across every concurrent `cship` process that uses the same Claude config directory, so running more sessions doesn't multiply API calls; results are shared for the configured TTL (default 60s).
+1. **stdin `rate_limits`** — Claude Code (v2.1+) sends `rate_limits` directly in the session JSON for Pro/Max subscribers. It carries the 5-hour and 7-day totals and needs no credential setup.
+2. **OAuth API** — `https://api.anthropic.com/api/oauth/usage`, read with your OAuth token (stored in the OS credential store). In a Claude Code session it is consulted whether or not stdin has `rate_limits`: it is the only source of the per-model and extra-usage values, and its 5-hour and 7-day reading is used when stdin has none, or when it describes the same window with a higher percentage or a newer window. The fetch is coordinated across every concurrent `cship` process that uses the same Claude config directory, so running more sessions doesn't multiply API calls; results are shared for the configured TTL (default 60s). The one render that performs a refresh can take up to about 1.5 seconds.
 
 **Tokens:**
 
