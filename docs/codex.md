@@ -24,6 +24,20 @@ Custom status lines are behind an experimental flag in Codex (first shipped in `
 3. In Codex, open `/experimental`, enable **Custom status line**, then restart the TUI.
 4. Start a new conversation, open `/statusline`, choose **Choose a status line provider**, and select **cship**.
 
+You can set the same thing in `~/.codex/config.toml` instead of using the menus:
+
+```toml
+[features]
+tui_extensions_statusline = true
+
+[tui]
+status_line_provider = { server = "cship", tool = "statusline" }
+
+[mcp_servers.cship]
+command = "cship"
+args = ["codex-mcp"]
+```
+
 If the footer falls back to the built-in line, press **F2** in Codex to see the failed attempt. Run Codex with `RUST_LOG=warn` set for the cship process to get cship's own diagnostics on stderr.
 
 ## How it works
@@ -50,8 +64,9 @@ Config is reloaded on every read, so edits to `cship.toml` show up without resta
 
 - **Colors.** ANSI names (`red`, `green`, ...) follow your Codex theme. Hex and 256-color values are sent as `#RRGGBB`. Bright ANSI colors share the base name, except bright black, which becomes gray.
 - **No text backgrounds.** Codex only supports backgrounds on whole rows, so `bg:` styles are dropped. Bold, italic and underline are kept; dimmed, blink and reverse are dropped.
-- **`$fill`** maps to Codex's own row alignment, so right-alignment is exact and needs no terminal-width detection. `[cship.fill]` `symbol` and `style` are not drawn. On multi-line configs, `$fill` collapses.
-- **Multiple lines** are shown side by side in one footer row, wrapping when space runs out.
+- **`$fill`** renders as a single space. Codex 0.171.0 has no way to right-align part of the footer, and `[cship.fill]` `symbol` and `style` are not drawn.
+- **Spacing.** Codex lays out footer text like HTML: runs of spaces collapse to one and leading spaces on a line are dropped. Separators such as `" | "` still work; padding with several spaces does not.
+- **Multiple lines** (`lines = [...]` or `$line_break`) show as separate footer lines.
 - **Not available:** `$cship.vim`, `$cship.agent`, `$cship.output_style`, `$cship.workspace.project_dir`, the `$cship.cost` duration and line-count sub-fields, `$cship.context_window.current_usage.*` and `$cship.context_window.exceeds_200k` have no Codex equivalent and render nothing. `$cship.transcript_path` shows cship's internal per-thread cache path. `$cship.account` only works through the [`CSHIP_ACCOUNT`](/faq#account-setup) environment variable, since the Claude keychain login describes a different account.
 - **Usage limits** come only from the Codex snapshot. The Anthropic OAuth lookup that fills per-model limits in Claude Code is skipped.
 - **Read budget.** Codex allows one second per read, and an error or timeout stops polling. cship gives each render 800 ms and returns the last good footer if it runs over (for example, a slow Starship module on first run). Starship results are cached for 5 seconds per thread under `~/.cache/cship/codex/` (or `$XDG_CACHE_HOME/cship/codex/`).

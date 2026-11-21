@@ -1221,8 +1221,9 @@ fn test_codex_mcp_handshake_and_read_render_ui_tree() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(tree["props"]["justify"], "between");
-    let model = &tree["children"][0]["children"][0];
+    assert_eq!(tree["type"], "text", "root is one inline text element");
+    assert!(!tree.to_string().contains("\"row\""));
+    let model = &tree["children"][0];
     assert_eq!(model["props"]["color"], "green");
     assert!(
         model["children"][0]

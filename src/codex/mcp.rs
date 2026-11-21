@@ -297,7 +297,7 @@ mod tests {
             json!("application/json")
         );
         let tree = tree_of(&reply);
-        assert_eq!(tree["type"], json!("row"));
+        assert_eq!(tree["type"], json!("text"));
         let node = &tree["children"][0];
         assert_eq!(node["props"]["color"], json!("green"));
         assert_eq!(node["props"]["weight"], json!("bold"));

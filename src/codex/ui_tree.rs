@@ -6,11 +6,12 @@
 //! the final ANSI output (rather than inside each module) means Starship
 //! passthrough modules are converted too.
 //!
-//! Layout rules:
-//! - One line: a root `row`. `$fill` maps to row `justify` (`between`, `end` or
-//!   `center`), which gives the same right-alignment as the terminal path.
-//! - Several lines: each line becomes a nested row inside a wrapping root row.
-//!   Nested rows take their content width, so `$fill` collapses there.
+//! Layout: everything goes into one root `text` element so the runs flow inline.
+//! Codex lays out each child of a `row` as a separate item and drops its leading
+//! whitespace, so rows would glue modules together. Inside a `text` element,
+//! whitespace between words survives (collapsed to one space, as in HTML) and a
+//! `\n` leaf starts a new footer line. `$fill` becomes a single space: Codex
+//! 0.171.0 has no row alignment to right-align with.
 //!
 //! Codex limits a tree to 256 non-null nodes, depth 16, 64 KiB of JSON and
 //! 16 KiB of leaf text. A tree over any limit is replaced by a single plain
@@ -23,8 +24,6 @@ use crate::renderer::Piece;
 const MAX_NODES: usize = 256;
 const MAX_JSON_BYTES: usize = 64 * 1024;
 const MAX_TEXT_BYTES: usize = 16 * 1024;
-/// Columns between lines when several lines share the footer.
-const LINE_GAP: u64 = 2;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Style {
@@ -49,11 +48,25 @@ struct Run {
 /// Build the UI tree for rendered lines. Returns `Value::Null` (clears the
 /// footer) when there is nothing to show.
 pub fn build(lines: &[Vec<Piece>]) -> Value {
-    let tree = match lines {
-        [] => return Value::Null,
-        [line] => single_line(line),
-        _ => multi_line(lines),
-    };
+    if lines.is_empty() {
+        return Value::Null;
+    }
+    let mut runs: Vec<Run> = Vec::new();
+    for (i, pieces) in lines.iter().enumerate() {
+        if i > 0 {
+            append_runs(&mut runs, vec![plain("\n")]);
+        }
+        for piece in pieces {
+            match piece {
+                Piece::Text(s) => append_runs(&mut runs, parse_ansi(s)),
+                Piece::Fill => append_runs(&mut runs, vec![plain(" ")]),
+            }
+        }
+    }
+    let tree = json!({
+        "type": "text",
+        "children": runs.into_iter().map(run_node).collect::<Vec<_>>(),
+    });
     if within_limits(&tree) {
         tree
     } else {
@@ -62,65 +75,11 @@ pub fn build(lines: &[Vec<Piece>]) -> Value {
     }
 }
 
-fn single_line(pieces: &[Piece]) -> Value {
-    // Split on fills into groups; keep empty groups to know where fills sat.
-    let mut groups: Vec<Vec<Run>> = vec![Vec::new()];
-    for piece in pieces {
-        match piece {
-            Piece::Text(s) => append_runs(groups.last_mut().unwrap(), parse_ansi(s)),
-            Piece::Fill => groups.push(Vec::new()),
-        }
+fn plain(text: &str) -> Run {
+    Run {
+        style: Style::default(),
+        text: text.to_string(),
     }
-
-    if groups.len() == 1 {
-        let runs = groups.pop().unwrap_or_default();
-        return row(json!({"gap": 0}), runs.into_iter().map(run_node).collect());
-    }
-
-    let leading_fill = groups.first().is_some_and(Vec::is_empty);
-    let trailing_fill = groups.last().is_some_and(Vec::is_empty);
-    let filled: Vec<Vec<Run>> = groups.into_iter().filter(|g| !g.is_empty()).collect();
-
-    let justify = match (filled.len(), leading_fill, trailing_fill) {
-        (1, true, true) => Some("center"),
-        (1, true, false) => Some("end"),
-        (1, false, _) => None,
-        _ => Some("between"),
-    };
-
-    match justify {
-        None => row(
-            json!({"gap": 0}),
-            filled.into_iter().flatten().map(run_node).collect(),
-        ),
-        Some(justify) => row(
-            json!({"gap": 0, "justify": justify}),
-            filled
-                .into_iter()
-                .map(|g| row(json!({"gap": 0}), g.into_iter().map(run_node).collect()))
-                .collect(),
-        ),
-    }
-}
-
-fn multi_line(lines: &[Vec<Piece>]) -> Value {
-    let children = lines
-        .iter()
-        .map(|pieces| {
-            let mut runs = Vec::new();
-            for piece in pieces {
-                if let Piece::Text(s) = piece {
-                    append_runs(&mut runs, parse_ansi(s));
-                }
-            }
-            row(json!({"gap": 0}), runs.into_iter().map(run_node).collect())
-        })
-        .collect();
-    row(json!({"gap": LINE_GAP, "wrap": "wrap"}), children)
-}
-
-fn row(props: Value, children: Vec<Value>) -> Value {
-    json!({"type": "row", "props": props, "children": children})
 }
 
 /// A plain run is a bare string; a styled run is a `text` element.
@@ -330,19 +289,24 @@ fn plain_fallback(lines: &[Vec<Piece>]) -> Value {
         .map(|pieces| {
             pieces
                 .iter()
-                .filter_map(|p| match p {
-                    Piece::Text(s) => Some(crate::ansi::strip_ansi(s)),
-                    Piece::Fill => None,
+                .map(|p| match p {
+                    Piece::Text(s) => crate::ansi::strip_ansi(s),
+                    Piece::Fill => " ".to_string(),
                 })
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
-        .join("  ");
+        .join("\n");
     let mut end = joined.len().min(MAX_TEXT_BYTES);
     while !joined.is_char_boundary(end) {
         end -= 1;
     }
-    Value::String(joined[..end].chars().filter(|c| !c.is_control()).collect())
+    Value::String(
+        joined[..end]
+            .chars()
+            .filter(|c| *c == '\n' || !c.is_control())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -354,27 +318,33 @@ mod tests {
         Piece::Text(s.to_string())
     }
 
+    fn children(tree: &Value) -> &Value {
+        assert_eq!(
+            tree["type"],
+            json!("text"),
+            "root must be an inline text element"
+        );
+        &tree["children"]
+    }
+
     #[test]
     fn test_empty_lines_clear_footer() {
         assert_eq!(build(&[]), Value::Null);
     }
 
     #[test]
-    fn test_plain_text_is_bare_string() {
+    fn test_plain_text_is_bare_string_in_text_root() {
         let tree = build(&[vec![text("hello")]]);
-        assert_eq!(
-            tree,
-            json!({"type":"row","props":{"gap":0},"children":["hello"]})
-        );
+        assert_eq!(tree, json!({"type": "text", "children": ["hello"]}));
     }
 
     #[test]
-    fn test_named_color_and_bold() {
+    fn test_named_color_and_bold_keep_following_space_inline() {
         let styled = apply_style("Opus", Some("bold green"));
         let tree = build(&[vec![text(&styled), text(" | ")]]);
         assert_eq!(
-            tree["children"],
-            json!([
+            children(&tree),
+            &json!([
                 {"type":"text","props":{"color":"green","weight":"bold"},"children":["Opus"]},
                 " | "
             ])
@@ -386,8 +356,8 @@ mod tests {
         let rgb = apply_style("a", Some("#ff8800"));
         let fixed = apply_style("b", Some("196"));
         let tree = build(&[vec![text(&rgb), text(&fixed)]]);
-        assert_eq!(tree["children"][0]["props"]["color"], json!("#ff8800"));
-        assert_eq!(tree["children"][1]["props"]["color"], json!("#ff0000"));
+        assert_eq!(children(&tree)[0]["props"]["color"], json!("#ff8800"));
+        assert_eq!(children(&tree)[1]["props"]["color"], json!("#ff0000"));
     }
 
     #[test]
@@ -395,7 +365,7 @@ mod tests {
         let styled = apply_style("x", Some("italic underline bg:blue"));
         let tree = build(&[vec![text(&styled)]]);
         assert_eq!(
-            tree["children"][0]["props"],
+            children(&tree)[0]["props"],
             json!({"italic": true, "underline": true})
         );
     }
@@ -403,7 +373,7 @@ mod tests {
     #[test]
     fn test_bright_black_maps_to_gray() {
         let tree = build(&[vec![text("\x1b[90mdim\x1b[0m")]]);
-        assert_eq!(tree["children"][0]["props"]["color"], json!("#808080"));
+        assert_eq!(children(&tree)[0]["props"]["color"], json!("#808080"));
     }
 
     #[test]
@@ -411,53 +381,43 @@ mod tests {
         let a = apply_style("ab", Some("red"));
         let b = apply_style("cd", Some("red"));
         let tree = build(&[vec![text(&a), text(&b)]]);
-        assert_eq!(tree["children"].as_array().unwrap().len(), 1);
-        assert_eq!(tree["children"][0]["children"][0], json!("abcd"));
+        assert_eq!(children(&tree).as_array().unwrap().len(), 1);
+        assert_eq!(children(&tree)[0]["children"][0], json!("abcd"));
     }
 
     #[test]
     fn test_non_sgr_escapes_and_controls_are_stripped() {
         let s = "a\x1b]0;title\x07b\x1b[2Kc\x07d";
         let tree = build(&[vec![text(s)]]);
-        assert_eq!(tree["children"], json!(["abcd"]));
+        assert_eq!(children(&tree), &json!(["abcd"]));
     }
 
     #[test]
-    fn test_fill_between_two_groups_uses_justify_between() {
+    fn test_fill_becomes_single_space() {
         let tree = build(&[vec![text("left"), Piece::Fill, text("right")]]);
-        assert_eq!(tree["props"]["justify"], json!("between"));
-        assert_eq!(tree["children"][0]["children"], json!(["left"]));
-        assert_eq!(tree["children"][1]["children"], json!(["right"]));
+        assert_eq!(children(&tree), &json!(["left right"]));
     }
 
     #[test]
-    fn test_leading_fill_right_aligns() {
-        let tree = build(&[vec![Piece::Fill, text("right")]]);
-        assert_eq!(tree["props"]["justify"], json!("end"));
+    fn test_multi_line_separated_by_newline_leaf() {
+        let red = apply_style("two", Some("red"));
+        let tree = build(&[vec![text("one")], vec![text(&red)], vec![text("three")]]);
+        assert_eq!(
+            children(&tree),
+            &json!([
+                "one\n",
+                {"type":"text","props":{"color":"red"},"children":["two"]},
+                "\nthree"
+            ])
+        );
     }
 
     #[test]
-    fn test_fill_on_both_sides_centers() {
-        let tree = build(&[vec![Piece::Fill, text("mid"), Piece::Fill]]);
-        assert_eq!(tree["props"]["justify"], json!("center"));
-    }
-
-    #[test]
-    fn test_trailing_fill_is_plain_row() {
-        let tree = build(&[vec![text("left"), Piece::Fill]]);
-        assert!(tree["props"].get("justify").is_none());
-        assert_eq!(tree["children"], json!(["left"]));
-    }
-
-    #[test]
-    fn test_multi_line_nests_rows_and_drops_fill() {
-        let tree = build(&[
-            vec![text("one"), Piece::Fill, text("two")],
-            vec![text("three")],
-        ]);
-        assert_eq!(tree["props"], json!({"gap": 2, "wrap": "wrap"}));
-        assert_eq!(tree["children"][0]["children"], json!(["onetwo"]));
-        assert_eq!(tree["children"][1]["children"], json!(["three"]));
+    fn test_no_row_elements_emitted() {
+        // Codex lays out row children as separate items and trims their leading
+        // whitespace; the inline text root must never contain rows.
+        let tree = build(&[vec![text("a"), Piece::Fill, text("b")], vec![text("c")]]);
+        assert!(!tree.to_string().contains("\"row\""));
     }
 
     #[test]
@@ -481,5 +441,22 @@ mod tests {
         let tree = build(&[vec![text(&big)]]);
         let s = tree.as_str().unwrap();
         assert!(s.len() <= MAX_TEXT_BYTES);
+    }
+
+    #[test]
+    fn test_fallback_keeps_line_breaks() {
+        let lines: Vec<Vec<Piece>> = vec![
+            (0..300)
+                .map(|i| {
+                    text(&apply_style(
+                        "x",
+                        Some(if i % 2 == 0 { "red" } else { "blue" }),
+                    ))
+                })
+                .collect(),
+            vec![text("y")],
+        ];
+        let tree = build(&lines);
+        assert_eq!(tree, Value::String(format!("{}\ny", "x".repeat(300))));
     }
 }
