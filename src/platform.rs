@@ -12,15 +12,19 @@
 /// # Credential lookup by OS
 ///
 /// - **macOS**: reads from the system Keychain using
-///   `security find-generic-password -s "Claude Code-credentials" -w`.
-///   The service name `"Claude Code-credentials"` is verified against a live
-///   Claude Code credential store.
+///   `security find-generic-password -s <service> -w`, where `<service>` is
+///   `"Claude Code-credentials"` for the default config dir and
+///   `"Claude Code-credentials-<hash>"` when `CLAUDE_CONFIG_DIR` is set (see
+///   [`keychain_service_name`]).
 ///
-/// - **Linux**: attempts `~/.claude/.credentials.json` first (the path Claude
+/// - **Linux**: attempts `<config dir>/.credentials.json` first (the path Claude
 ///   Code uses on Linux and WSL2, where gnome-keyring / D-Bus is typically
-///   unavailable). Falls back to
-///   `secret-tool lookup service "Claude Code-credentials"` when the file is
-///   absent.
+///   unavailable). Falls back to `secret-tool lookup service <service>` when the
+///   file is absent.
+///
+/// `<config dir>` is `CLAUDE_CONFIG_DIR` when set, else `~/.claude` (see
+/// [`claude_config_dir`]), so a session started with its own `CLAUDE_CONFIG_DIR`
+/// reads that account's credential instead of the default one.
 ///
 /// # Error cases
 ///
@@ -50,7 +54,7 @@
 /// still be expired); `Err` containing `"not found"` means no credential is
 /// stored.
 ///
-/// Service name verified against live Claude Code credential store: "Claude Code-credentials"
+/// Default service name verified against live Claude Code credential store: "Claude Code-credentials"
 /// Reference: <https://codelynx.dev/posts/claude-code-usage-limits-statusline>
 #[cfg(target_os = "macos")]
 pub fn get_oauth_token() -> Result<String, String> {
@@ -60,20 +64,13 @@ pub fn get_oauth_token() -> Result<String, String> {
     // `security find-generic-password -s <service> -w` prints the stored password
     // (the JSON blob) to stdout and exits 0 on success, non-zero if not found.
     // No `-a <account>` flag is needed — the service name alone is unique.
-    get_oauth_token_with_cmd(
-        "security",
-        &[
-            "find-generic-password",
-            "-s",
-            "Claude Code-credentials",
-            "-w",
-        ],
-    )
+    let service = keychain_service_name(config_dir_env().as_deref());
+    get_oauth_token_with_cmd("security", &["find-generic-password", "-s", &service, "-w"])
 }
 
 #[cfg(target_os = "linux")]
 pub fn get_oauth_token() -> Result<String, String> {
-    // Primary path: read ~/.claude/.credentials.json directly.
+    // Primary path: read <config dir>/.credentials.json directly.
     // Claude Code on Linux (including WSL2) stores credentials as a JSON file at this
     // well-known path. This avoids requiring a running gnome-keyring / D-Bus session,
     // which is unavailable in WSL2 by default.
@@ -82,18 +79,15 @@ pub fn get_oauth_token() -> Result<String, String> {
     }
 
     // Fallback: secret-tool (for users with a running gnome-keyring).
-    get_oauth_token_with_cmd(
-        "secret-tool",
-        &["lookup", "service", "Claude Code-credentials"],
-    )
+    let service = keychain_service_name(config_dir_env().as_deref());
+    get_oauth_token_with_cmd("secret-tool", &["lookup", "service", &service])
 }
 
-/// Read `~/.claude/.credentials.json` and extract the OAuth access token.
+/// Read `<config dir>/.credentials.json` and extract the OAuth access token.
 /// Returns `None` if the file is absent, unreadable, or malformed.
 #[cfg(target_os = "linux")]
 fn read_credentials_file() -> Option<String> {
-    let home = home_dir()?;
-    let path = home.join(".claude").join(".credentials.json");
+    let path = claude_config_dir()?.join(".credentials.json");
     let contents = std::fs::read_to_string(&path).ok()?;
     extract_access_token(contents.trim())
 }
@@ -118,12 +112,62 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     None
 }
 
+/// `CLAUDE_CONFIG_DIR` when set to a non-empty value. Claude Code treats an empty
+/// value as unset, and so does cship.
+fn config_dir_env() -> Option<String> {
+    std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+}
+
+/// Claude Code's config directory for this session: `CLAUDE_CONFIG_DIR` when set,
+/// otherwise `.claude` under [`home_dir`]. Claude Code launches the statusline with
+/// the session's environment, so this is the directory of the account in use.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn claude_config_dir() -> Option<std::path::PathBuf> {
+    resolve_config_dir(config_dir_env(), home_dir())
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn resolve_config_dir(
+    config_dir: Option<String>,
+    home: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    match config_dir.filter(|d| !d.is_empty()) {
+        Some(dir) => Some(std::path::PathBuf::from(dir)),
+        None => home.map(|h| h.join(".claude")),
+    }
+}
+
+/// Keychain service name Claude Code stores the OAuth credential under.
+///
+/// Mirrors Claude Code: the default config dir uses `"Claude Code-credentials"`;
+/// a session with `CLAUDE_CONFIG_DIR` set appends `-` and the first 8 hex chars of
+/// the SHA-256 of that value, e.g. `"Claude Code-credentials-1e91dd84"` for
+/// `/Users/me/.claude-work`. The value is hashed as given (no tilde expansion or
+/// path canonicalisation), the same as Claude Code does.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn keychain_service_name(config_dir: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    const BASE: &str = "Claude Code-credentials";
+    match config_dir.filter(|d| !d.is_empty()) {
+        None => BASE.to_string(),
+        Some(dir) => {
+            let digest = Sha256::digest(dir.as_bytes());
+            let hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+            format!("{BASE}-{hex}")
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn get_oauth_token() -> Result<String, String> {
-    let home = home_dir().ok_or_else(|| {
-        "Cannot locate home directory — set CLAUDE_HOME to your .claude folder parent".to_string()
-    })?;
-    let path = home.join(".claude").join(".credentials.json");
+    let path = claude_config_dir()
+        .ok_or_else(|| {
+            "Cannot locate home directory — set CLAUDE_HOME to your .claude folder parent"
+                .to_string()
+        })?
+        .join(".credentials.json");
     let contents = std::fs::read_to_string(&path).map_err(|_| {
         format!(
             "Claude Code credentials not found at {} — authenticate in Claude Code first",
@@ -323,6 +367,49 @@ mod tests {
     fn test_install_hint_security() {
         let hint = install_hint("security");
         assert!(hint.contains("xcode-select"), "{hint}");
+    }
+
+    #[test]
+    fn test_keychain_service_name_default_dir_is_unsuffixed() {
+        assert_eq!(keychain_service_name(None), "Claude Code-credentials");
+        // Claude Code treats an empty CLAUDE_CONFIG_DIR as unset.
+        assert_eq!(keychain_service_name(Some("")), "Claude Code-credentials");
+    }
+
+    #[test]
+    fn test_keychain_service_name_custom_dir_matches_claude_code() {
+        // Expected values from Claude Code's own derivation:
+        // `-` + sha256(CLAUDE_CONFIG_DIR).hex().substring(0, 8)
+        assert_eq!(
+            keychain_service_name(Some("/Users/me/.claude-work")),
+            "Claude Code-credentials-1e91dd84"
+        );
+        assert_eq!(
+            keychain_service_name(Some("/home/me/.claude-personal")),
+            "Claude Code-credentials-d20442b7"
+        );
+    }
+
+    #[test]
+    fn test_resolve_config_dir_prefers_claude_config_dir() {
+        use std::path::PathBuf;
+        assert_eq!(
+            resolve_config_dir(
+                Some("/home/me/.claude-work".into()),
+                Some(PathBuf::from("/home/me"))
+            ),
+            Some(PathBuf::from("/home/me/.claude-work"))
+        );
+    }
+
+    #[test]
+    fn test_resolve_config_dir_falls_back_to_home_dot_claude() {
+        use std::path::PathBuf;
+        let home = Some(PathBuf::from("/home/me"));
+        let expected = Some(PathBuf::from("/home/me/.claude"));
+        assert_eq!(resolve_config_dir(None, home.clone()), expected);
+        assert_eq!(resolve_config_dir(Some(String::new()), home), expected);
+        assert_eq!(resolve_config_dir(None, None), None);
     }
 
     #[test]
