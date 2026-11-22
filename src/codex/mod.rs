@@ -10,13 +10,17 @@
 //! 4. [`mcp`] serves it over newline-delimited JSON-RPC.
 //!
 //! Everything Codex-specific lives here so protocol changes stay contained.
-//! Only [`run`] is public: the snapshot and UI-tree shapes follow an
-//! experimental protocol and are not part of cship's API.
+//! Only [`run`] and [`setup`] (`cship codex-setup`) are public: the snapshot
+//! and UI-tree shapes follow an experimental protocol and are not part of
+//! cship's API.
 
 mod log;
 mod mcp;
+mod setup;
 mod snapshot;
 mod ui_tree;
+
+pub use setup::run as setup;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

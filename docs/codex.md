@@ -8,7 +8,17 @@ Custom status lines are behind an experimental flag in Codex (first shipped in `
 
 ## Setup
 
-1. Install cship as usual (see the [Guide](/)) and make sure `cship` is on your `PATH`.
+The installers (`install.sh` / `install.ps1`, see the [Guide](/)) detect Codex 0.171.0 or newer and set it up for you. If you installed another way, or added Codex later, run:
+
+```sh
+cship codex-setup
+```
+
+It adds the three settings shown below to `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), touching only keys that are not set yet: an existing `status_line_provider` is kept, comments and formatting are preserved, and the file is backed up as `config.toml.cship-backup-<timestamp>` before any change. Restart Codex afterwards. Pass `--codex-home <dir>` to target another Codex home.
+
+### Manual setup
+
+1. Install cship as usual and make sure `cship` is on your `PATH`.
 2. Register cship as a stdio MCP server in Codex:
 
    ```sh
@@ -21,7 +31,7 @@ Custom status lines are behind an experimental flag in Codex (first shipped in `
    codex mcp add cship -- cship --config /absolute/path/to/cship.toml codex-mcp
    ```
 
-3. In Codex, open `/experimental`, enable **Custom status line**, then restart the TUI.
+3. In Codex, open `/experimental`, enable **Custom status line**, then restart the TUI. If the setting doesn't persist, use the `config.toml` form below.
 4. Start a new conversation, open `/statusline`, choose **Choose a status line provider**, and select **cship**.
 
 You can set the same thing in `~/.codex/config.toml` instead of using the menus:

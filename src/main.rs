@@ -28,6 +28,14 @@ enum Commands {
     ///
     /// Register with: codex mcp add cship -- cship codex-mcp
     CodexMcp,
+    /// Register cship as Codex CLI's status line provider in config.toml.
+    ///
+    /// Adds only settings that are not set yet and backs up the file first.
+    CodexSetup {
+        /// Codex home directory. Defaults to $CODEX_HOME, then ~/.codex.
+        #[arg(long, value_name = "PATH")]
+        codex_home: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -64,6 +72,12 @@ fn main() {
             if let Err(e) = cship::codex::run(cli.config.as_deref()) {
                 tracing::error!("cship codex-mcp: I/O error: {e}");
                 std::process::exit(1);
+            }
+        }
+        Some(Commands::CodexSetup { codex_home }) => {
+            let code = cship::codex::setup(codex_home.as_deref());
+            if code != 0 {
+                std::process::exit(code);
             }
         }
         None => {
