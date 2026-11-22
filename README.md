@@ -32,7 +32,7 @@
 curl -fsSL https://cship.dev/install.sh | bash
 ```
 
-Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64), downloads the binary to `~/.local/bin/cship`, creates a starter config at `~/.config/cship.toml`, and wires the `statusLine` entry in `~/.claude/settings.json`.
+Auto-detects your OS and architecture (macOS arm64/x86_64, Linux x86_64/aarch64), downloads the binary to `~/.local/bin/cship`, creates a starter config at `~/.config/cship.toml`, and wires cship into the coding agents it finds: the `statusLine` entry in `~/.claude/settings.json` for Claude Code, and the status line provider in `~/.codex/config.toml` for [Codex](https://cship.dev/codex) 0.171.0+. With both installed, it asks which to configure (both by default; every agent found when run non-interactively).
 
 Optional dependencies ([Starship](https://starship.rs) for passthrough modules, and `libsecret-tools` on Linux as a keyring fallback for usage limits) are handled as follows:
 
@@ -51,7 +51,7 @@ Run this one-liner in PowerShell (5.1 or later):
 irm https://cship.dev/install.ps1 | iex
 ```
 
-Installs to `%USERPROFILE%\.local\bin\cship.exe`, writes config to `%USERPROFILE%\.config\cship.toml`, and registers the statusline in `%USERPROFILE%\.claude\settings.json`.
+Installs to `%USERPROFILE%\.local\bin\cship.exe`, writes config to `%USERPROFILE%\.config\cship.toml`, and registers the statusline in `%USERPROFILE%\.claude\settings.json` and/or Codex's `%USERPROFILE%\.codex\config.toml`, the same way.
 
 > You can inspect the script before running: [install.ps1](https://cship.dev/install.ps1)
 
@@ -113,6 +113,16 @@ Everything in the [Claude Code status line documentation](https://code.claude.co
 | `$cship.workspace` | Workspace/project directory |
 
 Full configuration reference: **https://cship.dev**
+
+## 🤖 Codex CLI (experimental)
+
+cship can also render in the [Codex CLI](https://github.com/openai/codex) footer, using the same config. Register it as an MCP status line provider:
+
+```sh
+codex mcp add cship -- cship codex-mcp
+```
+
+Then enable **Custom status line** in Codex's `/experimental`, restart the TUI, and select **cship** in `/statusline`. Setup details and differences from Claude Code: **https://cship.dev/codex**
 
 ## 🔍 Debugging
 

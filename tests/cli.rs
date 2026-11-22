@@ -1198,3 +1198,68 @@ fn test_config_schema_prints_valid_json_schema() {
         "expected ModelConfig.family_style in schema $defs: {stdout}"
     );
 }
+
+#[test]
+fn test_codex_mcp_handshake_and_read_render_ui_tree() {
+    let snapshot = std::fs::read_to_string("tests/fixtures/codex_snapshot_full.json").unwrap();
+    let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+    let read = serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "resources/read",
+        "params": {
+            "uri": "ui://cship/footer",
+            "_meta": {"com.openai/codex-statusline-state": snapshot},
+        },
+    });
+    let input = format!(
+        "{}\n{}\n{}\n{}\n",
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        read,
+    );
+
+    let output = cship()
+        .args(["--config", "tests/fixtures/codex_basic.toml", "codex-mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let replies: Vec<serde_json::Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 3, "notification must not get a reply");
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "cship");
+    assert_eq!(
+        replies[1]["result"]["tools"][0]["_meta"]["openai/ui"]["entrypoints"][0]["type"],
+        "statusline"
+    );
+
+    let tree: serde_json::Value = serde_json::from_str(
+        replies[2]["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(tree["type"], "text", "root is one inline text element");
+    assert!(!tree.to_string().contains("\"row\""));
+    let model = &tree["children"][0];
+    assert_eq!(model["props"]["color"], "green");
+    assert!(
+        model["children"][0]
+            .as_str()
+            .unwrap()
+            .contains("gpt-5.5-codex")
+    );
+    let rendered = tree.to_string();
+    assert!(!rendered.contains('\u{1b}'), "no ANSI escapes in UI tree");
+    // `$fill` renders as one space, followed by the context percentage.
+    assert_eq!(
+        tree["children"][1], " 25",
+        "context percentage rendered after the fill: {rendered}"
+    );
+}

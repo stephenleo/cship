@@ -18,6 +18,8 @@ clap               = { version = "4.5", features = ["derive"] }
 serde              = { version = "1", features = ["derive"] }
 serde_json         = { version = "1", features = ["preserve_order"] }
 toml               = "1"
+# Comment-preserving edits of Codex's config.toml (`cship codex-setup`).
+toml_edit          = { version = "0.25", default-features = false, features = ["parse", "display"] }
 ureq               = { version = "3", features = ["json"] }
 anyhow             = "1"
 thiserror          = "2"

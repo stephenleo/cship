@@ -89,14 +89,18 @@ fn parse_line(line: &str) -> Vec<Token> {
     tokens
 }
 
-/// A rendered line segment: either literal text or a `$fill` placeholder whose
-/// width is computed once all text segments are known.
-enum Piece {
+/// A rendered line segment: either styled (ANSI) text or a `$fill` placeholder
+/// whose width is computed once all text segments are known.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Piece {
     Text(String),
     Fill,
 }
 
-fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
+/// Render one format line into pieces, before `$fill` is expanded. Shared by
+/// [`render`] and by [`render_pieces`], which hosts that lay out lines themselves
+/// (Codex) use.
+fn line_pieces(line: &str, ctx: &Context, cfg: &CshipConfig) -> Vec<Piece> {
     let fill_disabled = cfg.fill.as_ref().and_then(|f| f.disabled).unwrap_or(false);
 
     let mut pieces: Vec<Piece> = Vec::new();
@@ -132,6 +136,11 @@ fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
             }
         }
     }
+    pieces
+}
+
+fn render_line(line: &str, ctx: &Context, cfg: &CshipConfig) -> String {
+    let pieces = line_pieces(line, ctx, cfg);
 
     // Fast path: no fills → concatenate (spacing is encoded in Literal tokens).
     // This keeps the common case free of any terminal-width lookup.
@@ -240,28 +249,44 @@ fn distribute(remaining: usize, n: usize) -> Vec<usize> {
     (0..n).map(|i| base + usize::from(i < extra)).collect()
 }
 
-pub fn render(lines: &[String], ctx: &Context, cfg: &CshipConfig) -> String {
-    // cfg.format takes priority over lines; split on "$line_break" to produce rows
-    let owned_lines: Vec<String>;
-    let effective_lines: &[String] = if let Some(format_str) = &cfg.format {
+/// Resolve the format lines to render: `cfg.format` (split on `$line_break`)
+/// takes priority over `lines`.
+fn effective_lines(lines: &[String], cfg: &CshipConfig) -> Vec<String> {
+    if let Some(format_str) = &cfg.format {
         if !lines.is_empty() {
             tracing::warn!("cship: format field is set — ignoring lines config");
         }
-        owned_lines = format_str
+        format_str
             .split("$line_break")
             .map(|s| s.to_string())
-            .collect();
-        &owned_lines
+            .collect()
     } else {
-        lines
-    };
+        lines.to_vec()
+    }
+}
 
-    effective_lines
+pub fn render(lines: &[String], ctx: &Context, cfg: &CshipConfig) -> String {
+    effective_lines(lines, cfg)
         .iter()
         .map(|line| render_line(line, ctx, cfg))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Render every line into unexpanded pieces, dropping lines with no visible text.
+/// Used by hosts that handle layout and styling themselves (see `crate::codex`).
+pub fn render_pieces(lines: &[String], ctx: &Context, cfg: &CshipConfig) -> Vec<Vec<Piece>> {
+    effective_lines(lines, cfg)
+        .iter()
+        .map(|line| line_pieces(line, ctx, cfg))
+        .filter(|pieces| {
+            pieces.iter().any(|p| match p {
+                Piece::Text(s) => !crate::ansi::strip_ansi(s).is_empty(),
+                Piece::Fill => false,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -441,6 +466,76 @@ mod tests {
         let lines = cfg.lines.as_deref().unwrap_or(&[]);
         let result = render(lines, &ctx, &cfg);
         assert_eq!(result, "from_format");
+    }
+
+    fn texts(pieces: &[Piece]) -> Vec<String> {
+        pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Text(s) => s.clone(),
+                Piece::Fill => "<fill>".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_render_pieces_format_line_break_gives_one_entry_per_line() {
+        let cfg = CshipConfig {
+            format: Some("a$line_breakb $fill c".to_string()),
+            ..Default::default()
+        };
+        let lines = render_pieces(&[], &Context::default(), &cfg);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(texts(&lines[0]), vec!["a"]);
+        assert_eq!(texts(&lines[1]), vec!["b ", "<fill>", " c"]);
+    }
+
+    #[test]
+    fn test_render_pieces_format_takes_priority_over_lines() {
+        let cfg = CshipConfig {
+            format: Some("from_format".to_string()),
+            lines: Some(vec!["from_lines".to_string()]),
+            ..Default::default()
+        };
+        let lines = render_pieces(cfg.lines.as_deref().unwrap(), &Context::default(), &cfg);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(texts(&lines[0]), vec!["from_format"]);
+    }
+
+    #[test]
+    fn test_render_pieces_drops_lines_without_visible_text() {
+        // `render()` keeps a line made only of escape codes (an empty styled span)
+        // because its string is non-empty; `render_pieces` drops it because Codex
+        // would show an empty line. A line holding only `$fill` is dropped by both.
+        let cfg = CshipConfig::default();
+        let lines = vec![
+            "[](bold red)".to_string(),
+            "$fill".to_string(),
+            "visible".to_string(),
+        ];
+        let pieces = render_pieces(&lines, &Context::default(), &cfg);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(texts(&pieces[0]), vec!["visible"]);
+
+        let rendered = render(&lines, &Context::default(), &cfg);
+        assert_eq!(
+            rendered.lines().count(),
+            2,
+            "render keeps the escape-only line"
+        );
+    }
+
+    #[test]
+    fn test_render_pieces_disabled_fill_is_omitted() {
+        let cfg = CshipConfig {
+            fill: Some(crate::config::FillConfig {
+                disabled: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pieces = render_pieces(&["a$fill".to_string()], &Context::default(), &cfg);
+        assert_eq!(pieces, vec![vec![Piece::Text("a".into())]]);
     }
 
     #[test]

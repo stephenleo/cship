@@ -40,6 +40,7 @@ export default defineConfig({
         text: 'Advanced',
         items: [
           { text: 'Starship Passthrough', link: '/passthrough' },
+          { text: 'Codex CLI (experimental)', link: '/codex' },
         ],
       },
       {

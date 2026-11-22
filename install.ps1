@@ -5,7 +5,8 @@
 .DESCRIPTION
     Downloads the cship binary from GitHub Releases, installs it to
     %USERPROFILE%\.local\bin\, writes a default cship.toml, and
-    registers the statusline in Claude Code's settings.json.
+    registers the statusline in Claude Code's settings.json and/or Codex's
+    config.toml, depending on which agents are installed.
 .PARAMETER Yes
     Non-interactive mode: accept all prompts automatically.
 #>
@@ -152,27 +153,87 @@ critical_style     = "bold fg:#f7768e"
     Write-Host "Config already exists at $CONFIG_FILE - skipping."
 }
 
-# --- Register statusline in Claude Code settings.json ---
-$claudeDir = Split-Path $SETTINGS
-if (-not (Test-Path $claudeDir)) {
-    Write-Host "Claude Code settings directory not found at $claudeDir - skipping settings update."
-    Write-Host "Authenticate in Claude Code first, then re-run this script."
-} elseif (-not (Test-Path $SETTINGS)) {
-    # Create minimal settings.json — $claudeDir already exists (checked above)
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($SETTINGS, '{"statusLine": {"type": "command", "command": "cship"}}', $utf8NoBom)
-    Write-Host "Created settings.json with statusLine entry: $SETTINGS"
-} else {
-    $json = Get-Content $SETTINGS -Raw | ConvertFrom-Json
-    $statusLineValue = [PSCustomObject]@{ type = "command"; command = "cship" }
-    if (-not $json.PSObject.Properties["statusLine"]) {
-        $json | Add-Member -NotePropertyName "statusLine" -NotePropertyValue $statusLineValue
+# --- Detect coding agents and choose which to configure ---
+# Claude Code: `claude` on PATH or ~/.claude exists.
+# Codex: `codex` on PATH at $MIN_CODEX or newer (custom status lines first
+# shipped there), or $CODEX_HOME / ~/.codex exists when `codex` is not on PATH.
+$MIN_CODEX = [version]"0.171.0"
+$CODEX_DIR = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
+
+$hasClaude = [bool](Get-Command claude -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $env:USERPROFILE ".claude"))
+
+$hasCodex = $false
+$codexCmd = Get-Command codex -ErrorAction SilentlyContinue
+if ($codexCmd) {
+    $codexVersion = $null
+    try {
+        $versionText = (& $codexCmd.Source --version 2>$null) -join " "
+        if ($versionText -match '(\d+\.\d+\.\d+)') { $codexVersion = [version]$Matches[1] }
+    } catch { }
+    if ($codexVersion -and $codexVersion -ge $MIN_CODEX) {
+        $hasCodex = $true
     } else {
-        $json.statusLine = $statusLineValue
+        $shown = if ($codexVersion) { $codexVersion } else { "(unknown version)" }
+        Write-Host "Found Codex $shown, but cship needs Codex $MIN_CODEX or newer. Skipping Codex; run 'cship codex-setup' after upgrading."
     }
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($SETTINGS, ($json | ConvertTo-Json -Depth 100), $utf8NoBom)
-    Write-Host "Updated settings.json with statusLine entry: $SETTINGS"
+} elseif (Test-Path $CODEX_DIR) {
+    $hasCodex = $true
+}
+
+$setupClaude = $hasClaude
+$setupCodex = $hasCodex
+if ($hasClaude -and $hasCodex) {
+    Write-Host "Found: Claude Code, Codex"
+    if (-not $Yes -and $INTERACTIVE) {
+        $answer = Read-Host "Configure cship for: [1] both (default)  [2] Claude Code only  [3] Codex only"
+        switch ($answer.Trim()) {
+            "2" { $setupCodex = $false }
+            "3" { $setupClaude = $false }
+        }
+    }
+} elseif ($hasClaude) {
+    Write-Host "Found: Claude Code"
+} elseif ($hasCodex) {
+    Write-Host "Found: Codex"
+} else {
+    Write-Host "No supported Claude Code or Codex installation found. To wire cship up later:"
+    Write-Host '  Claude Code: add "statusLine": {"type": "command", "command": "cship"} to ~/.claude/settings.json'
+    Write-Host "  Codex ($MIN_CODEX+): run 'cship codex-setup'"
+}
+
+# --- Claude Code: register statusline in settings.json ---
+if ($setupClaude) {
+    $claudeDir = Split-Path $SETTINGS
+    if (-not (Test-Path $claudeDir)) {
+        Write-Host "Claude Code settings directory not found at $claudeDir - skipping settings update."
+        Write-Host "Authenticate in Claude Code first, then re-run this script."
+    } elseif (-not (Test-Path $SETTINGS)) {
+        # Create minimal settings.json — $claudeDir already exists (checked above)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($SETTINGS, '{"statusLine": {"type": "command", "command": "cship"}}', $utf8NoBom)
+        Write-Host "Created settings.json with statusLine entry: $SETTINGS"
+    } else {
+        $json = Get-Content $SETTINGS -Raw | ConvertFrom-Json
+        $statusLineValue = [PSCustomObject]@{ type = "command"; command = "cship" }
+        if (-not $json.PSObject.Properties["statusLine"]) {
+            $json | Add-Member -NotePropertyName "statusLine" -NotePropertyValue $statusLineValue
+        } else {
+            $json.statusLine = $statusLineValue
+        }
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($SETTINGS, ($json | ConvertTo-Json -Depth 100), $utf8NoBom)
+        Write-Host "Updated settings.json with statusLine entry: $SETTINGS"
+    }
+}
+
+# --- Codex: register cship as the status line provider in config.toml ---
+# `cship codex-setup` adds only settings that are not set yet, keeps comments
+# and formatting, and backs up config.toml before changing it.
+if ($setupCodex) {
+    & $BIN codex-setup --codex-home $CODEX_DIR
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Warning: could not update Codex config. See https://cship.dev/codex for the manual steps."
+    }
 }
 
 # --- First-run preview ---
@@ -182,4 +243,4 @@ Write-Host "Running 'cship explain' as a first-run preview..."
 
 Write-Host ""
 Write-Host "cship $tag installed successfully."
-Write-Host "Restart Claude Code for the statusline to take effect."
+Write-Host "Restart Claude Code and/or Codex for the statusline to take effect."

@@ -148,9 +148,71 @@ else
   echo "Created minimal cship config at $CSHIP_CONFIG"
 fi
 
-# ── 7. ~/.claude/settings.json — wire statusline (via python3) ───────────────
+# ── 7. Detect coding agents and choose which to configure ────────────────────
+# Claude Code: `claude` on PATH or ~/.claude exists.
+# Codex: `codex` on PATH at MIN_CODEX or newer (custom status lines first
+# shipped there), or ${CODEX_HOME:-~/.codex} exists when `codex` is not on PATH.
+CODEX_DIR="${CODEX_HOME:-$ROOT/.codex}"
+MIN_CODEX="0.171.0"
+
+# version_ge A B: true when dotted version A >= B (bash 3.2 compatible).
+version_ge() {
+  local IFS=.
+  local -a a=($1) b=($2)
+  local i x y
+  for i in 0 1 2; do
+    x=${a[$i]:-0}; y=${b[$i]:-0}
+    if ((10#$x > 10#$y)); then return 0; fi
+    if ((10#$x < 10#$y)); then return 1; fi
+  done
+  return 0
+}
+
+HAS_CLAUDE=false
+if command -v claude >/dev/null 2>&1 || [ -d "$ROOT/.claude" ]; then
+  HAS_CLAUDE=true
+fi
+
+HAS_CODEX=false
+if command -v codex >/dev/null 2>&1; then
+  CODEX_VERSION=$(codex --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+  if [ -n "$CODEX_VERSION" ] && version_ge "$CODEX_VERSION" "$MIN_CODEX"; then
+    HAS_CODEX=true
+  else
+    echo "Found Codex ${CODEX_VERSION:-(unknown version)}, but cship needs Codex $MIN_CODEX or newer. Skipping Codex; run 'cship codex-setup' after upgrading."
+  fi
+elif [ -d "$CODEX_DIR" ]; then
+  HAS_CODEX=true
+fi
+
+SETUP_CLAUDE=$HAS_CLAUDE
+SETUP_CODEX=$HAS_CODEX
+if [ "$HAS_CLAUDE" = "true" ] && [ "$HAS_CODEX" = "true" ]; then
+  echo "Found: Claude Code, Codex"
+  if [ "$YES" != "true" ] && [ "$INTERACTIVE" = "true" ]; then
+    printf "Configure cship for: [1] both (default)  [2] Claude Code only  [3] Codex only "
+    read -r answer </dev/tty
+    case "$answer" in
+      2) SETUP_CODEX=false ;;
+      3) SETUP_CLAUDE=false ;;
+      *) ;;
+    esac
+  fi
+elif [ "$HAS_CLAUDE" = "true" ]; then
+  echo "Found: Claude Code"
+elif [ "$HAS_CODEX" = "true" ]; then
+  echo "Found: Codex"
+else
+  echo "No supported Claude Code or Codex installation found. To wire cship up later:"
+  echo "  Claude Code: add \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} to ~/.claude/settings.json"
+  echo "  Codex ($MIN_CODEX+): run 'cship codex-setup'"
+fi
+
+# ── 7a. Claude Code: ~/.claude/settings.json — wire statusline (via python3) ─
 SETTINGS="$ROOT/.claude/settings.json"
-if ! command -v python3 >/dev/null 2>&1; then
+if [ "$SETUP_CLAUDE" != "true" ]; then
+  :
+elif ! command -v python3 >/dev/null 2>&1; then
   echo "Warning: python3 not found. Skipping settings.json update."
   echo "To wire cship manually, add \"statusLine\": {\"type\": \"command\", \"command\": \"cship\"} to $SETTINGS"
 elif [ -f "$SETTINGS" ]; then
@@ -174,6 +236,14 @@ else:
 PYEOF
 else
   echo "settings.json not found at $SETTINGS — skipping (Claude Code may not be installed yet)."
+fi
+
+# ── 7b. Codex: register cship as the status line provider in config.toml ─────
+# `cship codex-setup` adds only settings that are not set yet, keeps comments
+# and formatting, and backs up config.toml before changing it.
+if [ "$SETUP_CODEX" = "true" ]; then
+  "$INSTALL_DIR/cship" codex-setup --codex-home "$CODEX_DIR" \
+    || echo "Warning: could not update Codex config. See https://cship.dev/codex for the manual steps."
 fi
 
 # ── 8. First-run preview ──────────────────────────────────────────────────────

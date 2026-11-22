@@ -164,9 +164,10 @@ fn unknown_result(pct: f64) -> MergedUsageWindow {
 }
 
 thread_local! {
-    /// Per-render-cycle memo for `resolve_data`. cship invocations are short-lived
-    /// (one process per prompt render), so a thread-local cache effectively means
-    /// "compute once per render cycle." When a status bar references multiple
+    /// Per-render-cycle memo for `resolve_data`. Each render runs on a thread of
+    /// its own: under Claude Code one process per prompt render, and under
+    /// `cship codex-mcp` a fresh worker thread per read. So a thread-local cache
+    /// effectively means "compute once per render cycle." When a status bar references multiple
     /// sub-tokens ($cship.usage_limits.opus, .sonnet, etc.), each token invokes
     /// `render` independently; without this cache each call would pay the full
     /// OAuth/cache lookup cost.
@@ -277,10 +278,11 @@ pub(crate) fn stdin_only(ul_cfg: Option<&UsageLimitsConfig>) -> bool {
 }
 
 /// Stdin `rate_limits` always provides the freshest 5h/7d values (sent every render
-/// by Claude Code). Cache/OAuth provide per-model + extra usage data.
+/// by Claude Code; under Codex, `ctx.rate_limits` is filled from the Codex
+/// snapshot instead). Cache/OAuth provide per-model + extra usage data.
 ///
-/// With `stdin_only = true` the OAuth path is skipped (no credential read, no
-/// fetch). Otherwise a token failure is non-fatal: stdin data is still usable.
+/// With `stdin_only = true`, or under Codex, the OAuth path is skipped (no
+/// credential read, no fetch). Otherwise a token failure is non-fatal: stdin data is still usable.
 fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     let ul_cfg = cfg.usage_limits.as_ref();
 
@@ -292,8 +294,13 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
     let stdin_data = data_from_stdin_rate_limits(ctx);
     // `stdin_only` skips the credential read and the API fetch entirely, not
     // just their result, so no keychain lookup happens on any render.
+    // Codex supplies its own account's limits in the snapshot; the Anthropic OAuth
+    // data would describe a different account and can outlast Codex's 1s read budget.
     let full_data = if stdin_only(ul_cfg) {
         tracing::debug!("cship.usage_limits: stdin_only set; skipping OAuth usage API");
+        None
+    } else if !ctx.host.has_claude_credentials() {
+        tracing::debug!("cship.usage_limits: Codex host; skipping OAuth usage API");
         None
     } else {
         resolve_full_data(ctx, ul_cfg)
@@ -564,8 +571,8 @@ pub fn render_extra_usage(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     Some(apply_threshold(&content, &data, cfg))
 }
 
-/// Extract usage limits from the `rate_limits` field Claude Code sends via stdin.
-/// This avoids the OAuth API call entirely when the data is available.
+/// Extract usage limits from `ctx.rate_limits`: the field Claude Code sends via
+/// stdin, or the Codex snapshot's limits under `cship codex-mcp`. This avoids the OAuth API call entirely when the data is available.
 /// `resets_at` is a Unix epoch in the stdin payload; stored directly to avoid a
 /// round-trip through ISO 8601 formatting and re-parsing.
 ///
@@ -2075,6 +2082,38 @@ mod tests {
         assert!(out.contains("5h 62%"), "API 5h reading must show: {out:?}");
         assert!(out.contains("7d 33%"), "stdin 7d must still win: {out:?}");
         assert!(render_five_hour(&ctx, &cfg).unwrap().contains("5h 62%"));
+    }
+
+    #[test]
+    fn test_codex_host_ignores_oauth_data() {
+        // Under Codex the snapshot is the only source: OAuth data belongs to the
+        // Claude account and must not fill in or override any window.
+        let _full = FullDataGuard::set(UsageLimitsData {
+            five_hour_pct: 62.0,
+            seven_day_pct: 10.0,
+            ..Default::default()
+        });
+        let ctx = Context {
+            host: crate::context::Host::Codex,
+            rate_limits: Some(crate::context::RateLimits {
+                five_hour: None,
+                seven_day: Some(crate::context::RateLimitPeriod {
+                    used_percentage: Some(33.0),
+                    resets_at: None,
+                }),
+            }),
+            ..Default::default()
+        };
+        let data = resolve_data_uncached(&ctx, &CshipConfig::default()).unwrap();
+        assert_eq!(data.seven_day_pct, 33.0);
+        assert!(data.five_hour_absent, "OAuth 5h must not leak into Codex");
+        assert_eq!(full_data_calls(), 0, "OAuth path must not run under Codex");
+
+        let no_snapshot_limits = Context {
+            host: crate::context::Host::Codex,
+            ..Default::default()
+        };
+        assert!(resolve_data_uncached(&no_snapshot_limits, &CshipConfig::default()).is_none());
     }
 
     #[test]
