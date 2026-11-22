@@ -387,7 +387,7 @@ Displays 5-hour and 7-day API utilization percentages with time-to-reset.
 **Data sources (merged on every render):**
 
 1. **stdin `rate_limits`** — Claude Code (v2.1+) sends `rate_limits` directly in the session JSON for Pro/Max subscribers. It carries the 5-hour and 7-day totals and needs no credential setup.
-2. **OAuth API** — `https://api.anthropic.com/api/oauth/usage`, read with your OAuth token (stored in the OS credential store). In a Claude Code session it is consulted whether or not stdin has `rate_limits`: it is the only source of the per-model and extra-usage values, and its 5-hour and 7-day reading is used when stdin has none, or when it describes the same window with a higher percentage or a newer window. The fetch is coordinated across every concurrent `cship` process that uses the same Claude config directory, so running more sessions doesn't multiply API calls; results are shared for the configured TTL (default 60s). The one render that performs a refresh can take up to about 1.5 seconds.
+2. **OAuth API** — `https://api.anthropic.com/api/oauth/usage`, read with your OAuth token (stored in the OS credential store). In a Claude Code session it is consulted whether or not stdin has `rate_limits`: it is the only source of the per-model and extra-usage values, and its 5-hour and 7-day reading is used when stdin has none, or when it describes the same window with a higher percentage or a newer window. The fetch is coordinated across every concurrent `cship` process that uses the same Claude config directory, so running more sessions doesn't multiply API calls; results are shared for the configured TTL (default 60s). The one render that performs a refresh can take up to about 1.5 seconds. Set `stdin_only = true` to turn this source off.
 
 **Tokens:**
 
@@ -447,6 +447,7 @@ critical_style     = "bold red"
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
 | `critical_style` | `string` | `"bold red"` | Style at critical level |
+| `stdin_only` | `bool` | `false` | When `true`, use only the 5h/7d values Claude Code sends in the session JSON. cship never reads the OAuth credential and never calls the usage API for this module, so per-model and extra-usage tokens and sections render nothing. Use it when you only show the 5h/7d windows and want no keychain read or API call on each refresh. `ttl` has no effect in this mode. |
 | `ttl` | `integer` | `60` | OAuth usage refresh interval in seconds, shared across every concurrent `cship` process using the same Claude config directory — running more sessions does not multiply API calls. Increase to poll less often; decrease to poll more often. `0` would disable throttling, so it is treated as `1`. |
 
 **Placeholders** (available in all `*_format` strings):
@@ -469,7 +470,7 @@ critical_style     = "bold red"
 | `{remaining_credits}` | Remaining extra-credit budget, in dollars (e.g. `138.05`) |
 | `{active}` | `⚡` when 5h or 7d utilization is at 100% (actively consuming extra credits), `💤` otherwise |
 
-**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 cship reads the token from `~/.claude/.credentials.json`, which Claude Code writes at login. See [FAQ](/faq#usage-limits-linux) for details.
+**Prerequisites:** If Claude Code sends `rate_limits` in its session JSON (v2.1+, Pro/Max plans), no setup is needed for the 5h/7d totals. Per-model breakdowns and extra-usage data always come from the OAuth API — on Linux/WSL2 cship reads the token from `.credentials.json` in Claude Code's config dir (`$CLAUDE_CONFIG_DIR` when set, else `~/.claude`), which Claude Code writes at login. See [FAQ](/faq#usage-limits-linux) for details.
 
 ```toml
 [cship.usage_limits]
@@ -568,7 +569,7 @@ Because field values render verbatim, a launcher can also embed ANSI color in th
 CSHIP_ACCOUNT='{"organization_name":"Acme Corp","organization_tier":"Team","account_display_name":"work"}'
 ```
 
-**Prerequisites:** Unless `CSHIP_ACCOUNT` is set, requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2 this is `~/.claude/.credentials.json`, which Claude Code writes at login. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, unreachable API, or a malformed `CSHIP_ACCOUNT` value).
+**Prerequisites:** Unless `CSHIP_ACCOUNT` is set, requires an OAuth token in the OS credential store (the same credential used by `usage_limits`). On Linux/WSL2 this is `.credentials.json` in Claude Code's config dir (`$CLAUDE_CONFIG_DIR` when set, else `~/.claude`), which Claude Code writes at login. If the module renders nothing, run `cship explain cship.account` for a diagnosis (missing credential, expired token, unreachable API, or a malformed `CSHIP_ACCOUNT` value).
 
 ```toml
 [cship.account]

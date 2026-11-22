@@ -109,8 +109,11 @@ impl UsageLimitsData {
 /// Intermediate struct matching the raw API response structure.
 #[derive(serde::Deserialize)]
 struct ApiResponse {
-    five_hour: Option<UsagePeriod>,
-    seven_day: Option<UsagePeriod>,
+    /// Outer `None`: key missing from the response. `Some(None)`: explicit `null`.
+    #[serde(default, deserialize_with = "deserialize_present")]
+    five_hour: Option<Option<UsagePeriod>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    seven_day: Option<Option<UsagePeriod>>,
     seven_day_opus: Option<UsagePeriod>,
     seven_day_sonnet: Option<UsagePeriod>,
     seven_day_cowork: Option<UsagePeriod>,
@@ -122,6 +125,39 @@ struct ApiResponse {
 struct UsagePeriod {
     utilization: f64,
     resets_at: Option<String>,
+}
+
+/// Keeps a missing key apart from an explicit `null`: a present key (value or
+/// `null`) deserializes to `Some(_)`, and `#[serde(default)]` leaves a missing
+/// key as `None`.
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+/// Resolve a standard window field. `null` is how the API reports a window the
+/// account does not have (no 5h limit, or Enterprise), so it logs at debug. A
+/// missing key is an unexpected response shape and logs at warn; either way the
+/// window is treated as absent.
+fn standard_window(field: Option<Option<UsagePeriod>>, name: &str) -> Option<UsagePeriod> {
+    match field {
+        Some(Some(period)) => Some(period),
+        Some(None) => {
+            tracing::debug!(
+                "cship.usage_limits: usage API returned {name}: null; treating the window as absent"
+            );
+            None
+        }
+        None => {
+            tracing::warn!(
+                "cship.usage_limits: usage API response has no {name} field; treating the window as absent"
+            );
+            None
+        }
+    }
 }
 
 /// Intermediate struct matching the `extra_usage` object in the API response.
@@ -151,14 +187,15 @@ fn parse_api_response(json: &str) -> Result<UsageLimitsData, String> {
     let (cowork_pct, cowork_reset) = map_period(&api.seven_day_cowork);
     let (oauth_apps_pct, oauth_apps_reset) = map_period(&api.seven_day_oauth_apps);
 
-    let five_hour_absent = api.five_hour.is_none();
-    let (five_h_pct, five_h_reset) = api
-        .five_hour
+    let five_hour = standard_window(api.five_hour, "five_hour");
+    let seven_day = standard_window(api.seven_day, "seven_day");
+
+    let five_hour_absent = five_hour.is_none();
+    let (five_h_pct, five_h_reset) = five_hour
         .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
         .unwrap_or((0.0, String::new()));
-    let seven_day_absent = api.seven_day.is_none();
-    let (seven_d_pct, seven_d_reset) = api
-        .seven_day
+    let seven_day_absent = seven_day.is_none();
+    let (seven_d_pct, seven_d_reset) = seven_day
         .map(|p| (p.utilization, p.resets_at.unwrap_or_default()))
         .unwrap_or((0.0, String::new()));
 
@@ -498,6 +535,38 @@ mod tests {
         let data = parse_api_response(json).expect("missing standard fields must not be fatal");
         assert_eq!(data.five_hour_pct, 0.0);
         assert_eq!(data.seven_day_pct, 0.0);
+        assert!(data.five_hour_absent, "missing five_hour key → absent");
+        assert!(data.seven_day_absent, "missing seven_day key → absent");
         assert_eq!(data.extra_usage_enabled, Some(true));
+    }
+
+    #[test]
+    fn test_api_response_tells_missing_window_key_from_null() {
+        let api: ApiResponse = serde_json::from_str(
+            r#"{"five_hour":null,"seven_day":{"utilization":12.0,"resets_at":null}}"#,
+        )
+        .unwrap();
+        assert!(matches!(api.five_hour, Some(None)), "null → Some(None)");
+        assert!(matches!(api.seven_day, Some(Some(_))), "value → Some(Some)");
+
+        let api: ApiResponse = serde_json::from_str("{}").unwrap();
+        assert!(api.five_hour.is_none(), "missing key → None");
+        assert!(api.seven_day.is_none(), "missing key → None");
+    }
+
+    /// Cache entries written before the `*_absent` flags existed have no such
+    /// keys; they must still parse, reading both windows as present.
+    #[test]
+    fn test_usage_data_without_absent_flags_deserializes() {
+        let json = r#"{
+            "five_hour_pct": 12.0,
+            "seven_day_pct": 34.0,
+            "five_hour_resets_at": "",
+            "seven_day_resets_at": ""
+        }"#;
+        let data: UsageLimitsData = serde_json::from_str(json).unwrap();
+        assert!(!data.five_hour_absent);
+        assert!(!data.seven_day_absent);
+        assert_eq!(data.five_hour().map(|w| w.pct), Some(12.0));
     }
 }

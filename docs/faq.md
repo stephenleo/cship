@@ -42,7 +42,7 @@ This shows:
 
 The CShip `usage_limits` module fetches data from the Anthropic API using your Claude Code OAuth token, which is stored in the OS credential store.
 
-**Linux/WSL2:** No manual setup required. Claude Code writes its credential to `~/.claude/.credentials.json` when you log in, and CShip reads the OAuth token from that file. If the file is missing, log in to Claude Code again (`/login`).
+**Linux/WSL2:** No manual setup required. Claude Code writes its credential to `~/.claude/.credentials.json` when you log in (or to `$CLAUDE_CONFIG_DIR/.credentials.json` when that is set; see **Multiple accounts** below), and CShip reads the OAuth token from that file. If the file is missing, log in to Claude Code again (`/login`).
 
 Only when that file is absent does CShip fall back to `secret-tool` (from `libsecret-tools`), looking up the service `Claude Code-credentials`. The stored secret must be the full contents of `.credentials.json` (the JSON containing `claudeAiOauth.accessToken`), not the bare token. Claude Code itself does not write to the keyring on Linux, so most setups never use this fallback.
 
@@ -78,7 +78,7 @@ extra_usage_format = "{active} ${used}/${limit}"
 - `$cship.usage_limits.session` — the 5-hour window (alias `.five_hour`)
 - `$cship.usage_limits.weekly` — the 7-day window (alias `.seven_day`)
 
-On an account with no 5-hour limit, `$cship.usage_limits` shows only the 7d window and `$cship.usage_limits.session` renders nothing. `cship explain` reports this as "this account has no 5-hour usage window".
+On an account with no 5-hour limit, `$cship.usage_limits` shows only the 7d window and `$cship.usage_limits.session` renders nothing. `cship explain` reports this as "this account has no 5-hour usage window". Likewise, on an account with no 7-day limit, `$cship.usage_limits` shows only the 5h window and `$cship.usage_limits.weekly` renders nothing; `cship explain` reports "this account has no 7-day usage window".
 
 Combine them with the `{bar}` placeholder (available in `five_hour_format` / `seven_day_format`, sized by `bar_width`) to get an independent progress bar per window:
 
@@ -202,6 +202,7 @@ Set `end_hour = 24` to mean "through end of day". Weekends always return nothing
 - **Errors back off instead of retrying every render.** A rate limit (HTTP 429) waits for the server's `Retry-After`, or doubles from `ttl` when there is none, up to 15 minutes. Any other unexpected HTTP status waits 30 seconds and doubles with each repeat, up to 5 minutes. A network error or an unreadable response retries after 30 seconds. A rejected token (HTTP 401) is retried after 15 minutes, or at once when you log in again and the token changes. None of these retries come sooner than `ttl`, and a `ttl` longer than a limit above takes its place. Last known data keeps rendering in the meantime.
 - **Unreadable credential:** if the OAuth token cannot be read for a render (for example a keychain lookup that times out), cship keeps showing the last fetched data for up to 15 minutes and does not call the API.
 - **Window resets:** when a usage window is about to reset, the next fetch is scheduled for a few seconds after the reset so the new window appears promptly. A reset never causes two fetches closer than 30 seconds apart (or `ttl`, if that is shorter).
+- **Turning it off:** with `[cship.usage_limits] stdin_only = true`, cship shows only the 5h/7d values from Claude Code's session JSON and never reads the credential or calls the API. Per-model and extra-usage values need the API, so they don't render in this mode.
 - **Session-only:** the OAuth fetch only runs for a normal Claude Code session (one that provides a `transcript_path`), so rendering with `cship` by hand on arbitrary input never calls the API.
 - If the data seems stale, check that your OAuth token is valid (re-login to Claude Code if needed).
 

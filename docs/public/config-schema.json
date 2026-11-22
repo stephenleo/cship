@@ -985,6 +985,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "stdin_only": {
+          "description": "When `true`, render only the 5h/7d values Claude Code sends in the\nsession JSON (`rate_limits`): cship never reads the OAuth credential\nand never calls the usage API for this module. Per-model breakdowns\nand extra usage come only from the API, so their tokens and sections\nrender nothing in this mode. Default: `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "format": {
           "description": "Reserved — not yet rendered. Use `five_hour_format`, `seven_day_format`,\nand `separator` for per-section format control.",
           "type": [

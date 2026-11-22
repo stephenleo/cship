@@ -1755,6 +1755,24 @@ mod tests {
     }
 
     #[test]
+    fn test_persist_then_load_keeps_absent_window_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = SharedUsageState::default_state();
+        state.usage = Some(crate::usage_limits::UsageLimitsData {
+            seven_day_pct: 33.0,
+            five_hour_absent: true,
+            ..Default::default()
+        });
+        persist_state_to_dir(dir.path(), &state);
+        let usage = load_state_from_dir(dir.path())
+            .usage
+            .expect("usage must survive the round trip");
+        assert!(usage.five_hour_absent);
+        assert!(!usage.seven_day_absent);
+        assert_eq!(usage.seven_day_pct, 33.0);
+    }
+
+    #[test]
     fn test_persist_state_produces_no_temp_files_left_behind() {
         let dir = tempfile::tempdir().unwrap();
         let state = SharedUsageState::default_state();

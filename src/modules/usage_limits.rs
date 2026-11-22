@@ -124,6 +124,7 @@ fn merge_source_windows(
     stdin: Option<&UsageLimitsData>,
     api: Option<&UsageLimitsData>,
     window: fn(&UsageLimitsData) -> Option<UsageWindow<'_>>,
+    label: &str,
     now: u64,
 ) -> Option<MergedUsageWindow> {
     let stdin_w = stdin.and_then(window);
@@ -131,11 +132,16 @@ fn merge_source_windows(
         .and_then(window)
         .filter(|w| stdin.is_none() || stdin_w.is_some() || w.has_reading());
     if stdin.is_some() && stdin_w.is_none() && api_w.is_some() {
-        tracing::debug!(
-            "cship.usage_limits: window absent from stdin rate_limits; using the usage API's"
+        // The API returns `null` for a window the account lacks, so a real API
+        // reading here means stdin dropped a window the account does have
+        // (e.g. a renamed stdin field). That is unexpected, hence warn.
+        tracing::warn!(
+            "cship.usage_limits: {label} window absent from stdin rate_limits but present in the usage API; using the usage API's"
         );
     }
     if stdin_w.is_none() && api_w.is_none() {
+        // Normal state on accounts without that limit, hence debug rather than warn.
+        tracing::debug!("cship.usage_limits: {label} window absent from every source; hiding it");
         return None;
     }
     let snapshot =
@@ -249,6 +255,10 @@ thread_local! {
     /// cargo reuses worker threads between tests.
     static TEST_FULL_DATA: std::cell::RefCell<Option<UsageLimitsData>> =
         const { std::cell::RefCell::new(None) };
+    /// How many times the test-build `resolve_full_data` ran on this thread.
+    /// Lets tests assert the OAuth path was never entered (`stdin_only`), not
+    /// only that its result went unused. Reset by `tests::FullDataGuard`.
+    static TEST_FULL_DATA_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -256,14 +266,21 @@ fn resolve_full_data(
     _ctx: &Context,
     _ul_cfg: Option<&UsageLimitsConfig>,
 ) -> Option<UsageLimitsData> {
+    TEST_FULL_DATA_CALLS.with(|n| n.set(n.get() + 1));
     TEST_FULL_DATA.with(|d| d.borrow().clone())
+}
+
+/// True when `[cship.usage_limits] stdin_only = true`: the module uses only
+/// stdin `rate_limits` and never touches the OAuth credential or the API.
+pub(crate) fn stdin_only(ul_cfg: Option<&UsageLimitsConfig>) -> bool {
+    ul_cfg.and_then(|c| c.stdin_only) == Some(true)
 }
 
 /// Stdin `rate_limits` always provides the freshest 5h/7d values (sent every render
 /// by Claude Code). Cache/OAuth provide per-model + extra usage data.
 ///
-/// Token is read up front for fingerprint computation (cache identity check).
-/// Token failure is non-fatal — stdin data is still usable.
+/// With `stdin_only = true` the OAuth path is skipped (no credential read, no
+/// fetch). Otherwise a token failure is non-fatal: stdin data is still usable.
 fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     let ul_cfg = cfg.usage_limits.as_ref();
 
@@ -273,9 +290,15 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
 
     // Stdin provides the freshest 5h/7d values
     let stdin_data = data_from_stdin_rate_limits(ctx);
-    // Codex supplies its own account's limits in the snapshot. The Anthropic OAuth
-    // fallback would report a different account and can outlast Codex's 1s read budget.
-    let full_data = if ctx.host == crate::context::Host::Codex {
+    // `stdin_only` skips the credential read and the API fetch entirely, not
+    // just their result, so no keychain lookup happens on any render.
+    // Codex supplies its own account's limits in the snapshot; the Anthropic OAuth
+    // data would describe a different account and can outlast Codex's 1s read budget.
+    let full_data = if stdin_only(ul_cfg) {
+        tracing::debug!("cship.usage_limits: stdin_only set; skipping OAuth usage API");
+        None
+    } else if ctx.host == crate::context::Host::Codex {
+        tracing::debug!("cship.usage_limits: Codex host; skipping OAuth usage API");
         None
     } else {
         resolve_full_data(ctx, ul_cfg)
@@ -289,12 +312,14 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
                 stdin.as_ref(),
                 full.as_ref(),
                 UsageLimitsData::five_hour,
+                "5h",
                 now,
             );
             let seven_d = merge_source_windows(
                 stdin.as_ref(),
                 full.as_ref(),
                 UsageLimitsData::seven_day,
+                "7d",
                 now,
             );
             let (five_hour_absent, seven_day_absent) = (five_h.is_none(), seven_d.is_none());
@@ -571,7 +596,8 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     let (seven_pct, seven_epoch) = match rl.seven_day.as_ref() {
         Some(seven) => (seven.used_percentage.unwrap_or(0.0), seven.resets_at),
         None => {
-            tracing::warn!(
+            // Normal state on accounts without a 7d limit (Enterprise), hence debug.
+            tracing::debug!(
                 "rate_limits.seven_day absent from stdin; treating the 7d window as absent"
             );
             (0.0, None)
@@ -823,7 +849,8 @@ fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option
         (Some(limit), Some(used)) => format!("{:.2}", (limit - used).max(0.0) / 100.0),
         _ => "?".into(),
     };
-    let active = if data.five_hour_pct >= 100.0 || data.seven_day_pct >= 100.0 {
+    let maxed = |w: Option<UsageWindow<'_>>| w.is_some_and(|w| w.pct >= 100.0);
+    let active = if maxed(data.five_hour()) || maxed(data.seven_day()) {
         "\u{26a1}" // ⚡
     } else if lacks_standard_signal(data) {
         let threshold = cfg.warn_threshold.unwrap_or(0.0);
@@ -2078,6 +2105,7 @@ mod tests {
         let data = resolve_data_uncached(&ctx, &CshipConfig::default()).unwrap();
         assert_eq!(data.seven_day_pct, 33.0);
         assert!(data.five_hour_absent, "OAuth 5h must not leak into Codex");
+        assert_eq!(full_data_calls(), 0, "OAuth path must not run under Codex");
 
         let no_snapshot_limits = Context {
             host: crate::context::Host::Codex,
@@ -3173,13 +3201,19 @@ mod tests {
     impl FullDataGuard {
         fn set(data: UsageLimitsData) -> Self {
             TEST_FULL_DATA.with(|d| *d.borrow_mut() = Some(data));
+            TEST_FULL_DATA_CALLS.with(|n| n.set(0));
             FullDataGuard
         }
     }
     impl Drop for FullDataGuard {
         fn drop(&mut self) {
             TEST_FULL_DATA.with(|d| *d.borrow_mut() = None);
+            TEST_FULL_DATA_CALLS.with(|n| n.set(0));
         }
+    }
+
+    fn full_data_calls() -> u32 {
+        TEST_FULL_DATA_CALLS.with(|n| n.get())
     }
 
     fn ctx_with_transcript() -> (tempfile::TempDir, Context) {
@@ -3270,6 +3304,40 @@ mod tests {
         }
     }
 
+    /// No stdin `rate_limits` and the API reports `five_hour: null`: the absent
+    /// flag alone keeps the 5h segment hidden (the original "5h 0% (?)" bug).
+    #[test]
+    fn test_render_api_only_hides_absent_five_hour() {
+        let _full = FullDataGuard::set(UsageLimitsData {
+            five_hour_absent: true,
+            ..api_window_data()
+        });
+        let (_dir, ctx) = ctx_with_transcript();
+        let cfg = CshipConfig::default();
+        let out = render(&ctx, &cfg).expect("7d from API must render");
+        // Match the segment label, not bare "5h": the 7d reset text can contain
+        // it (e.g. "resets in 94961d15h"), depending on the clock.
+        assert!(!out.contains("5h:"), "5h segment should be hidden: {out}");
+        assert!(out.contains("7d: 60%"), "7d from API: {out}");
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+    }
+
+    /// A cache entry flagging 5h as absent (e.g. from before a plan change) must
+    /// not hide a live 5h reading from stdin.
+    #[test]
+    fn test_stdin_five_hour_wins_over_cache_absent_flag() {
+        let (_dir, ctx) = ctx_with_pcts(40.0, 33.0);
+        let _full = FullDataGuard::set(UsageLimitsData {
+            seven_day_pct: 10.0,
+            five_hour_absent: true,
+            ..Default::default()
+        });
+        let cfg = five_hour_cfg();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(out.contains("5h 40%"), "stdin 5h must show: {out}");
+        assert!(render_five_hour(&ctx, &cfg).unwrap().contains("5h 40%"));
+    }
+
     /// Non-window fields (extra usage) come from the API even when stdin
     /// supplies the standard windows.
     #[test]
@@ -3295,5 +3363,88 @@ mod tests {
     fn test_render_none_without_any_source() {
         let (_dir, ctx) = ctx_with_transcript();
         assert!(render(&ctx, &CshipConfig::default()).is_none());
+    }
+
+    fn stdin_only_cfg() -> CshipConfig {
+        CshipConfig {
+            usage_limits: Some(UsageLimitsConfig {
+                stdin_only: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// API data that would show up in the output if the OAuth path ran: a
+    /// higher, later 5h/7d reading plus extra usage and a per-model value.
+    fn api_data_with_oauth_only_fields() -> UsageLimitsData {
+        UsageLimitsData {
+            extra_usage_enabled: Some(true),
+            extra_usage_monthly_limit: Some(10000.0),
+            extra_usage_used_credits: Some(2500.0),
+            extra_usage_utilization: Some(25.0),
+            seven_day_opus_pct: Some(42.0),
+            ..api_window_data()
+        }
+    }
+
+    /// #210: `stdin_only` renders the stdin windows and never enters the OAuth
+    /// path, so no credential is read and no fetch is scheduled.
+    #[test]
+    fn test_stdin_only_skips_oauth_path() {
+        let _full = FullDataGuard::set(api_data_with_oauth_only_fields());
+        let (_dir, ctx) = ctx_with_pcts(20.0, 10.0);
+        let out = render(&ctx, &stdin_only_cfg()).expect("stdin windows must render");
+        assert_eq!(full_data_calls(), 0, "OAuth path must not run");
+        assert!(out.contains("5h: 20%"), "stdin 5h: {out}");
+        assert!(out.contains("7d: 10%"), "stdin 7d: {out}");
+        assert!(!out.contains("extra"), "no API extra usage: {out}");
+    }
+
+    /// Without the flag the same setup does consult the API (guards the test
+    /// above against passing for the wrong reason).
+    #[test]
+    fn test_without_stdin_only_oauth_path_runs() {
+        let _full = FullDataGuard::set(api_data_with_oauth_only_fields());
+        let (_dir, ctx) = ctx_with_pcts(20.0, 10.0);
+        let out = render(&ctx, &CshipConfig::default()).unwrap();
+        assert_eq!(full_data_calls(), 1);
+        assert!(out.contains("extra"), "API extra usage: {out}");
+    }
+
+    /// API-only tokens render nothing under `stdin_only`, and the 5h/7d
+    /// tokens still render from stdin.
+    #[test]
+    fn test_stdin_only_api_tokens_render_nothing() {
+        let _full = FullDataGuard::set(api_data_with_oauth_only_fields());
+        let (_dir, ctx) = ctx_with_pcts(20.0, 10.0);
+        let cfg = stdin_only_cfg();
+        assert!(render_opus(&ctx, &cfg).is_none());
+        assert!(render_per_model(&ctx, &cfg).is_none());
+        assert!(render_extra_usage(&ctx, &cfg).is_none());
+        assert!(render_five_hour(&ctx, &cfg).unwrap().contains("20%"));
+        assert!(render_seven_day(&ctx, &cfg).unwrap().contains("10%"));
+        assert_eq!(full_data_calls(), 0, "OAuth path must not run");
+    }
+
+    /// No stdin `rate_limits` under `stdin_only`: nothing to show, and no API
+    /// fallback.
+    #[test]
+    fn test_stdin_only_without_rate_limits_renders_nothing() {
+        let _full = FullDataGuard::set(api_window_data());
+        let (_dir, ctx) = ctx_with_transcript();
+        assert!(render(&ctx, &stdin_only_cfg()).is_none());
+        assert_eq!(full_data_calls(), 0, "OAuth path must not run");
+    }
+
+    #[test]
+    fn test_stdin_only_false_behaves_as_default() {
+        let cfg = UsageLimitsConfig {
+            stdin_only: Some(false),
+            ..Default::default()
+        };
+        assert!(!stdin_only(Some(&cfg)));
+        assert!(!stdin_only(None));
+        assert!(stdin_only(stdin_only_cfg().usage_limits.as_ref()));
     }
 }
