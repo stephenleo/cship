@@ -1,0 +1,8 @@
+[cship]
+lines = ["$cship.context_bar"]
+
+[cship.context_bar]
+filled_text  = "CONTEXT WINDOW"
+full_at      = 95
+filled_style = "bold"
+track_style  = "dimmed"

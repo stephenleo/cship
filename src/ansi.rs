@@ -44,6 +44,12 @@ pub fn apply_style(content: &str, style_str: Option<&str>) -> String {
     style.paint(content).to_string()
 }
 
+/// Prefix `content` with an SGR reset, so a style opened before it (e.g. by a literal span
+/// in a `format` string) doesn't carry into content that styles its own parts.
+pub fn after_reset(content: &str) -> String {
+    format!("\x1b[0m{content}")
+}
+
 /// Apply style with optional numeric threshold switching.
 /// If `value` >= `critical_threshold` (both Some), applies `critical_style`.
 /// If `value` >= `warn_threshold` (both Some), applies `warn_style`.
