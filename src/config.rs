@@ -207,21 +207,23 @@ pub struct ContextBarConfig {
     /// Text revealed one character per slot as the bar fills, in place of `filled_char`.
     /// The bar is as wide as the text, so `width` is ignored. Zero-width characters (such
     /// as combining accents) join the character before them, and the track keeps the
-    /// text's display width, so with a single-column `empty_char` the bar doesn't change
-    /// width as it fills. Text with no visible characters is ignored. Emoji made of
+    /// text's display width, so the bar doesn't change width as it fills. Control
+    /// characters are removed, and text with zero display width is ignored. Emoji made of
     /// several characters (skin tones, flags, joined emoji like 👨‍👩‍👦) aren't supported:
     /// they can reveal in pieces and shift the bar's width.
     /// Example: `"CONTEXT WINDOW"` renders `CONTEXT░░░░░░░ 50%` at 50%.
     pub filled_text: Option<String>,
     /// Percentage at which the bar is drawn full. Defaults to `100`; set it lower to
     /// finish the bar before Claude Code auto-compacts. It only rescales the bar:
-    /// thresholds still compare the real percentage. Values at or below 0 are ignored.
+    /// thresholds still compare the real percentage. Values that aren't a finite number
+    /// above 0 are ignored, and values above 100 never fill the bar.
     pub full_at: Option<f64>,
     /// Style for the filled slots, in place of the threshold style. Setting this or
     /// `track_style` styles each part on its own, so the threshold style then covers
     /// only the percentage. Style the bar through these fields rather than in `format`:
     /// `$style` is left empty (`$symbol` takes the threshold style itself), and a style
-    /// written directly in `format` doesn't reach the bar.
+    /// written directly in `format` stops where `$value` starts, so it reaches neither
+    /// the bar nor text after it in the same span. A blank value counts as unset.
     /// Not used when context data is absent; `empty_style` covers that state.
     pub filled_style: Option<String>,
     /// Style for the empty slots (the track), in place of the threshold style.

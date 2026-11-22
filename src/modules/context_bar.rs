@@ -7,9 +7,10 @@ const DEFAULT_EMPTY_CHAR: &str = "░";
 
 /// Renders `$cship.context_bar` — visual Unicode progress bar with threshold color escalation.
 /// Format: `{bar} {used_percentage:.0}%` e.g. `███░░░░░░░ 35%`
-/// Bar width is configurable via `[cship.context_bar].width` (default 10).
+/// The bar has `width` slots (default 10), or one slot per character of `filled_text` when set.
 /// Fill characters are configurable via `filled_char` (default `"█"`) and `empty_char` (default `"░"`).
 /// `filled_text` reveals text one character per slot instead of repeating `filled_char`.
+/// `full_at` (default 100) is the percentage drawn as a full bar.
 /// `filled_style` / `track_style` style the filled slots and the track on their own.
 ///
 /// Source: epics.md#Story 2.2, prd.md#FR8
@@ -33,34 +34,28 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         None => (0.0f64, true),
     };
 
-    let slots = match bar_cfg.and_then(|c| c.filled_text.as_deref()) {
-        Some(text) if crate::ansi::display_width(text) == 0 => {
-            // Text with no visible characters would render no bar at all — ignore it, warn once
-            static EMPTY_TEXT_WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !EMPTY_TEXT_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                tracing::warn!(
-                    "cship.context_bar: filled_text has no visible characters — ignoring it"
-                );
-            }
-            None
-        }
-        Some(text) => Some(text_slots(text)),
-        None => None,
-    };
+    let slots = bar_cfg
+        .and_then(|c| c.filled_text.as_deref())
+        .and_then(filled_text_slots);
     let width = match &slots {
         Some(slots) => slots.len(),
         None => bar_cfg.and_then(|c| c.width).unwrap_or(DEFAULT_BAR_WIDTH) as usize,
     };
     let full_at = match bar_cfg.and_then(|c| c.full_at) {
-        Some(pct) if pct > 0.0 => pct,
-        Some(_) => {
-            // A full_at at or below 0 would never fill the bar sensibly — ignore it, warn once
-            static FULL_AT_WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !FULL_AT_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                tracing::warn!("cship.context_bar: full_at must be above 0 — ignoring it");
+        Some(pct) if pct.is_finite() && pct > 0.0 => {
+            if pct > 100.0 {
+                // used_percentage tops out at 100, so this bar can never fill
+                crate::warn_once!(
+                    "cship.context_bar: full_at is above 100, so the bar never fills"
+                );
             }
+            pct
+        }
+        Some(_) => {
+            // 0, negative, NaN or infinite values can't scale the bar: fall back to 100
+            crate::warn_once!(
+                "cship.context_bar: full_at must be a finite number above 0; ignoring it"
+            );
             100.0
         }
         None => 100.0,
@@ -78,26 +73,28 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     let empty_char = bar_cfg
         .and_then(|c| c.empty_char.as_deref())
         .unwrap_or(DEFAULT_EMPTY_CHAR);
-    // The track takes the hidden text's display width, so with a single-column
-    // empty_char, wide characters don't make the bar grow as it fills.
-    let (filled_part, track_width) = match &slots {
-        Some(slots) => (
-            slots[..filled].concat(),
-            crate::ansi::display_width(&slots[filled..].concat()),
-        ),
-        None => (filled_char.repeat(filled), empty),
+    let (filled_part, empty_part) = match &slots {
+        Some(slots) => {
+            // The track covers the hidden text's display width, so wide characters
+            // don't make the bar change width as it fills.
+            let track_width = slots[filled..]
+                .iter()
+                .map(|s| crate::ansi::display_width(s))
+                .sum();
+            (slots[..filled].concat(), track(empty_char, track_width))
+        }
+        None => (filled_char.repeat(filled), empty_char.repeat(empty)),
     };
-    let empty_part = empty_char.repeat(track_width);
     let percentage = format!("{:.0}%", used_pct);
     let bar_content = format!("{filled_part}{empty_part} {percentage}");
 
     let symbol = bar_cfg.and_then(|c| c.symbol.as_deref());
-    let style = bar_cfg.and_then(|c| c.style.as_deref());
+    let format = bar_cfg.and_then(|c| c.format.as_deref());
 
     // Absent context: render 0% bar styled with empty_style (AC: 1, 2, 3)
     if is_empty {
         let empty_style = bar_cfg.and_then(|c| c.empty_style.as_deref());
-        if let Some(fmt) = bar_cfg.and_then(|c| c.format.as_deref()) {
+        if let Some(fmt) = format {
             return crate::format::apply_module_format(
                 fmt,
                 Some(&bar_content),
@@ -108,26 +105,27 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
         return Some(crate::ansi::apply_style(&bar_content, empty_style));
     }
 
-    // Extract threshold variables FIRST (before format check)
-    let warn_threshold = bar_cfg.and_then(|c| c.warn_threshold);
-    let warn_style = bar_cfg.and_then(|c| c.warn_style.as_deref());
-    let critical_threshold = bar_cfg.and_then(|c| c.critical_threshold);
-    let critical_style = bar_cfg.and_then(|c| c.critical_style.as_deref());
+    let threshold_style = crate::ansi::resolve_threshold_style(
+        Some(used_pct),
+        bar_cfg.and_then(|c| c.style.as_deref()),
+        bar_cfg.and_then(|c| c.warn_threshold),
+        bar_cfg.and_then(|c| c.warn_style.as_deref()),
+        bar_cfg.and_then(|c| c.critical_threshold),
+        bar_cfg.and_then(|c| c.critical_style.as_deref()),
+    );
 
     // Per-part styles paint the filled slots, the track and the percentage on their own,
-    // with the threshold style on the percentage. Nothing may wrap the painted parts: an
-    // outer style's attributes (e.g. bold) would leak into any part that doesn't reset them.
-    let filled_style = bar_cfg.and_then(|c| c.filled_style.as_deref());
-    let track_style = bar_cfg.and_then(|c| c.track_style.as_deref());
+    // with the threshold style on the percentage. An outer style's attributes (e.g. bold)
+    // would leak into any part that doesn't reset them, so `$style` is left empty and a
+    // style written in `format` is cancelled with a reset before the bar.
+    // A blank part style counts as unset, so it can't turn off the threshold style.
+    let filled_style = bar_cfg
+        .and_then(|c| c.filled_style.as_deref())
+        .filter(|s| !s.trim().is_empty());
+    let track_style = bar_cfg
+        .and_then(|c| c.track_style.as_deref())
+        .filter(|s| !s.trim().is_empty());
     if filled_style.is_some() || track_style.is_some() {
-        let threshold_style = crate::ansi::resolve_threshold_style(
-            Some(used_pct),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
         // An empty part (the text at 0%, the track at 100%) is left out rather than
         // painted as a bare pair of escape codes.
         let paint = |part: &str, style: Option<&str>| match part {
@@ -140,11 +138,16 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
             paint(&empty_part, track_style.or(threshold_style)),
             crate::ansi::apply_style(&percentage, threshold_style),
         );
-        // `$style` stays empty so it can't wrap the painted parts; `$symbol` takes the
-        // threshold style itself.
+        // `$symbol` takes the threshold style itself.
         let symbol = symbol.map(|s| paint(s, threshold_style));
-        return match bar_cfg.and_then(|c| c.format.as_deref()) {
+        return match format {
             Some(fmt) => {
+                if fmt.contains("$style") {
+                    crate::warn_once!(
+                        "cship.context_bar: $style is empty while filled_style or track_style \
+                         is set; text styled with it renders unstyled"
+                    );
+                }
                 // Start the bar from a reset, so a style written directly in `format`
                 // (e.g. `[$value](bold)`) doesn't carry into the parts.
                 let painted = crate::ansi::after_reset(&painted);
@@ -155,51 +158,65 @@ pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     }
 
     // Format string takes priority if configured (AC2)
-    if let Some(fmt) = bar_cfg.and_then(|c| c.format.as_deref()) {
-        let effective_style = crate::ansi::resolve_threshold_style(
-            Some(used_pct),
-            style,
-            warn_threshold,
-            warn_style,
-            critical_threshold,
-            critical_style,
-        );
+    if let Some(fmt) = format {
         return crate::format::apply_module_format(
             fmt,
             Some(&bar_content),
             symbol,
-            effective_style,
+            threshold_style,
         );
     }
 
     // Default behavior — unchanged (AC5): threshold-style logic
+    Some(crate::ansi::apply_style(&bar_content, threshold_style))
+}
 
-    Some(crate::ansi::apply_style_with_threshold(
-        &bar_content,
-        Some(used_pct),
-        style,
-        warn_threshold,
-        warn_style,
-        critical_threshold,
-        critical_style,
-    ))
+/// Splits `filled_text` into slots after removing control characters, which would
+/// otherwise leak escape sequences or line breaks into the status line. Returns `None`,
+/// so the bar falls back to `filled_char`, when nothing with display width is left.
+fn filled_text_slots(text: &str) -> Option<Vec<String>> {
+    let clean = crate::ansi::sanitize_control(text);
+    if clean.len() != text.len() {
+        crate::warn_once!(
+            "cship.context_bar: filled_text contains control characters; removing them"
+        );
+    }
+    let slots = text_slots(&clean);
+    if slots.is_empty() {
+        crate::warn_once!("cship.context_bar: filled_text has zero display width; ignoring it");
+        return None;
+    }
+    Some(slots)
 }
 
 /// Splits `text` into one slot per visible character: zero-width characters, such as
-/// combining accents, join the character before them. Note: emoji made of several
-/// characters (skin tones, flags, joined emoji like 👨‍👩‍👦) aren't supported: they split
-/// into several slots, so they can reveal in pieces and shift the bar's width. Splitting
-/// into grapheme clusters would need a new dependency.
+/// combining accents, join the character before them. A zero-width character with no
+/// character before it is dropped, since it would combine with whatever precedes the
+/// bar. Note: emoji made of several characters (skin tones, flags, joined emoji like
+/// 👨‍👩‍👦) aren't supported: they split into several slots, so they can reveal in pieces
+/// and shift the bar's width. Splitting into grapheme clusters would need a new dependency.
 fn text_slots(text: &str) -> Vec<String> {
     use unicode_width::UnicodeWidthChar;
     let mut slots: Vec<String> = Vec::new();
     for c in text.chars() {
-        match slots.last_mut() {
-            Some(last) if c.width() == Some(0) => last.push(c),
-            _ => slots.push(c.to_string()),
+        if c.width() == Some(0) {
+            if let Some(last) = slots.last_mut() {
+                last.push(c);
+            }
+        } else {
+            slots.push(c.to_string());
         }
     }
     slots
+}
+
+/// Fills `width` columns with `empty_char`, padding with spaces when its display width
+/// doesn't divide `width` evenly, so the track always spans exactly `width` columns.
+fn track(empty_char: &str, width: usize) -> String {
+    match crate::ansi::display_width(empty_char) {
+        0 => empty_char.repeat(width),
+        char_width => empty_char.repeat(width / char_width) + &" ".repeat(width % char_width),
+    }
 }
 
 #[cfg(test)]
@@ -635,12 +652,23 @@ mod tests {
     }
 
     #[test]
-    fn test_context_bar_non_positive_full_at_is_ignored() {
+    fn test_context_bar_invalid_full_at_is_ignored() {
+        for full_at in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let bar = ContextBarConfig {
+                full_at: Some(full_at),
+                ..Default::default()
+            };
+            assert_eq!(render_bar(50.0, bar), "█████░░░░░ 50%", "full_at {full_at}");
+        }
+    }
+
+    #[test]
+    fn test_context_bar_full_at_above_100_is_honoured() {
         let bar = ContextBarConfig {
-            full_at: Some(0.0),
+            full_at: Some(150.0),
             ..Default::default()
         };
-        assert_eq!(render_bar(50.0, bar), "█████░░░░░ 50%");
+        assert_eq!(render_bar(100.0, bar), "██████░░░░ 100%"); // 100/150 of 10 → 6
     }
 
     #[test]
@@ -808,5 +836,133 @@ mod tests {
         };
         let result = render(&Context::default(), &cfg).unwrap();
         assert_eq!(result, apply_style("░░░░░░░░░░ 0%", Some("dimmed")));
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_strips_control_chars() {
+        let bar = || ContextBarConfig {
+            filled_text: Some("\x1b[1mAB\nC".to_string()),
+            ..Default::default()
+        };
+        for pct in [0.0, 30.0, 50.0, 100.0] {
+            let result = render_bar(pct, bar());
+            assert!(
+                !result.contains(['\x1b', '\n']),
+                "control char leaked at {pct}%: {result:?}"
+            );
+        }
+        // ESC and the newline are gone; the printable remnant stays as plain text
+        assert_eq!(render_bar(100.0, bar()), "[1mABC 100%");
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_of_only_control_chars_keeps_default_bar() {
+        let bar = ContextBarConfig {
+            filled_text: Some("\n\t".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(render_bar(50.0, bar), "█████░░░░░ 50%");
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_drops_a_leading_zero_width_char() {
+        let bar = || ContextBarConfig {
+            filled_text: Some("\u{301}AB".to_string()),
+            ..Default::default()
+        };
+        // 2 slots, not 3: the first fill step shows "A"
+        assert_eq!(render_bar(0.0, bar()), "░░ 0%");
+        assert_eq!(render_bar(50.0, bar()), "A░ 50%");
+        assert_eq!(render_bar(100.0, bar()), "AB 100%");
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_keeps_its_width_with_a_wide_empty_char() {
+        let bar = |text: &str| ContextBarConfig {
+            filled_text: Some(text.to_string()),
+            empty_char: Some("⬜".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(render_bar(0.0, bar("ABCD")), "⬜⬜ 0%");
+        assert_eq!(render_bar(50.0, bar("ABCD")), "AB⬜ 50%");
+        assert_eq!(render_bar(100.0, bar("ABCD")), "ABCD 100%");
+        // An odd column left over is padded with a space
+        assert_eq!(render_bar(0.0, bar("ABC")), "⬜  0%");
+        assert_eq!(render_bar(34.0, bar("ABC")), "A⬜ 34%");
+        for pct in [0.0, 34.0, 67.0, 100.0] {
+            let bar_width = crate::ansi::display_width(&render_bar(pct, bar("ABC")))
+                - crate::ansi::display_width(&format!(" {pct:.0}%"));
+            assert_eq!(bar_width, 3, "at {pct}%");
+        }
+    }
+
+    #[test]
+    fn test_context_bar_blank_part_style_keeps_the_threshold_style() {
+        let bar = ContextBarConfig {
+            filled_style: Some("  ".to_string()),
+            critical_threshold: Some(90.0),
+            critical_style: Some("red".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            render_bar(95.0, bar),
+            apply_style("█████████░ 95%", Some("red"))
+        );
+    }
+
+    #[test]
+    fn test_context_bar_part_styles_follow_the_warn_and_critical_tiers() {
+        let bar = || ContextBarConfig {
+            track_style: Some("dimmed".to_string()),
+            warn_threshold: Some(50.0),
+            warn_style: Some("yellow".to_string()),
+            critical_threshold: Some(90.0),
+            critical_style: Some("red".to_string()),
+            ..Default::default()
+        };
+        let dimmed = |s: &str| apply_style(s, Some("dimmed"));
+        let yellow = |s: &str| apply_style(s, Some("yellow"));
+        let red = |s: &str| apply_style(s, Some("red"));
+        assert_eq!(
+            render_bar(40.0, bar()),
+            format!("████{} 40%", dimmed("░░░░░░"))
+        );
+        assert_eq!(
+            render_bar(60.0, bar()),
+            format!("{}{} {}", yellow("██████"), dimmed("░░░░"), yellow("60%"))
+        );
+        assert_eq!(
+            render_bar(95.0, bar()),
+            format!("{}{} {}", red("█████████"), dimmed("░"), red("95%"))
+        );
+    }
+
+    #[test]
+    fn test_context_bar_style_written_in_format_ends_at_the_bar() {
+        // Documented: with part styles set, a span's style stops where `$value` starts,
+        // so literal text after `$value` in the same span renders unstyled.
+        let bar = ContextBarConfig {
+            filled_style: Some("red".to_string()),
+            format: Some("[CTX $value tokens](bold)".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(bold_chars(&render_bar(50.0, bar)), "CTX ");
+    }
+
+    #[test]
+    fn test_context_bar_filled_text_without_context_data_uses_empty_style() {
+        let cfg = CshipConfig {
+            context_bar: Some(ContextBarConfig {
+                filled_text: Some("CTX".to_string()),
+                full_at: Some(95.0),
+                filled_style: Some("bold".to_string()),
+                empty_style: Some("dimmed".to_string()),
+                format: Some("[$value]($style)".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = render(&Context::default(), &cfg).unwrap();
+        assert_eq!(result, apply_style("░░░ 0%", Some("dimmed")));
     }
 }
