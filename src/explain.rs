@@ -310,8 +310,8 @@ fn error_hint_for(
             );
             if is_window_token {
                 (
-                    "usage_limits returned no data: stdin_only is set and Claude Code sent no rate_limits".into(),
-                    "With `stdin_only = true` the 5h/7d values come only from Claude Code's session JSON, which carries `rate_limits` on Pro/Max plans. Remove `stdin_only` to fall back to the usage API.".into(),
+                    "usage_limits returned no data: stdin_only is set and Claude Code's session JSON had no rate_limits value for this token".into(),
+                    "With `stdin_only = true` the 5h/7d values come only from the `rate_limits` field Claude Code sends on Pro/Max plans. It may be missing entirely, or it may omit a window your plan has no limit for. Remove `stdin_only` to fall back to the usage API.".into(),
                 )
             } else {
                 (
@@ -740,14 +740,19 @@ mod tests {
         for name in [
             "usage_limits",
             "cship.usage_limits.session",
+            "usage_limits.five_hour",
             "usage_limits.weekly",
+            "usage_limits.seven_day",
         ] {
             let (error, remediation) = error_hint_for(name, &ctx, &cfg);
-            assert!(error.contains("sent no rate_limits"), "{name}: {error}");
+            assert!(error.contains("no rate_limits value"), "{name}: {error}");
             assert!(remediation.contains("stdin_only"), "{name}: {remediation}");
         }
         for name in [
             "usage_limits.opus",
+            "usage_limits.sonnet",
+            "usage_limits.cowork",
+            "usage_limits.oauth_apps",
             "usage_limits.per_model",
             "usage_limits.extra_usage",
         ] {
