@@ -338,6 +338,12 @@ pub struct UsageLimitsConfig {
     /// multiply API calls. Increase to poll the API less often; decrease to
     /// poll more often.
     pub ttl: Option<u64>,
+    /// When `true`, render only the 5h/7d values Claude Code sends in the
+    /// session JSON (`rate_limits`): cship never reads the OAuth credential
+    /// and never calls the usage API for this module. Per-model breakdowns
+    /// and extra usage come only from the API, so their tokens and sections
+    /// render nothing in this mode. Default: `false`.
+    pub stdin_only: Option<bool>,
     /// Reserved — not yet rendered. Use `five_hour_format`, `seven_day_format`,
     /// and `separator` for per-section format control.
     pub format: Option<String>,
