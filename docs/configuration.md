@@ -201,10 +201,10 @@ Renders a visual ASCII progress bar showing context window usage.
 | `width` | `integer` | `10` | Number of characters in the bar |
 | `filled_char` | `string` | `"█"` | Character used for the filled portion. Any Unicode character is allowed. |
 | `empty_char` | `string` | `"░"` | Character used for the empty portion. Any Unicode character is allowed. |
-| `filled_text` | `string` | — | Text revealed one character per slot as the bar fills, in place of `filled_char`. The bar is as wide as the text, so `width` is ignored. Zero-width characters such as combining accents join the character before them, and the track keeps the text's display width (with a single-column `empty_char`). Text with no visible characters is ignored. Emoji made of several characters (skin tones, flags, joined emoji) aren't supported. |
-| `full_at` | `float` | `100` | % at which the bar is drawn full. Set it to your auto-compact point (e.g. `95`) to finish the bar before Claude Code auto-compacts. Thresholds still compare the real percentage. |
-| `filled_style` | `string` | — | Style for the filled portion, in place of the threshold style |
-| `track_style` | `string` | — | Style for the empty portion (the track), in place of the threshold style |
+| `filled_text` | `string` | — | Text revealed one character per slot as the bar fills, in place of `filled_char`. The bar is as wide as the text, so `width` is ignored. Zero-width characters such as combining accents join the character before them, and the track keeps the text's display width, so the bar's width stays constant as it fills. Control characters are removed, and text with zero display width is ignored. Emoji made of several characters (skin tones, flags, joined emoji) aren't supported. |
+| `full_at` | `float` | `100` | % at which the bar is drawn full. Set it to your auto-compact point (e.g. `95`) to finish the bar before Claude Code auto-compacts. Thresholds still compare the real percentage. Values that aren't a finite number above 0 are ignored; values above 100 never fill the bar. |
+| `filled_style` | `string` | — | Style for the filled portion, in place of the threshold style. Not used when no context data is available (`empty_style` covers that state). |
+| `track_style` | `string` | — | Style for the empty portion (the track), in place of the threshold style. Not used when no context data is available (`empty_style` covers that state). |
 | `warn_threshold` | `float` | — | % at which style switches to `warn_style` |
 | `warn_style` | `string` | `"yellow"` | Style at warn level |
 | `critical_threshold` | `float` | — | % at which style switches to `critical_style` |
@@ -237,7 +237,7 @@ filled_text = "CONTEXT WINDOW"
 full_at     = 95
 ```
 
-`filled_style` and `track_style` style the two parts of the bar on their own; the threshold style then covers only the percentage. Set them instead of styling `$value` in `format`: `$style` is left empty (`$symbol` takes the threshold style itself), and a style written directly in `format` doesn't reach the bar. For a bar whose text sits on a dark track:
+`filled_style` and `track_style` style the two parts of the bar on their own; the threshold style then covers only the percentage. Set them instead of styling `$value` in `format`: `$style` is left empty (`$symbol` takes the threshold style itself), and a style written directly in `format` stops where `$value` starts, so it reaches neither the bar nor any text after `$value` in the same span (put that text in a span of its own). A blank value counts as unset. When no context data is available, neither field applies: the whole bar takes `empty_style`, and `$style` and `format` styles work as usual. For a bar whose text sits on a dark track:
 
 ```toml
 [cship.context_bar]

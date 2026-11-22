@@ -222,4 +222,4 @@ filled_style = "bold"
 track_style  = "fg:#929292"
 ```
 
-`filled_style` and `track_style` style the text and the track on their own, and the threshold style (`style`, `warn_style`, `critical_style`) then covers only the percentage. Style the bar through these fields rather than in a `format` string: with either set, `$style` is left empty (`$symbol` takes the threshold style itself), and a style written directly in `format` (e.g. `[$value](fg:#FFFFFF)`) doesn't reach the bar.
+`filled_style` and `track_style` style the text and the track on their own, and the threshold style (`style`, `warn_style`, `critical_style`) then covers only the percentage. Style the bar through these fields rather than in a `format` string: with either set, `$style` is left empty (`$symbol` takes the threshold style itself), and a style written directly in `format` (e.g. `[$value tokens](fg:#FFFFFF)`) stops where `$value` starts, so it reaches neither the bar nor ` tokens`. Put text that follows the bar in a span of its own: `$value [tokens](fg:#FFFFFF)`. When no context data is available, neither field applies and the whole bar takes `empty_style`.

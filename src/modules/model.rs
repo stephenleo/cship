@@ -32,14 +32,10 @@ fn resolve_model_style<'a>(
                     .or_else(|| {
                         if map.keys().any(|f| f.is_empty()) {
                             // Empty key matches every model — ignore it, warn once
-                            static EMPTY_KEY_WARNED: std::sync::atomic::AtomicBool =
-                                std::sync::atomic::AtomicBool::new(false);
-                            if !EMPTY_KEY_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                tracing::warn!(
-                                    "cship.model: family_style has an empty key — ignoring it \
-                                     (an empty key would match every model)"
-                                );
-                            }
+                            crate::warn_once!(
+                                "cship.model: family_style has an empty key — ignoring it \
+                                 (an empty key would match every model)"
+                            );
                         }
                         None
                     })
