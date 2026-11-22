@@ -10,47 +10,128 @@
 //! `resources/read` never returns a JSON-RPC error for render problems. Rendering
 //! runs on a worker thread with a deadline; if it misses the deadline (for
 //! example a cold Starship passthrough), the last good tree is returned instead.
+//! At most one render runs at a time. One that is still running after
+//! [`STUCK_AFTER`] (a hung subprocess) is abandoned so the footer can recover.
 //! A fresh thread per render also keeps per-render thread-local memos
 //! (`modules::usage_limits`) from going stale in this long-lived process.
 
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
 use super::snapshot::StatuslineState;
+use crate::context::Context;
 
-pub const RESOURCE_URI: &str = "ui://cship/footer";
+pub(crate) const RESOURCE_URI: &str = "ui://cship/footer";
 const TOOL_NAME: &str = "statusline";
 const STATE_META_KEY: &str = "com.openai/codex-statusline-state";
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 /// Leaves headroom under Codex's 1 second read budget for I/O and JSON work.
 const RENDER_DEADLINE: Duration = Duration::from_millis(800);
+/// A render still running after this long is treated as hung and abandoned.
+const STUCK_AFTER: Duration = Duration::from_secs(10);
 
-pub struct Server {
+/// Renders a context to a UI tree. Injectable so tests can simulate slow,
+/// hung or panicking renders.
+type RenderFn = dyn Fn(&Context, Option<&Path>) -> Value + Send + Sync;
+
+/// Tracks the render that currently owns the worker slot.
+#[derive(Default)]
+struct Slot {
+    /// Bumped for every render started. A worker only clears the slot or
+    /// publishes its tree while its generation is still current, so an
+    /// abandoned worker that finishes late cannot disturb a newer one.
+    generation: u64,
+    /// When the current render started; `None` when no render is running.
+    started: Option<Instant>,
+}
+
+struct Shared {
+    slot: Mutex<Slot>,
+    last_good: Mutex<Value>,
+}
+
+impl Shared {
+    fn last_tree(&self) -> Value {
+        self.last_good
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or(Value::Null)
+    }
+}
+
+/// Clears the slot when the worker ends, including by panic (test and debug
+/// builds unwind; release builds abort the whole process on panic).
+struct SlotGuard {
+    shared: Arc<Shared>,
+    generation: u64,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.shared.slot.lock()
+            && slot.generation == self.generation
+        {
+            slot.started = None;
+        }
+    }
+}
+
+pub(crate) struct Server {
     config_path: Option<PathBuf>,
-    last_good: Arc<Mutex<Value>>,
-    in_flight: Arc<AtomicBool>,
+    shared: Arc<Shared>,
+    renderer: Arc<RenderFn>,
     deadline: Duration,
+    stuck_after: Duration,
 }
 
 impl Server {
-    pub fn new(config_path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(config_path: Option<PathBuf>) -> Self {
+        Self::with_renderer(
+            config_path,
+            Arc::new(render_tree),
+            RENDER_DEADLINE,
+            STUCK_AFTER,
+        )
+    }
+
+    fn with_renderer(
+        config_path: Option<PathBuf>,
+        renderer: Arc<RenderFn>,
+        deadline: Duration,
+        stuck_after: Duration,
+    ) -> Self {
         Self {
             config_path,
-            last_good: Arc::new(Mutex::new(Value::Null)),
-            in_flight: Arc::new(AtomicBool::new(false)),
-            deadline: RENDER_DEADLINE,
+            shared: Arc::new(Shared {
+                slot: Mutex::new(Slot::default()),
+                last_good: Mutex::new(Value::Null),
+            }),
+            renderer,
+            deadline,
+            stuck_after,
         }
     }
 
     /// Serve requests from `reader` until EOF, writing one JSON line per response.
-    pub fn run(&self, reader: impl BufRead, mut writer: impl Write) -> std::io::Result<()> {
-        for line in reader.lines() {
-            let line = line?;
+    /// Invalid UTF-8 is replaced rather than ending the server; the JSON parser
+    /// then rejects the line with a parse error.
+    pub(crate) fn run(
+        &self,
+        mut reader: impl BufRead,
+        mut writer: impl Write,
+    ) -> std::io::Result<()> {
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            if reader.read_until(b'\n', &mut buf)? == 0 {
+                return Ok(());
+            }
+            let line = String::from_utf8_lossy(&buf);
             if line.trim().is_empty() {
                 continue;
             }
@@ -59,20 +140,24 @@ impl Server {
                 writer.flush()?;
             }
         }
-        Ok(())
     }
 
     /// Handle one JSON-RPC message. Returns `None` for notifications.
-    pub fn handle_line(&self, line: &str) -> Option<Value> {
+    pub(crate) fn handle_line(&self, line: &str) -> Option<Value> {
         let request: Value = match serde_json::from_str(line) {
             Ok(v) => v,
-            Err(_) => return Some(error(Value::Null, -32700, "Parse error")),
+            Err(e) => {
+                tracing::warn!("cship codex: malformed JSON-RPC message: {e}");
+                return Some(error(Value::Null, -32700, "Parse error"));
+            }
         };
+        let id = request.get("id").cloned();
         let Some(method) = request.get("method").and_then(Value::as_str) else {
-            return Some(error(Value::Null, -32600, "Invalid request"));
+            tracing::warn!("cship codex: JSON-RPC message without a method");
+            return Some(error(id.unwrap_or(Value::Null), -32600, "Invalid request"));
         };
         // Notifications (e.g. `notifications/initialized`) carry no id and get no reply.
-        let id = request.get("id")?.clone();
+        let id = id?;
         let params = request.get("params").cloned().unwrap_or(Value::Null);
 
         Some(match self.respond(method, &params) {
@@ -126,59 +211,89 @@ impl Server {
     /// Render the snapshot in `params._meta` to a UI tree, within the deadline.
     fn render(&self, params: &Value) -> Value {
         let state = match params.get("_meta").and_then(|m| m.get(STATE_META_KEY)) {
-            Some(raw) => match serde_json::from_value::<StatuslineState>(raw.clone()) {
-                Ok(state) => state,
-                Err(e) => {
-                    tracing::warn!("cship codex: could not parse statusline snapshot: {e}");
-                    StatuslineState::default()
-                }
-            },
+            Some(raw) => StatuslineState::from_value(raw),
             None => {
                 tracing::warn!("cship codex: resources/read carried no statusline snapshot");
                 StatuslineState::default()
             }
         };
 
-        // A previous render is still running (it overran its deadline): don't pile
-        // up workers, show the last good tree.
-        if self.in_flight.swap(true, Ordering::SeqCst) {
-            return self.last_tree();
-        }
+        let generation = {
+            let Ok(mut slot) = self.shared.slot.lock() else {
+                return self.shared.last_tree();
+            };
+            if let Some(started) = slot.started {
+                if started.elapsed() < self.stuck_after {
+                    tracing::warn!(
+                        "cship codex: previous render still running; showing last output"
+                    );
+                    return self.shared.last_tree();
+                }
+                tracing::warn!(
+                    "cship codex: render running for over {}s; abandoning it and starting a new one",
+                    self.stuck_after.as_secs()
+                );
+            }
+            slot.generation += 1;
+            slot.started = Some(Instant::now());
+            slot.generation
+        };
 
         let ctx = state.into_context();
         let config_path = self.config_path.clone();
-        let last_good = Arc::clone(&self.last_good);
-        let in_flight = Arc::clone(&self.in_flight);
+        let renderer = Arc::clone(&self.renderer);
+        let guard = SlotGuard {
+            shared: Arc::clone(&self.shared),
+            generation,
+        };
+        // Keep the server's log routing (see `super::log`) on the worker thread.
+        let dispatch = tracing::dispatcher::get_default(|d| d.clone());
         let (tx, rx) = mpsc::channel();
 
-        std::thread::spawn(move || {
-            let tree = render_tree(&ctx, config_path.as_deref());
-            if let Ok(mut slot) = last_good.lock() {
-                *slot = tree.clone();
-            }
-            in_flight.store(false, Ordering::SeqCst);
-            let _ = tx.send(tree);
-        });
+        let spawned = std::thread::Builder::new()
+            .name("cship-codex-render".into())
+            .spawn(move || {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let tree = renderer(&ctx, config_path.as_deref());
+                    if let Ok(slot) = guard.shared.slot.lock()
+                        && slot.generation == guard.generation
+                        && let Ok(mut last) = guard.shared.last_good.lock()
+                    {
+                        *last = tree.clone();
+                    }
+                    drop(guard);
+                    let _ = tx.send(tree);
+                })
+            });
+        if let Err(e) = spawned {
+            // The closure (and its guard) was dropped, which already freed the slot.
+            tracing::warn!("cship codex: could not start render thread: {e}");
+            return self.shared.last_tree();
+        }
 
         match rx.recv_timeout(self.deadline) {
             Ok(tree) => tree,
-            Err(_) => {
-                tracing::warn!("cship codex: render exceeded deadline; reusing last output");
-                self.last_tree()
+            Err(RecvTimeoutError::Timeout) => {
+                let last = self.shared.last_tree();
+                if last.is_null() {
+                    tracing::warn!(
+                        "cship codex: render exceeded deadline; footer stays empty until one finishes"
+                    );
+                } else {
+                    tracing::warn!("cship codex: render exceeded deadline; reusing last output");
+                }
+                last
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                tracing::warn!("cship codex: render ended without a result; reusing last output");
+                self.shared.last_tree()
             }
         }
-    }
-
-    fn last_tree(&self) -> Value {
-        self.last_good
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or(Value::Null)
     }
 }
 
 /// Load config for the thread's workspace and render it to a UI tree.
-fn render_tree(ctx: &crate::context::Context, config_path: Option<&std::path::Path>) -> Value {
+fn render_tree(ctx: &Context, config_path: Option<&Path>) -> Value {
     let workspace_dir = ctx
         .workspace
         .as_ref()
@@ -329,12 +444,136 @@ mod tests {
         assert_eq!(reply["error"]["code"], json!(-32602));
     }
 
+    /// A server whose renderer is `f`, with short deadlines for fast tests.
+    fn server_with(f: impl Fn(&Context, Option<&Path>) -> Value + Send + Sync + 'static) -> Server {
+        Server::with_renderer(
+            None,
+            Arc::new(f),
+            Duration::from_millis(100),
+            Duration::from_millis(400),
+        )
+    }
+
+    fn wait_until_idle(s: &Server) {
+        for _ in 0..200 {
+            if s.shared.slot.lock().unwrap().started.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("render never finished");
+    }
+
     #[test]
-    fn test_render_in_flight_returns_last_good_tree() {
+    fn test_fast_render_returns_tree_and_records_last_good() {
+        let s = server_with(|_, _| json!("fresh"));
+        assert_eq!(s.render(&json!({})), json!("fresh"));
+        wait_until_idle(&s);
+        assert_eq!(s.shared.last_tree(), json!("fresh"));
+    }
+
+    #[test]
+    fn test_cold_start_deadline_miss_returns_null() {
+        let s = server_with(|_, _| {
+            std::thread::sleep(Duration::from_millis(250));
+            json!("late")
+        });
+        assert_eq!(s.render(&json!({})), Value::Null, "nothing rendered yet");
+        wait_until_idle(&s);
+        assert_eq!(s.shared.last_tree(), json!("late"), "late result is kept");
+    }
+
+    #[test]
+    fn test_deadline_miss_reuses_last_good_tree() {
+        let slow = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&slow);
+        let s = server_with(move |_, _| {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(250));
+                json!("slow")
+            } else {
+                json!("fast")
+            }
+        });
+        assert_eq!(s.render(&json!({})), json!("fast"));
+        wait_until_idle(&s);
+        slow.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(s.render(&json!({})), json!("fast"));
+    }
+
+    #[test]
+    fn test_render_in_flight_returns_last_good_without_new_worker() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let s = server_with(move |_, _| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+            json!("done")
+        });
+        *s.shared.last_good.lock().unwrap() = json!("previous");
+        assert_eq!(s.render(&json!({})), json!("previous")); // misses deadline
+        assert_eq!(s.render(&json!({})), json!("previous")); // still in flight
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_hung_render_is_abandoned_and_cannot_overwrite_newer_tree() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let s = server_with(move |_, _| {
+            if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                std::thread::sleep(Duration::from_millis(900)); // "hung"
+                json!("stale")
+            } else {
+                json!("recovered")
+            }
+        });
+        assert_eq!(s.render(&json!({})), Value::Null);
+        std::thread::sleep(Duration::from_millis(450)); // past stuck_after
+        assert_eq!(s.render(&json!({})), json!("recovered"));
+        std::thread::sleep(Duration::from_millis(600)); // hung worker finishes
+        assert_eq!(s.shared.last_tree(), json!("recovered"));
+        assert!(s.shared.slot.lock().unwrap().started.is_none());
+    }
+
+    #[test]
+    fn test_panicking_render_frees_slot() {
+        let s = server_with(|ctx, _| {
+            if ctx.session_id.as_deref() == Some("boom") {
+                panic!("simulated module panic");
+            }
+            json!("ok")
+        });
+        let boom = json!({"_meta": {STATE_META_KEY: {"thread": {"id": "boom"}}}});
+        assert_eq!(s.render(&boom), Value::Null);
+        wait_until_idle(&s);
+        assert_eq!(s.render(&json!({})), json!("ok"), "next read renders again");
+    }
+
+    #[test]
+    fn test_request_without_method_echoes_id() {
         let s = Server::new(None);
-        *s.last_good.lock().unwrap() = json!("previous");
-        s.in_flight.store(true, Ordering::SeqCst);
-        assert_eq!(s.render(&json!({})), json!("previous"));
+        let reply = s.handle_line(r#"{"jsonrpc":"2.0","id":9}"#).unwrap();
+        assert_eq!(reply["id"], json!(9));
+        assert_eq!(reply["error"]["code"], json!(-32600));
+    }
+
+    #[test]
+    fn test_invalid_utf8_line_does_not_stop_server() {
+        let s = Server::new(None);
+        let mut input = b"\xff\xfe garbage\n".to_vec();
+        input.extend_from_slice(br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#);
+        input.push(b'\n');
+        let mut out = Vec::new();
+        s.run(input.as_slice(), &mut out).unwrap();
+        let lines: Vec<Value> = std::str::from_utf8(&out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["error"]["code"], json!(-32700));
+        assert_eq!(lines[1]["result"], json!({}));
     }
 
     #[test]

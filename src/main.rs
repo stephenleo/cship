@@ -25,6 +25,7 @@ enum Commands {
     /// Print the JSON schema for the `[cship]` config section (editor autocomplete).
     ConfigSchema,
     /// Serve the statusline to Codex CLI as a stdio MCP server (experimental).
+    ///
     /// Register with: codex mcp add cship -- cship codex-mcp
     CodexMcp,
 }

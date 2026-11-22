@@ -99,7 +99,7 @@ fn resolve_profile(ctx: &Context, account_cfg: Option<&AccountConfig>) -> Option
 
     // The keychain token belongs to Claude Code; under Codex it would describe the
     // wrong account, so only the env-var contract above applies there.
-    if ctx.host == crate::context::Host::Codex {
+    if !ctx.host.has_claude_credentials() {
         tracing::debug!("cship.account: OAuth lookup skipped under Codex");
         return None;
     }
@@ -317,6 +317,45 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(render(&ctx, &cfg), None);
+    }
+
+    #[test]
+    fn test_codex_host_skips_oauth_lookup() {
+        // Without the guard this would also return None in CI (no credential),
+        // so assert on the branch taken, via its debug line.
+        #[derive(Clone, Default)]
+        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let capture = Capture::default();
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+
+        let ctx = Context {
+            host: crate::context::Host::Codex,
+            transcript_path: Some("/tmp/cship-test-codex/transcript.jsonl".into()),
+            ..Default::default()
+        };
+        let out = tracing::subscriber::with_default(subscriber, || resolve_profile(&ctx, None));
+
+        let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        // A valid CSHIP_ACCOUNT would still win; the env var is never valid in tests.
+        assert!(out.is_none());
+        assert!(
+            logs.contains("OAuth lookup skipped under Codex"),
+            "Codex branch not taken: {logs}"
+        );
+        assert!(!logs.contains("credential retrieval failed"), "{logs}");
     }
 
     #[test]

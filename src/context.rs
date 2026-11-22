@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::io::Read;
 
 /// Typed representation of the complete Claude Code session JSON payload.
+/// Also built from the Codex statusline snapshot by `crate::codex` (see `host`).
 /// All fields are `Option<T>` because Claude Code may omit any field depending on
 /// session state, mode flags, and version. `deny_unknown_fields` is intentionally
 /// NOT used — future Claude Code versions may add fields.
@@ -43,6 +44,15 @@ pub enum Host {
     ClaudeCode,
     /// Codex CLI: snapshot delivered over MCP (`cship codex-mcp`).
     Codex,
+}
+
+impl Host {
+    /// Whether the Claude Code login (keychain / credentials file) belongs to the
+    /// account this session runs as. Under Codex it describes a different
+    /// account, so modules skip the Anthropic OAuth lookups.
+    pub fn has_claude_credentials(self) -> bool {
+        self == Host::ClaudeCode
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]

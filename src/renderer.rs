@@ -91,13 +91,15 @@ fn parse_line(line: &str) -> Vec<Token> {
 
 /// A rendered line segment: either styled (ANSI) text or a `$fill` placeholder
 /// whose width is computed once all text segments are known.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Piece {
     Text(String),
     Fill,
 }
 
-/// Render one format line into pieces, before `$fill` is expanded. Hosts that lay
-/// out the line themselves (Codex) consume this directly.
+/// Render one format line into pieces, before `$fill` is expanded. Shared by
+/// [`render`] and by [`render_pieces`], which hosts that lay out lines themselves
+/// (Codex) use.
 fn line_pieces(line: &str, ctx: &Context, cfg: &CshipConfig) -> Vec<Piece> {
     let fill_disabled = cfg.fill.as_ref().and_then(|f| f.disabled).unwrap_or(false);
 
@@ -464,6 +466,76 @@ mod tests {
         let lines = cfg.lines.as_deref().unwrap_or(&[]);
         let result = render(lines, &ctx, &cfg);
         assert_eq!(result, "from_format");
+    }
+
+    fn texts(pieces: &[Piece]) -> Vec<String> {
+        pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Text(s) => s.clone(),
+                Piece::Fill => "<fill>".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_render_pieces_format_line_break_gives_one_entry_per_line() {
+        let cfg = CshipConfig {
+            format: Some("a$line_breakb $fill c".to_string()),
+            ..Default::default()
+        };
+        let lines = render_pieces(&[], &Context::default(), &cfg);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(texts(&lines[0]), vec!["a"]);
+        assert_eq!(texts(&lines[1]), vec!["b ", "<fill>", " c"]);
+    }
+
+    #[test]
+    fn test_render_pieces_format_takes_priority_over_lines() {
+        let cfg = CshipConfig {
+            format: Some("from_format".to_string()),
+            lines: Some(vec!["from_lines".to_string()]),
+            ..Default::default()
+        };
+        let lines = render_pieces(cfg.lines.as_deref().unwrap(), &Context::default(), &cfg);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(texts(&lines[0]), vec!["from_format"]);
+    }
+
+    #[test]
+    fn test_render_pieces_drops_lines_without_visible_text() {
+        // `render()` keeps a line made only of escape codes (an empty styled span)
+        // because its string is non-empty; `render_pieces` drops it because Codex
+        // would show an empty line. A line holding only `$fill` is dropped by both.
+        let cfg = CshipConfig::default();
+        let lines = vec![
+            "[](bold red)".to_string(),
+            "$fill".to_string(),
+            "visible".to_string(),
+        ];
+        let pieces = render_pieces(&lines, &Context::default(), &cfg);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(texts(&pieces[0]), vec!["visible"]);
+
+        let rendered = render(&lines, &Context::default(), &cfg);
+        assert_eq!(
+            rendered.lines().count(),
+            2,
+            "render keeps the escape-only line"
+        );
+    }
+
+    #[test]
+    fn test_render_pieces_disabled_fill_is_omitted() {
+        let cfg = CshipConfig {
+            fill: Some(crate::config::FillConfig {
+                disabled: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pieces = render_pieces(&["a$fill".to_string()], &Context::default(), &cfg);
+        assert_eq!(pieces, vec![vec![Piece::Text("a".into())]]);
     }
 
     #[test]

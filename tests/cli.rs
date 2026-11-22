@@ -1257,5 +1257,9 @@ fn test_codex_mcp_handshake_and_read_render_ui_tree() {
     );
     let rendered = tree.to_string();
     assert!(!rendered.contains('\u{1b}'), "no ANSI escapes in UI tree");
-    assert!(rendered.contains("25"), "context percentage rendered");
+    // `$fill` renders as one space, followed by the context percentage.
+    assert_eq!(
+        tree["children"][1], " 25",
+        "context percentage rendered after the fill: {rendered}"
+    );
 }

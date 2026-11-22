@@ -164,9 +164,10 @@ fn unknown_result(pct: f64) -> MergedUsageWindow {
 }
 
 thread_local! {
-    /// Per-render-cycle memo for `resolve_data`. cship invocations are short-lived
-    /// (one process per prompt render), so a thread-local cache effectively means
-    /// "compute once per render cycle." When a status bar references multiple
+    /// Per-render-cycle memo for `resolve_data`. Each render runs on a thread of
+    /// its own: under Claude Code one process per prompt render, and under
+    /// `cship codex-mcp` a fresh worker thread per read. So a thread-local cache
+    /// effectively means "compute once per render cycle." When a status bar references multiple
     /// sub-tokens ($cship.usage_limits.opus, .sonnet, etc.), each token invokes
     /// `render` independently; without this cache each call would pay the full
     /// OAuth/cache lookup cost.
@@ -277,10 +278,11 @@ pub(crate) fn stdin_only(ul_cfg: Option<&UsageLimitsConfig>) -> bool {
 }
 
 /// Stdin `rate_limits` always provides the freshest 5h/7d values (sent every render
-/// by Claude Code). Cache/OAuth provide per-model + extra usage data.
+/// by Claude Code; under Codex, `ctx.rate_limits` is filled from the Codex
+/// snapshot instead). Cache/OAuth provide per-model + extra usage data.
 ///
-/// With `stdin_only = true` the OAuth path is skipped (no credential read, no
-/// fetch). Otherwise a token failure is non-fatal: stdin data is still usable.
+/// With `stdin_only = true`, or under Codex, the OAuth path is skipped (no
+/// credential read, no fetch). Otherwise a token failure is non-fatal: stdin data is still usable.
 fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimitsData> {
     let ul_cfg = cfg.usage_limits.as_ref();
 
@@ -297,7 +299,7 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
     let full_data = if stdin_only(ul_cfg) {
         tracing::debug!("cship.usage_limits: stdin_only set; skipping OAuth usage API");
         None
-    } else if ctx.host == crate::context::Host::Codex {
+    } else if !ctx.host.has_claude_credentials() {
         tracing::debug!("cship.usage_limits: Codex host; skipping OAuth usage API");
         None
     } else {
@@ -569,8 +571,8 @@ pub fn render_extra_usage(ctx: &Context, cfg: &CshipConfig) -> Option<String> {
     Some(apply_threshold(&content, &data, cfg))
 }
 
-/// Extract usage limits from the `rate_limits` field Claude Code sends via stdin.
-/// This avoids the OAuth API call entirely when the data is available.
+/// Extract usage limits from `ctx.rate_limits`: the field Claude Code sends via
+/// stdin, or the Codex snapshot's limits under `cship codex-mcp`. This avoids the OAuth API call entirely when the data is available.
 /// `resets_at` is a Unix epoch in the stdin payload; stored directly to avoid a
 /// round-trip through ISO 8601 formatting and re-parsing.
 ///

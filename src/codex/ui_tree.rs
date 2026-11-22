@@ -24,6 +24,8 @@ use crate::renderer::Piece;
 const MAX_NODES: usize = 256;
 const MAX_JSON_BYTES: usize = 64 * 1024;
 const MAX_TEXT_BYTES: usize = 16 * 1024;
+/// Maximum depth, counting the root as 0.
+const MAX_DEPTH: usize = 16;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Style {
@@ -58,7 +60,7 @@ pub fn build(lines: &[Vec<Piece>]) -> Value {
         }
         for piece in pieces {
             match piece {
-                Piece::Text(s) => append_runs(&mut runs, parse_ansi(s)),
+                Piece::Text(s) => append_runs(&mut runs, parse_ansi(s.trim_end_matches('\n'))),
                 Piece::Fill => append_runs(&mut runs, vec![plain(" ")]),
             }
         }
@@ -135,7 +137,7 @@ fn parse_ansi(s: &str) -> Vec<Run> {
 
     while let Some(c) = chars.next() {
         if c != '\x1b' {
-            if !c.is_control() {
+            if c == '\n' || !c.is_control() {
                 text.push(c);
             }
             continue;
@@ -177,51 +179,101 @@ fn parse_ansi(s: &str) -> Vec<Run> {
     runs
 }
 
+/// Apply one SGR sequence's parameters. Handles both the legacy semicolon form
+/// (`38;2;r;g;b`) and ISO 8613-6 colon sub-parameters (`38:2::r:g:b`, `4:3`).
+/// A parameter that is not a number is ignored rather than treated as a reset.
 fn apply_sgr(style: &mut Style, params: &str) {
-    let codes: Vec<u16> = if params.is_empty() {
-        vec![0]
-    } else {
-        params
-            .split([';', ':'])
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
-    };
+    let groups: Vec<&str> = params.split(';').collect();
     let mut i = 0;
-    while i < codes.len() {
-        match codes[i] {
-            0 => *style = Style::default(),
-            1 => style.bold = true,
-            22 => style.bold = false,
-            3 => style.italic = true,
-            23 => style.italic = false,
-            4 => style.underline = true,
-            24 => style.underline = false,
-            n @ 30..=37 => style.color = Some(indexed_color((n - 30) as u8)),
-            n @ 90..=97 => style.color = Some(indexed_color((n - 90 + 8) as u8)),
-            39 => style.color = None,
-            38 | 48 => {
-                let is_fg = codes[i] == 38;
-                let (color, used) = extended_color(&codes[i + 1..]);
-                if is_fg && let Some(c) = color {
-                    style.color = Some(c);
+    while i < groups.len() {
+        let group = groups[i];
+        i += 1;
+        if group.contains(':') {
+            apply_colon_group(style, group);
+            continue;
+        }
+        // An empty parameter means 0 (so a bare `ESC[m` resets).
+        let code = if group.is_empty() {
+            Some(0)
+        } else {
+            group.parse::<u16>().ok()
+        };
+        match code {
+            Some(c @ (38 | 48)) => {
+                let args: Vec<Option<u16>> =
+                    groups[i..].iter().take(4).map(|a| a.parse().ok()).collect();
+                let (color, used) = match args.as_slice() {
+                    [Some(5), Some(n), ..] => (Some(indexed_color(clamp_u8(*n))), 2),
+                    [Some(2), Some(r), Some(g), Some(b), ..] => {
+                        (Some(hex(clamp_u8(*r), clamp_u8(*g), clamp_u8(*b))), 4)
+                    }
+                    _ => (None, 0),
+                };
+                if c == 38
+                    && let Some(color) = color
+                {
+                    style.color = Some(color);
                 }
                 i += used;
             }
-            // Background, dim, blink, reverse, etc. have no Codex text equivalent.
-            _ => {}
+            Some(c) => apply_code(style, c),
+            None => {}
         }
-        i += 1;
     }
 }
 
-/// Parse the arguments after 38/48. Returns the color and how many codes it used.
-fn extended_color(args: &[u16]) -> (Option<String>, usize) {
-    match args {
-        [5, n, ..] => (Some(indexed_color((*n).min(255) as u8)), 2),
-        [2, r, g, b, ..] => (Some(hex(*r as u8, *g as u8, *b as u8)), 4),
-        [5] | [2, ..] => (None, args.len()),
-        _ => (None, 0),
+/// A colon group carries its own sub-parameters, e.g. `38:5:208`, `38:2::r:g:b`
+/// (empty colour-space id) or `4:3` (curly underline).
+fn apply_colon_group(style: &mut Style, group: &str) {
+    let parts: Vec<Option<u16>> = group.split(':').map(|p| p.parse().ok()).collect();
+    let sub = &parts[1..];
+    match parts[0] {
+        Some(38) => {
+            let color = match sub {
+                [Some(5), Some(n), ..] => Some(indexed_color(clamp_u8(*n))),
+                [Some(2), rest @ ..] => {
+                    // `38:2:<colour-space>:r:g:b` or the shorter `38:2:r:g:b`.
+                    let rgb = if rest.len() >= 4 { &rest[1..4] } else { rest };
+                    match rgb {
+                        [Some(r), Some(g), Some(b)] => {
+                            Some(hex(clamp_u8(*r), clamp_u8(*g), clamp_u8(*b)))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(color) = color {
+                style.color = Some(color);
+            }
+        }
+        // Underline style: `4:0` turns it off, any other style turns it on.
+        Some(4) => style.underline = sub.first().copied().flatten() != Some(0),
+        Some(c) => apply_code(style, c),
+        None => {}
     }
+}
+
+/// Apply a single SGR code that takes no arguments.
+fn apply_code(style: &mut Style, code: u16) {
+    match code {
+        0 => *style = Style::default(),
+        1 => style.bold = true,
+        22 => style.bold = false,
+        3 => style.italic = true,
+        23 => style.italic = false,
+        4 => style.underline = true,
+        24 => style.underline = false,
+        n @ 30..=37 => style.color = Some(indexed_color((n - 30) as u8)),
+        n @ 90..=97 => style.color = Some(indexed_color((n - 90 + 8) as u8)),
+        39 => style.color = None,
+        // Background, dim, blink, reverse, etc. have no Codex text equivalent.
+        _ => {}
+    }
+}
+
+fn clamp_u8(n: u16) -> u8 {
+    n.min(255) as u8
 }
 
 /// Map an xterm-256 index to a Codex color. The 16 base colors use ANSI names so
@@ -258,7 +310,7 @@ fn within_limits(tree: &Value) -> bool {
     let (nodes, text_bytes, depth) = measure(tree, 0);
     nodes <= MAX_NODES
         && text_bytes <= MAX_TEXT_BYTES
-        && depth <= 16
+        && depth <= MAX_DEPTH
         && serde_json::to_string(tree).is_ok_and(|s| s.len() <= MAX_JSON_BYTES)
 }
 
@@ -390,6 +442,49 @@ mod tests {
         let s = "a\x1b]0;title\x07b\x1b[2Kc\x07d";
         let tree = build(&[vec![text(s)]]);
         assert_eq!(children(&tree), &json!(["abcd"]));
+    }
+
+    #[test]
+    fn test_colon_truecolor_with_empty_colour_space() {
+        let tree = build(&[vec![text("\x1b[38:2::255:136:0mx\x1b[0m")]]);
+        assert_eq!(children(&tree)[0]["props"], json!({"color": "#ff8800"}));
+    }
+
+    #[test]
+    fn test_colon_truecolor_without_colour_space_and_256() {
+        let tree = build(&[vec![
+            text("\x1b[38:2:1:2:3ma"),
+            text("\x1b[38:5:196mb\x1b[0m"),
+        ]]);
+        assert_eq!(children(&tree)[0]["props"]["color"], json!("#010203"));
+        assert_eq!(children(&tree)[1]["props"]["color"], json!("#ff0000"));
+    }
+
+    #[test]
+    fn test_colon_underline_style_is_underline_not_italic() {
+        let tree = build(&[vec![text("\x1b[4:3mcurly\x1b[4:0m plain")]]);
+        assert_eq!(
+            children(&tree),
+            &json!([
+                {"type":"text","props":{"underline":true},"children":["curly"]},
+                " plain"
+            ])
+        );
+    }
+
+    #[test]
+    fn test_malformed_parameter_does_not_reset_style() {
+        let tree = build(&[vec![text("\x1b[1mbold\x1b[99999;31mstill bold\x1b[0m")]]);
+        assert_eq!(
+            children(&tree)[1]["props"],
+            json!({"color": "red", "weight": "bold"})
+        );
+    }
+
+    #[test]
+    fn test_embedded_newline_is_kept_and_trailing_newline_dropped() {
+        let tree = build(&[vec![text("one\ntwo\n")], vec![text("three")]]);
+        assert_eq!(children(&tree), &json!(["one\ntwo\nthree"]));
     }
 
     #[test]
