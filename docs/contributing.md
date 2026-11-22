@@ -40,7 +40,7 @@ This project is built with [BMAD](https://github.com/bmad-code-org/BMAD-METHOD).
 - Create `src/modules/{name}.rs` and update `src/modules/mod.rs`. If the module needs config fields, also add a struct to `src/config.rs`.
 - Module signature must be exactly: `pub fn render(ctx: &Context, cfg: &CshipConfig) -> Option<String>`
 - All config structs go in `src/config.rs` with `#[derive(Debug, Deserialize, Default)]` and `pub Option<T>` fields.
-- Absent data → explicit `match` + `tracing::warn!` + `None`. Disabled flag → silent `None`. (Exception: `context_bar` renders an empty bar with `tracing::debug!` when context data is absent — this is intentional UX. Likewise `usage_limits` hides the 5h window with `tracing::debug!` when the account has none, since that is a normal plan state.)
+- Absent data → explicit `match` + `tracing::warn!` + `None`. Disabled flag → silent `None`. (Exception: `context_bar` renders an empty bar with `tracing::debug!` when context data is absent — this is intentional UX. Likewise `usage_limits` hides the 5h or 7d window with `tracing::debug!` when the account has none, since that is a normal plan state.)
 
 ## Updating documentation
 

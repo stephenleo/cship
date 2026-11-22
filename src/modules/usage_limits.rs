@@ -124,6 +124,7 @@ fn merge_source_windows(
     stdin: Option<&UsageLimitsData>,
     api: Option<&UsageLimitsData>,
     window: fn(&UsageLimitsData) -> Option<UsageWindow<'_>>,
+    label: &str,
     now: u64,
 ) -> Option<MergedUsageWindow> {
     let stdin_w = stdin.and_then(window);
@@ -132,10 +133,12 @@ fn merge_source_windows(
         .filter(|w| stdin.is_none() || stdin_w.is_some() || w.has_reading());
     if stdin.is_some() && stdin_w.is_none() && api_w.is_some() {
         tracing::debug!(
-            "cship.usage_limits: window absent from stdin rate_limits; using the usage API's"
+            "cship.usage_limits: {label} window absent from stdin rate_limits; using the usage API's"
         );
     }
     if stdin_w.is_none() && api_w.is_none() {
+        // Normal state on accounts without that limit, hence debug rather than warn.
+        tracing::debug!("cship.usage_limits: {label} window absent from every source; hiding it");
         return None;
     }
     let snapshot =
@@ -283,12 +286,14 @@ fn resolve_data_uncached(ctx: &Context, cfg: &CshipConfig) -> Option<UsageLimits
                 stdin.as_ref(),
                 full.as_ref(),
                 UsageLimitsData::five_hour,
+                "5h",
                 now,
             );
             let seven_d = merge_source_windows(
                 stdin.as_ref(),
                 full.as_ref(),
                 UsageLimitsData::seven_day,
+                "7d",
                 now,
             );
             let (five_hour_absent, seven_day_absent) = (five_h.is_none(), seven_d.is_none());
@@ -565,7 +570,8 @@ fn data_from_stdin_rate_limits(ctx: &Context) -> Option<UsageLimitsData> {
     let (seven_pct, seven_epoch) = match rl.seven_day.as_ref() {
         Some(seven) => (seven.used_percentage.unwrap_or(0.0), seven.resets_at),
         None => {
-            tracing::warn!(
+            // Normal state on accounts without a 7d limit (Enterprise), hence debug.
+            tracing::debug!(
                 "rate_limits.seven_day absent from stdin; treating the 7d window as absent"
             );
             (0.0, None)
@@ -817,7 +823,8 @@ fn format_extra_usage(data: &UsageLimitsData, cfg: &UsageLimitsConfig) -> Option
         (Some(limit), Some(used)) => format!("{:.2}", (limit - used).max(0.0) / 100.0),
         _ => "?".into(),
     };
-    let active = if data.five_hour_pct >= 100.0 || data.seven_day_pct >= 100.0 {
+    let maxed = |w: Option<UsageWindow<'_>>| w.is_some_and(|w| w.pct >= 100.0);
+    let active = if maxed(data.five_hour()) || maxed(data.seven_day()) {
         "\u{26a1}" // ⚡
     } else if lacks_standard_signal(data) {
         let threshold = cfg.warn_threshold.unwrap_or(0.0);
@@ -3231,6 +3238,38 @@ mod tests {
             assert_eq!(out.contains("5h:"), !five_absent, "{out}");
             assert_eq!(out.contains("7d:"), !seven_absent, "{out}");
         }
+    }
+
+    /// No stdin `rate_limits` and the API reports `five_hour: null`: the absent
+    /// flag alone keeps the 5h segment hidden (the original "5h 0% (?)" bug).
+    #[test]
+    fn test_render_api_only_hides_absent_five_hour() {
+        let _full = FullDataGuard::set(UsageLimitsData {
+            five_hour_absent: true,
+            ..api_window_data()
+        });
+        let (_dir, ctx) = ctx_with_transcript();
+        let cfg = CshipConfig::default();
+        let out = render(&ctx, &cfg).expect("7d from API must render");
+        assert!(!out.contains("5h"), "5h segment should be hidden: {out}");
+        assert!(out.contains("7d: 60%"), "7d from API: {out}");
+        assert!(render_five_hour(&ctx, &cfg).is_none());
+    }
+
+    /// A cache entry flagging 5h as absent (e.g. from before a plan change) must
+    /// not hide a live 5h reading from stdin.
+    #[test]
+    fn test_stdin_five_hour_wins_over_cache_absent_flag() {
+        let (_dir, ctx) = ctx_with_pcts(40.0, 33.0);
+        let _full = FullDataGuard::set(UsageLimitsData {
+            seven_day_pct: 10.0,
+            five_hour_absent: true,
+            ..Default::default()
+        });
+        let cfg = five_hour_cfg();
+        let out = render(&ctx, &cfg).unwrap();
+        assert!(out.contains("5h 40%"), "stdin 5h must show: {out}");
+        assert!(render_five_hour(&ctx, &cfg).unwrap().contains("5h 40%"));
     }
 
     /// Non-window fields (extra usage) come from the API even when stdin
