@@ -132,8 +132,11 @@ fn merge_source_windows(
         .and_then(window)
         .filter(|w| stdin.is_none() || stdin_w.is_some() || w.has_reading());
     if stdin.is_some() && stdin_w.is_none() && api_w.is_some() {
-        tracing::debug!(
-            "cship.usage_limits: {label} window absent from stdin rate_limits; using the usage API's"
+        // The API returns `null` for a window the account lacks, so a real API
+        // reading here means stdin dropped a window the account does have
+        // (e.g. a renamed stdin field). That is unexpected, hence warn.
+        tracing::warn!(
+            "cship.usage_limits: {label} window absent from stdin rate_limits but present in the usage API; using the usage API's"
         );
     }
     if stdin_w.is_none() && api_w.is_none() {
@@ -3251,7 +3254,9 @@ mod tests {
         let (_dir, ctx) = ctx_with_transcript();
         let cfg = CshipConfig::default();
         let out = render(&ctx, &cfg).expect("7d from API must render");
-        assert!(!out.contains("5h"), "5h segment should be hidden: {out}");
+        // Match the segment label, not bare "5h": the 7d reset text can contain
+        // it (e.g. "resets in 94961d15h"), depending on the clock.
+        assert!(!out.contains("5h:"), "5h segment should be hidden: {out}");
         assert!(out.contains("7d: 60%"), "7d from API: {out}");
         assert!(render_five_hour(&ctx, &cfg).is_none());
     }
